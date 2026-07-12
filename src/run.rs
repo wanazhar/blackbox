@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -10,6 +11,7 @@ use crate::capture::{CaptureLayer, merge_layers};
 use crate::cli::RunArgs;
 use crate::core::event::{EventSource, EventStatus, TraceEvent};
 use crate::core::run::{Run, RunStatus};
+use crate::redaction::environment::EnvironmentRedactor;
 use crate::redaction::scanner::SecretScanner;
 use crate::redaction::RedactionConfig;
 use crate::storage::TraceStore;
@@ -43,6 +45,34 @@ impl RunSupervisor {
             .insert_run(&run)
             .await
             .context("failed to persist run record")?;
+
+        // ── Capture and redact environment variables ───────────────
+        let env_redactor = EnvironmentRedactor::new(RedactionConfig::default());
+        let env_vars: HashMap<String, String> = std::env::vars().collect();
+        let redactions = env_redactor.scan_env(&env_vars);
+        let redacted_env = env_redactor.redact_env(&env_vars);
+
+        if !redactions.is_empty() {
+            tracing::warn!(
+                count = redactions.len(),
+                "redacted sensitive environment variables"
+            );
+        }
+
+        // Store environment as event metadata
+        let mut env_event = TraceEvent::new(&run.id, EventSource::System, "environment.captured");
+        env_event.status = EventStatus::Success;
+        env_event.metadata.insert(
+            "environment".to_string(),
+            serde_json::json!(redacted_env),
+        );
+        if !redactions.is_empty() {
+            env_event.metadata.insert(
+                "redactions".to_string(),
+                serde_json::json!(redactions.len()),
+            );
+        }
+        self.store.insert_event(&env_event).await.context("failed to persist environment event")?;
 
         tracing::info!(run_id = %run.id, command = ?run.command, "run started");
 

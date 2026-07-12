@@ -405,6 +405,27 @@ impl TraceStore for SqliteStore {
         result
     }
 
+    async fn delete_run(&self, run_id: &str) -> anyhow::Result<bool> {
+        let run_id = run_id.to_string();
+        let deleted = {
+            let conn = self.lock()?;
+            // FK order: events and checkpoints before runs
+            conn.execute("DELETE FROM events WHERE run_id = ?1", params![run_id])
+                .context("failed to delete events")?;
+            conn.execute(
+                "DELETE FROM checkpoints WHERE run_id = ?1",
+                params![run_id],
+            )
+            .context("failed to delete checkpoints")?;
+            let n = conn
+                .execute("DELETE FROM runs WHERE id = ?1", params![run_id])
+                .context("failed to delete run")?;
+            n > 0
+        };
+        tokio::task::yield_now().await;
+        Ok(deleted)
+    }
+
     async fn insert_event(&self, event: &TraceEvent) -> anyhow::Result<()> {
         let event = event.clone();
         {
@@ -732,5 +753,25 @@ mod tests {
         store.insert_checkpoint(&cp).await.unwrap();
         let cps = store.get_checkpoints(&run.id).await.unwrap();
         assert_eq!(cps.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn delete_run_cascades() {
+        let store = SqliteStore::open_memory().unwrap();
+        let run = Run::new(vec!["true".into()], "/tmp".into());
+        store.insert_run(&run).await.unwrap();
+        let mut ev = TraceEvent::new(&run.id, EventSource::System, "test.event");
+        ev.status = EventStatus::Success;
+        store.insert_event(&ev).await.unwrap();
+        store
+            .insert_checkpoint(&Checkpoint::new(&run.id, &ev.id, &run.cwd))
+            .await
+            .unwrap();
+
+        assert!(store.delete_run(&run.id).await.unwrap());
+        assert!(store.get_run(&run.id).await.unwrap().is_none());
+        assert!(store.get_events(&run.id).await.unwrap().is_empty());
+        assert!(store.get_checkpoints(&run.id).await.unwrap().is_empty());
+        assert!(!store.delete_run(&run.id).await.unwrap());
     }
 }

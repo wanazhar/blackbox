@@ -46,6 +46,10 @@ pub enum Command {
     Scrub(ScrubArgs),
     /// Diagnose store path, schema, and environment
     Doctor,
+    /// Delete one or more runs
+    Rm(RmArgs),
+    /// Purge runs by policy (keep N, pending forks, failed, …)
+    Purge(PurgeArgs),
 }
 
 #[derive(Args)]
@@ -83,6 +87,14 @@ pub struct ShowArgs {
     /// Open the interactive TUI instead of a text summary
     #[arg(long)]
     pub tui: bool,
+
+    /// Print reconstructed terminal transcript
+    #[arg(long)]
+    pub transcript: bool,
+
+    /// Print tool-call summary transcript
+    #[arg(long)]
+    pub tools: bool,
 }
 
 #[derive(Args)]
@@ -93,6 +105,51 @@ pub struct TimelineArgs {
     /// Hide bookkeeping events (pty/fs observer start/stop, etc.)
     #[arg(long)]
     pub semantic: bool,
+
+    /// Only show events whose kind contains this substring (repeatable)
+    #[arg(long)]
+    pub kind: Vec<String>,
+
+    /// Only show events from this source (e.g. Tool, Terminal, Git)
+    #[arg(long)]
+    pub source: Option<String>,
+}
+
+#[derive(Args)]
+pub struct RmArgs {
+    /// Run IDs, prefixes, or "latest" (one or more)
+    pub run_ids: Vec<String>,
+
+    /// Also garbage-collect unreferenced blobs after delete
+    #[arg(long)]
+    pub gc: bool,
+
+    /// Skip confirmation prompt when deleting multiple
+    #[arg(long)]
+    pub yes: bool,
+}
+
+#[derive(Args)]
+pub struct PurgeArgs {
+    /// Keep only the N most recent runs (delete older)
+    #[arg(long)]
+    pub keep: Option<usize>,
+
+    /// Delete Pending runs (e.g. unused forks)
+    #[arg(long)]
+    pub pending: bool,
+
+    /// Delete Failed runs
+    #[arg(long)]
+    pub failed: bool,
+
+    /// Also garbage-collect unreferenced blobs
+    #[arg(long)]
+    pub gc: bool,
+
+    /// Required: confirm destructive purge
+    #[arg(long)]
+    pub yes: bool,
 }
 
 #[derive(Args)]
@@ -215,6 +272,8 @@ impl Cli {
             Command::Analyze(args) => cmd_analyze(self, args).await,
             Command::Scrub(args) => cmd_scrub(self, args).await,
             Command::Doctor => cmd_doctor(self).await,
+            Command::Rm(args) => cmd_rm(self, args).await,
+            Command::Purge(args) => cmd_purge(self, args).await,
         }
     }
 }
@@ -521,8 +580,41 @@ async fn cmd_show(cli: &Cli, args: &ShowArgs) -> anyhow::Result<()> {
         );
     }
 
+    if args.tools {
+        println!();
+        println!("── tool transcript ──");
+        let tools_tx = crate::transcript::rebuild_tool_transcript(&events);
+        if tools_tx.is_empty() {
+            println!("(no tool.call events)");
+        } else {
+            println!("{}", tools_tx);
+        }
+    }
+
+    if args.transcript {
+        println!();
+        println!("── terminal transcript ──");
+        match crate::transcript::rebuild_terminal_transcript(&store, &events).await {
+            Ok(text) if text.trim().is_empty() => println!("(empty)"),
+            Ok(text) => {
+                // Cap display for huge traces
+                if text.len() > 50_000 {
+                    print!("{}", &text[..50_000]);
+                    println!("\n… (truncated; {} bytes total)", text.len());
+                } else {
+                    print!("{}", text);
+                    if !text.ends_with('\n') {
+                        println!();
+                    }
+                }
+            }
+            Err(e) => eprintln!("failed to rebuild transcript: {e}"),
+        }
+    }
+
     println!();
     println!("  blackbox timeline {} --semantic", short_id(&run.id));
+    println!("  blackbox show {} --transcript", short_id(&run.id));
     println!("  blackbox show {} --tui", short_id(&run.id));
     Ok(())
 }
@@ -532,23 +624,53 @@ async fn cmd_timeline(cli: &Cli, args: &TimelineArgs) -> anyhow::Result<()> {
     let run_id = resolve_run_id(&store, &args.run_id).await?;
 
     let events = store.get_events(&run_id).await?;
-    let events: Vec<_> = if args.semantic {
-        events
-            .into_iter()
-            .filter(|e| !is_bookkeeping(&e.kind))
-            .collect()
-    } else {
-        events
-    };
+    let events: Vec<_> = events
+        .into_iter()
+        .filter(|e| {
+            if args.semantic && is_bookkeeping(&e.kind) {
+                return false;
+            }
+            if !args.kind.is_empty()
+                && !args
+                    .kind
+                    .iter()
+                    .any(|k| e.kind.to_lowercase().contains(&k.to_lowercase()))
+            {
+                return false;
+            }
+            if let Some(ref src) = args.source {
+                let s = format!("{:?}", e.source);
+                if !s.to_lowercase().contains(&src.to_lowercase()) {
+                    return false;
+                }
+            }
+            true
+        })
+        .collect();
 
     if events.is_empty() {
         println!("No events recorded for run {}.", short_id(&run_id));
     } else {
+        let mut filters = Vec::new();
+        if args.semantic {
+            filters.push("semantic");
+        }
+        if !args.kind.is_empty() {
+            filters.push("kind");
+        }
+        if args.source.is_some() {
+            filters.push("source");
+        }
+        let filter_note = if filters.is_empty() {
+            String::new()
+        } else {
+            format!(", {}", filters.join("+"))
+        };
         println!(
             "Timeline for run {} ({} events{}):",
             short_id(&run_id),
             events.len(),
-            if args.semantic { ", semantic" } else { "" }
+            filter_note
         );
         println!(
             "{:<6} {:<12} {:<28} {:<8} DETAIL",
@@ -1056,6 +1178,112 @@ async fn cmd_scrub(cli: &Cli, args: &ScrubArgs) -> anyhow::Result<()> {
         println!("Done. Use `blackbox scrub --gc` to delete unreferenced blobs.");
     } else {
         println!("Done.");
+    }
+    Ok(())
+}
+
+async fn cmd_rm(cli: &Cli, args: &RmArgs) -> anyhow::Result<()> {
+    use crate::scrub::{collect_referenced_blobs, gc_orphan_blobs};
+
+    if args.run_ids.is_empty() {
+        anyhow::bail!("pass at least one run id (or latest)");
+    }
+
+    let store = open_store(cli)?;
+    let blob_dir = store.blob_dir().to_path_buf();
+    let store: Arc<dyn TraceStore> = Arc::new(store);
+
+    let mut ids = Vec::new();
+    for spec in &args.run_ids {
+        ids.push(resolve_run_id(store.as_ref(), spec).await?);
+    }
+    ids.sort();
+    ids.dedup();
+
+    if ids.len() > 1 && !args.yes {
+        anyhow::bail!(
+            "refusing to delete {} runs without --yes (ids: {})",
+            ids.len(),
+            ids.iter()
+                .map(|id| short_id(id).to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+
+    let mut deleted = 0usize;
+    for id in &ids {
+        if store.delete_run(id).await? {
+            println!("deleted {}", short_id(id));
+            deleted += 1;
+        } else {
+            println!("not found {}", short_id(id));
+        }
+    }
+    println!("Removed {deleted} run(s).");
+
+    if args.gc {
+        let refs = collect_referenced_blobs(store.as_ref()).await?;
+        let n = gc_orphan_blobs(&blob_dir, &refs, false)?;
+        println!("gc: removed {n} orphan blob file(s)");
+    } else {
+        println!("Tip: blackbox scrub --gc  to reclaim unreferenced blobs");
+    }
+    Ok(())
+}
+
+async fn cmd_purge(cli: &Cli, args: &PurgeArgs) -> anyhow::Result<()> {
+    use crate::scrub::{collect_referenced_blobs, gc_orphan_blobs};
+
+    if !args.yes {
+        anyhow::bail!("purge is destructive; pass --yes to confirm");
+    }
+    if args.keep.is_none() && !args.pending && !args.failed {
+        anyhow::bail!("specify at least one of --keep N, --pending, --failed");
+    }
+
+    let store = open_store(cli)?;
+    let blob_dir = store.blob_dir().to_path_buf();
+    let store: Arc<dyn TraceStore> = Arc::new(store);
+    let runs = store.list_runs().await?;
+
+    let mut to_delete: Vec<String> = Vec::new();
+
+    if let Some(keep) = args.keep {
+        for run in runs.iter().skip(keep) {
+            to_delete.push(run.id.clone());
+        }
+    }
+    for run in &runs {
+        use crate::core::run::RunStatus;
+        if args.pending && run.status == RunStatus::Pending {
+            to_delete.push(run.id.clone());
+        }
+        if args.failed && run.status == RunStatus::Failed {
+            to_delete.push(run.id.clone());
+        }
+    }
+    to_delete.sort();
+    to_delete.dedup();
+
+    if to_delete.is_empty() {
+        println!("Nothing to purge.");
+        return Ok(());
+    }
+
+    println!("Purging {} run(s)…", to_delete.len());
+    let mut deleted = 0usize;
+    for id in &to_delete {
+        if store.delete_run(id).await? {
+            deleted += 1;
+        }
+    }
+    println!("Deleted {deleted} run(s).");
+
+    if args.gc {
+        let refs = collect_referenced_blobs(store.as_ref()).await?;
+        let n = gc_orphan_blobs(&blob_dir, &refs, false)?;
+        println!("gc: removed {n} orphan blob file(s)");
     }
     Ok(())
 }

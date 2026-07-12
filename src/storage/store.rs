@@ -59,6 +59,13 @@ impl TraceStore for InMemoryStore {
         Ok(runs)
     }
 
+    async fn delete_run(&self, run_id: &str) -> anyhow::Result<bool> {
+        let removed = self.runs.write().await.remove(run_id).is_some();
+        self.events.write().await.remove(run_id);
+        self.checkpoints.write().await.remove(run_id);
+        Ok(removed)
+    }
+
     async fn insert_event(&self, event: &TraceEvent) -> anyhow::Result<()> {
         let mut events = self.events.write().await;
         events.entry(event.run_id.clone()).or_default().push(event.clone());

@@ -15,8 +15,16 @@ See [docs/ROADMAP.md](docs/ROADMAP.md) for the full attack plan.
 ## Install / build
 
 ```bash
+# From this repo
 cargo build --release
 ./target/release/blackbox --help
+
+# Install onto PATH
+cargo install --path .
+
+# Optional: shell completions via clap help
+blackbox --help
+blackbox doctor   # verify store path + health
 ```
 
 ## Quick start
@@ -55,6 +63,19 @@ blackbox export latest --no-redact   # dangerous
 
 # Interactive TUI
 blackbox show latest --tui
+
+# Reconstructed transcripts
+blackbox show latest --transcript
+blackbox show latest --tools
+
+# Filter timeline
+blackbox timeline latest --kind tool
+blackbox timeline latest --source Tool --semantic
+
+# Delete / purge
+blackbox rm latest
+blackbox purge --pending --yes          # drop unused fork stubs
+blackbox purge --keep 20 --yes --gc     # keep 20 newest; reclaim blobs
 ```
 
 ### Record an agent
@@ -101,6 +122,8 @@ Export is **redacted by default**. Pass `--no-redact` only for private offline a
 | `analyze` | Error / side-effect / correlation passes |
 | `scrub` | Re-redact secrets already stored at rest |
 | `doctor` | Diagnose store path, blob dir, secret residue |
+| `rm` | Delete runs (`--gc` reclaims blobs) |
+| `purge` | Bulk delete by policy (`--keep`, `--pending`, `--failed`) |
 | `export` | JSONL / HTML / portable |
 | `replay` | Timeline, mock tools, sandbox (seeded workspace) |
 | `fork` | Branch a new run record from a checkpoint |

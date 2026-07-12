@@ -13,4 +13,5 @@ pub mod run;
 pub mod scrub;
 pub mod storage;
 pub mod terminal;
+pub mod transcript;
 pub mod ui;

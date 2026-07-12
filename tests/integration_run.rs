@@ -175,3 +175,44 @@ async fn redacts_secret_in_command_argv() {
 
     let _ = std::fs::remove_dir_all(&ws);
 }
+
+#[tokio::test]
+async fn export_jsonl_transcript_and_delete_run() {
+    use blackbox::export::export_run;
+
+    let ws = temp_workspace();
+    let db = ws.join("test.db");
+    let blobs = ws.join("blobs");
+    let store = SqliteStore::open_with_blobs(&db, &blobs).unwrap();
+    let store: Arc<dyn TraceStore> = Arc::new(store);
+    let supervisor = RunSupervisor::new(store.clone());
+
+    let args = RunArgs {
+        name: Some("export-me".into()),
+        project: Some(ws.to_string_lossy().into()),
+        tag: vec![],
+        insecure_raw: false,
+        no_redact: false,
+        command: vec!["sh".into(), "-c".into(), "echo export-ok".into()],
+    };
+    let run = supervisor.execute(&args).await.unwrap();
+    let events = store.get_events(&run.id).await.unwrap();
+
+    let jsonl = export_run(&run, &events, "jsonl", true).await.unwrap();
+    assert!(jsonl.contains("export-me") || jsonl.contains(&run.id));
+    assert!(jsonl.lines().count() >= 2);
+
+    let text = blackbox::transcript::rebuild_terminal_transcript(store.as_ref(), &events)
+        .await
+        .unwrap();
+    assert!(
+        text.contains("export-ok") || events.iter().any(|e| e.kind == "terminal.output"),
+        "expected terminal content, got {text:?}"
+    );
+
+    assert!(store.delete_run(&run.id).await.unwrap());
+    assert!(store.get_run(&run.id).await.unwrap().is_none());
+    assert!(store.get_events(&run.id).await.unwrap().is_empty());
+
+    let _ = std::fs::remove_dir_all(&ws);
+}

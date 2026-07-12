@@ -26,6 +26,11 @@ pub trait TraceStore: Send + Sync + 'static {
     /// List all runs, most recent first.
     async fn list_runs(&self) -> anyhow::Result<Vec<Run>>;
 
+    /// Delete a run and its events/checkpoints.
+    ///
+    /// Blob files are left on disk; use scrub --gc to reclaim unreferenced blobs.
+    async fn delete_run(&self, run_id: &str) -> anyhow::Result<bool>;
+
     // ── Events ──
 
     /// Append an event to a run's trace.

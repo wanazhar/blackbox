@@ -1,5 +1,5 @@
-pub mod correlator;
 pub mod classifier;
+pub mod correlator;
 pub mod error_detector;
 
 use crate::core::event::TraceEvent;

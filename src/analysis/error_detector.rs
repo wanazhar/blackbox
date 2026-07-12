@@ -61,11 +61,15 @@ impl ErrorDetector {
                         let code = &rest[6..colon - 1]; // skip "error[", exclude trailing "]"
                         let message = &rest[colon + 2..];
                         // Location may be on the same line or the next line (Rust style)
-                        let (file, line_num, col) = if self.parse_file_location(trimmed_line).0.is_some() {
-                            self.parse_file_location(trimmed_line)
-                        } else {
-                            lines.get(i + 1).map(|next| self.parse_file_location(next)).unwrap_or((None, None, None))
-                        };
+                        let (file, line_num, col) =
+                            if self.parse_file_location(trimmed_line).0.is_some() {
+                                self.parse_file_location(trimmed_line)
+                            } else {
+                                lines
+                                    .get(i + 1)
+                                    .map(|next| self.parse_file_location(next))
+                                    .unwrap_or((None, None, None))
+                            };
                         errors.push(StructuredError {
                             error_type: format!("rustc[{}]", code),
                             message: message.to_string(),
@@ -187,7 +191,12 @@ impl ErrorDetector {
 
         // Generic error: non-zero exit without specific patterns above
         if errors.is_empty() && self.is_error(event) {
-            let message = output.lines().next().unwrap_or("unknown error").trim().to_string();
+            let message = output
+                .lines()
+                .next()
+                .unwrap_or("unknown error")
+                .trim()
+                .to_string();
             errors.push(StructuredError {
                 error_type: "process_error".to_string(),
                 message,
@@ -239,7 +248,8 @@ impl ErrorDetector {
                 let rest = &after_quote[end_quote..];
                 if let Some(line_idx) = rest.find("line ") {
                     let num_str = &rest[line_idx + 5..];
-                    let num_str: String = num_str.chars().take_while(|c| c.is_ascii_digit()).collect();
+                    let num_str: String =
+                        num_str.chars().take_while(|c| c.is_ascii_digit()).collect();
                     if let Ok(line_num) = num_str.parse::<u32>() {
                         return (Some(file), Some(line_num), None);
                     }

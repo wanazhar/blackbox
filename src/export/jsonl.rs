@@ -6,11 +6,7 @@ use crate::core::run::Run;
 /// Each line is a self-contained JSON object. The first line is the run
 /// metadata, followed by one line per event. This format is streamable
 /// and can be processed line-by-line without loading the full file.
-pub fn export_jsonl(
-    run: &Run,
-    events: &[TraceEvent],
-    redact: bool,
-) -> anyhow::Result<String> {
+pub fn export_jsonl(run: &Run, events: &[TraceEvent], redact: bool) -> anyhow::Result<String> {
     let mut lines = Vec::new();
 
     // Run metadata line
@@ -51,10 +47,7 @@ fn redact_event(val: &mut serde_json::Value) {
         if let Some(meta) = obj.get_mut("metadata").and_then(|v| v.as_object_mut()) {
             meta.remove("raw");
             if meta.contains_key("diff_preview") {
-                meta.insert(
-                    "diff_preview".to_string(),
-                    serde_json::json!("[REDACTED]"),
-                );
+                meta.insert("diff_preview".to_string(), serde_json::json!("[REDACTED]"));
             }
         }
     }

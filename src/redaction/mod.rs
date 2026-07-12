@@ -1,6 +1,6 @@
-pub mod scanner;
 pub mod environment;
 pub mod export;
+pub mod scanner;
 
 /// A record that redaction occurred at a specific location.
 #[derive(Debug, Clone)]

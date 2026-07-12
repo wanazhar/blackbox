@@ -1,5 +1,5 @@
-pub mod store;
 pub mod sqlite;
+pub mod store;
 
 use crate::core::blob::BlobReference;
 use crate::core::checkpoint::Checkpoint;
@@ -65,11 +65,7 @@ pub trait TraceStore: Send + Sync + 'static {
     ///
     /// Used during portable archive import when the expected key differs
     /// from the content-addressed SHA-256 hash. Default is a no-op.
-    async fn move_blob(
-        &self,
-        _from_key: &str,
-        _to_key: &str,
-    ) -> anyhow::Result<()> {
+    async fn move_blob(&self, _from_key: &str, _to_key: &str) -> anyhow::Result<()> {
         Ok(())
     }
 

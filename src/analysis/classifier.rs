@@ -40,22 +40,22 @@ impl SideEffectClassifier {
         }
 
         match base {
-            "ls" | "cat" | "head" | "tail" | "grep" | "rg" | "find"
-            | "read" | "which" | "file" | "stat" | "du" | "df" | "ps" | "top"
-            | "pwd" | "whoami" | "id" | "env" | "printenv" | "type" | "true"
-            | "false" | "test" | "wc" | "sort" | "uniq" | "diff" | "tree" => {
-                SideEffect::Read
-            }
+            "ls" | "cat" | "head" | "tail" | "grep" | "rg" | "find" | "read" | "which" | "file"
+            | "stat" | "du" | "df" | "ps" | "top" | "pwd" | "whoami" | "id" | "env"
+            | "printenv" | "type" | "true" | "false" | "test" | "wc" | "sort" | "uniq" | "diff"
+            | "tree" => SideEffect::Read,
             "echo" => SideEffect::None,
-            "sed" | "awk" | "touch" | "mkdir" | "cp" | "mv" | "chmod"
-            | "chown" | "ln" | "truncate" | "tee" => {
-                SideEffect::LocalWrite
-            }
+            "sed" | "awk" | "touch" | "mkdir" | "cp" | "mv" | "chmod" | "chown" | "ln"
+            | "truncate" | "tee" => SideEffect::LocalWrite,
             "rm" => SideEffect::Destructive,
-            "curl" | "wget" | "nc" | "ssh" | "scp" | "rsync" | "npm" | "pip"
-            | "cargo" | "docker" | "kubectl" | "aws" | "gcloud" | "az" => {
-                if lower.contains("get") || lower.contains("list") || lower.contains("describe")
-                    || lower.contains("info") || lower.contains("version") || lower.contains("help")
+            "curl" | "wget" | "nc" | "ssh" | "scp" | "rsync" | "npm" | "pip" | "cargo"
+            | "docker" | "kubectl" | "aws" | "gcloud" | "az" => {
+                if lower.contains("get")
+                    || lower.contains("list")
+                    || lower.contains("describe")
+                    || lower.contains("info")
+                    || lower.contains("version")
+                    || lower.contains("help")
                 {
                     SideEffect::Read
                 } else if lower.contains("push")
@@ -221,11 +221,8 @@ impl AnalysisPass for SideEffectClassifier {
                     serde_json::Value::String(event.kind.clone()),
                 );
 
-                let mut derived_event = TraceEvent::new(
-                    &event.run_id,
-                    EventSource::System,
-                    "analysis.side_effect",
-                );
+                let mut derived_event =
+                    TraceEvent::new(&event.run_id, EventSource::System, "analysis.side_effect");
                 derived_event.parent_event_id = Some(event.id.clone());
                 derived_event.side_effect = classification;
                 derived_event.metadata = meta;
@@ -251,7 +248,10 @@ mod tests {
     #[test]
     fn classify_destructive() {
         let c = SideEffectClassifier::new();
-        assert_eq!(c.classify_command("rm -rf /tmp/foo"), SideEffect::Destructive);
+        assert_eq!(
+            c.classify_command("rm -rf /tmp/foo"),
+            SideEffect::Destructive
+        );
         assert_eq!(
             c.classify_command("DROP TABLE users"),
             SideEffect::Destructive
@@ -262,8 +262,14 @@ mod tests {
     fn classify_git() {
         let c = SideEffectClassifier::new();
         assert_eq!(c.classify_command("git status"), SideEffect::Read);
-        assert_eq!(c.classify_command("git push origin main"), SideEffect::ExternalWrite);
-        assert_eq!(c.classify_command("git commit -m x"), SideEffect::LocalWrite);
+        assert_eq!(
+            c.classify_command("git push origin main"),
+            SideEffect::ExternalWrite
+        );
+        assert_eq!(
+            c.classify_command("git commit -m x"),
+            SideEffect::LocalWrite
+        );
     }
 
     #[tokio::test]

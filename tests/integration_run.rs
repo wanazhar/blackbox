@@ -60,11 +60,7 @@ async fn records_tool_events_from_fake_claude() {
         tag: vec!["integration".into()],
         insecure_raw: false,
         no_redact: false,
-        command: vec![
-            claude.to_string_lossy().into(),
-            "-p".into(),
-            "hi".into(),
-        ],
+        command: vec![claude.to_string_lossy().into(), "-p".into(), "hi".into()],
     };
 
     let run = supervisor.execute(&args).await.expect("run succeeds");
@@ -79,15 +75,9 @@ async fn records_tool_events_from_fake_claude() {
     );
 
     let events = store.get_events(&run.id).await.unwrap();
-    assert!(
-        !events.is_empty(),
-        "expected captured events"
-    );
+    assert!(!events.is_empty(), "expected captured events");
 
-    let tool_calls: Vec<_> = events
-        .iter()
-        .filter(|e| e.kind == "tool.call")
-        .collect();
+    let tool_calls: Vec<_> = events.iter().filter(|e| e.kind == "tool.call").collect();
     assert!(
         !tool_calls.is_empty(),
         "expected tool.call from stream-json; kinds={:?}",
@@ -101,10 +91,7 @@ async fn records_tool_events_from_fake_claude() {
         Some("Bash")
     );
 
-    let results: Vec<_> = events
-        .iter()
-        .filter(|e| e.kind == "tool.result")
-        .collect();
+    let results: Vec<_> = events.iter().filter(|e| e.kind == "tool.result").collect();
     assert!(!results.is_empty(), "expected tool.result");
 
     let sessions: Vec<_> = events
@@ -162,7 +149,10 @@ async fn redacts_secret_in_command_argv() {
 
     let run = supervisor.execute(&args).await.unwrap();
     assert!(!run.command.join(" ").contains("sk-abcdef"));
-    assert!(run.command.join(" ").contains("[REDACTED]") || run.command.iter().any(|c| c.contains("[REDACTED]")));
+    assert!(
+        run.command.join(" ").contains("[REDACTED]")
+            || run.command.iter().any(|c| c.contains("[REDACTED]"))
+    );
 
     let events = store.get_events(&run.id).await.unwrap();
     for ev in events {

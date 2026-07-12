@@ -1,6 +1,6 @@
+pub mod event;
 pub mod runs;
 pub mod timeline_v;
-pub mod event;
 pub mod tui;
 
 use ratatui::layout::Rect;

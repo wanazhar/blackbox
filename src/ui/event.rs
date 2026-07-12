@@ -58,8 +58,11 @@ impl Panel for EventView {
             None => "Select an event to inspect".to_string(),
         };
 
-        let para = Paragraph::new(content)
-            .block(Block::default().borders(Borders::ALL).title("Event Details"));
+        let para = Paragraph::new(content).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Event Details"),
+        );
         frame.render_widget(para, area);
     }
 }

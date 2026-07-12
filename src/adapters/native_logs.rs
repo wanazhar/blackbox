@@ -49,10 +49,7 @@ pub fn discover_log_roots(adapter_id: &str, project_dir: &str) -> Vec<PathBuf> {
         }
     }
 
-    roots
-        .into_iter()
-        .filter(|p| p.exists())
-        .collect()
+    roots.into_iter().filter(|p| p.exists()).collect()
 }
 
 fn dirs_home() -> Option<PathBuf> {
@@ -229,15 +226,14 @@ async fn ingest_file_delta(
                 serde_json::json!(path.display().to_string()),
             );
             // Redact metadata
-            let mut meta_val =
-                serde_json::to_value(&ev.metadata).unwrap_or_else(|e| {
-                    tracing::warn!(
-                        error = %e,
-                        event_id = %ev.id,
-                        "failed to serialize event metadata for redaction, using empty map"
-                    );
-                    serde_json::json!({})
-                });
+            let mut meta_val = serde_json::to_value(&ev.metadata).unwrap_or_else(|e| {
+                tracing::warn!(
+                    error = %e,
+                    event_id = %ev.id,
+                    "failed to serialize event metadata for redaction, using empty map"
+                );
+                serde_json::json!({})
+            });
             scanner.redact_json(&mut meta_val);
             if let Ok(m) = serde_json::from_value(meta_val) {
                 ev.metadata = m;

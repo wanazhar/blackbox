@@ -67,7 +67,12 @@ impl TraceStore for InMemoryStore {
                 .get(run_id)
                 .map(|evts| {
                     evts.iter()
-                        .filter_map(|e| e.output_blob.as_deref().or(e.input_blob.as_deref()).map(String::from))
+                        .filter_map(|e| {
+                            e.output_blob
+                                .as_deref()
+                                .or(e.input_blob.as_deref())
+                                .map(String::from)
+                        })
                         .collect()
                 })
                 .unwrap_or_default()
@@ -86,7 +91,10 @@ impl TraceStore for InMemoryStore {
 
     async fn insert_event(&self, event: &TraceEvent) -> anyhow::Result<()> {
         let mut events = self.events.write().await;
-        events.entry(event.run_id.clone()).or_default().push(event.clone());
+        events
+            .entry(event.run_id.clone())
+            .or_default()
+            .push(event.clone());
         Ok(())
     }
 
@@ -158,11 +166,7 @@ impl TraceStore for InMemoryStore {
             .ok_or_else(|| anyhow::anyhow!("blob not found: {}", reference.key))
     }
 
-    async fn move_blob(
-        &self,
-        from_key: &str,
-        to_key: &str,
-    ) -> anyhow::Result<()> {
+    async fn move_blob(&self, from_key: &str, to_key: &str) -> anyhow::Result<()> {
         let mut blobs = self.blobs.write().await;
         if let Some(data) = blobs.remove(from_key) {
             blobs.entry(to_key.to_string()).or_insert(data);

@@ -116,12 +116,10 @@ impl ReplayEngine for ForkManager {
         // Build the new run record
         let mut new_run = Run::new(run.command.clone(), run.cwd.clone());
         new_run.parent_run_id = Some(run.id.clone());
-        new_run.name = self.name.clone().or_else(|| {
-            Some(format!(
-                "fork-of-{}",
-                &run.id[..8.min(run.id.len())]
-            ))
-        });
+        new_run.name = self
+            .name
+            .clone()
+            .or_else(|| Some(format!("fork-of-{}", &run.id[..8.min(run.id.len())])));
         new_run.tags = run.tags.clone();
         new_run.notes = Some(format!(
             "forked from {} at event {} ({})",
@@ -158,15 +156,15 @@ impl ReplayEngine for ForkManager {
         store.insert_run(&new_run).await?;
 
         // Fork context event
-        let mut ctx_ev =
-            TraceEvent::new(&new_run.id, EventSource::System, "fork.created");
+        let mut ctx_ev = TraceEvent::new(&new_run.id, EventSource::System, "fork.created");
         ctx_ev.status = EventStatus::Success;
         ctx_ev.side_effect = SideEffect::None;
-        ctx_ev.metadata.insert("context".to_string(), context.clone());
-        ctx_ev.metadata.insert(
-            "parent_run_id".to_string(),
-            serde_json::json!(run.id),
-        );
+        ctx_ev
+            .metadata
+            .insert("context".to_string(), context.clone());
+        ctx_ev
+            .metadata
+            .insert("parent_run_id".to_string(), serde_json::json!(run.id));
         ctx_ev.metadata.insert(
             "fork_event_id".to_string(),
             serde_json::json!(fork_point.id),
@@ -175,10 +173,7 @@ impl ReplayEngine for ForkManager {
 
         // Checkpoint at fork boundary
         let mut cp = Checkpoint::new(&new_run.id, &ctx_ev.id, &new_run.cwd);
-        if let Some(sid) = context
-            .get("harness_session_id")
-            .and_then(|v| v.as_str())
-        {
+        if let Some(sid) = context.get("harness_session_id").and_then(|v| v.as_str()) {
             cp.harness_session_id = Some(sid.to_string());
         }
         store.insert_checkpoint(&cp).await?;

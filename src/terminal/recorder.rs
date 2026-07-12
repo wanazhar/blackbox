@@ -116,10 +116,8 @@ impl TerminalRecorder for RawRecorder {
                 "segments".to_string(),
                 serde_json::json!(self.segments.len()),
             );
-            ev.metadata.insert(
-                "bytes".to_string(),
-                serde_json::json!(self.total_bytes()),
-            );
+            ev.metadata
+                .insert("bytes".to_string(), serde_json::json!(self.total_bytes()));
             events.push(ev);
         }
         Ok(events)
@@ -220,4 +218,3 @@ mod tests {
         assert_eq!(r.run_id, Some("run-2".into()));
     }
 }
-

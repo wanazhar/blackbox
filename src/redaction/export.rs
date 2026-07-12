@@ -96,7 +96,10 @@ mod tests {
         });
         r.redact_json(&mut val);
         let token = val["server"]["auth"]["token"].as_str().unwrap();
-        assert!(token.contains("[REDACTED]"), "nested secret should be redacted");
+        assert!(
+            token.contains("[REDACTED]"),
+            "nested secret should be redacted"
+        );
     }
 
     #[test]
@@ -156,7 +159,10 @@ mod tests {
         });
         r.redact_json(&mut val);
         let deepest = val["a"]["b"]["c"]["d"]["e"]["f"].as_str().unwrap();
-        assert!(deepest.contains("[REDACTED]"), "deeply nested secret should be redacted");
+        assert!(
+            deepest.contains("[REDACTED]"),
+            "deeply nested secret should be redacted"
+        );
     }
 
     #[test]

@@ -18,9 +18,7 @@ pub fn has_option(command: &[String], option: &str) -> bool {
             // previous token is the option and this is its value,
             // but only if the value itself doesn't start with '-'
             // (to avoid treating a consecutive flag as an option value)
-            i > 0
-                && command[i - 1] == option
-                && !a.starts_with('-')
+            i > 0 && command[i - 1] == option && !a.starts_with('-')
         }
     })
 }

@@ -42,16 +42,10 @@ impl BlackboxPaths {
             if !env_db.is_empty() {
                 let env_path = PathBuf::from(&env_db);
                 if env_path.is_dir() {
-                    anyhow::bail!(
-                        "BLACKBOX_DB points to a directory, not a file: {}",
-                        env_db
-                    );
+                    anyhow::bail!("BLACKBOX_DB points to a directory, not a file: {}", env_db);
                 }
                 if env_path.exists() && !is_readable(&env_path) {
-                    anyhow::bail!(
-                        "BLACKBOX_DB is not readable: {}",
-                        env_db
-                    );
+                    anyhow::bail!("BLACKBOX_DB is not readable: {}", env_db);
                 }
                 return Ok(Self::from_db_path(env_path));
             }

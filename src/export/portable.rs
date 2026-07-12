@@ -100,12 +100,8 @@ pub async fn import_portable(
     json: &str,
     new_ids: bool,
 ) -> anyhow::Result<ImportResult> {
-    let root: serde_json::Value =
-        serde_json::from_str(json).context("invalid portable JSON")?;
-    let version = root
-        .get("version")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
+    let root: serde_json::Value = serde_json::from_str(json).context("invalid portable JSON")?;
+    let version = root.get("version").and_then(|v| v.as_u64()).unwrap_or(0);
     if version != 1 && version != 2 {
         anyhow::bail!("unsupported portable version: {version} (expected 1 or 2)");
     }
@@ -128,8 +124,7 @@ pub async fn import_portable(
     let mut blobs_restored = 0usize;
     if let Some(obj) = root.get("blobs").and_then(|v| v.as_object()) {
         for (key, entry) in obj {
-            let data = decode_blob_entry(entry)
-                .with_context(|| format!("blob {key}"))?;
+            let data = decode_blob_entry(entry).with_context(|| format!("blob {key}"))?;
             let stored = store.store_blob(&data).await?;
             if stored.key != *key {
                 // Blob stored under its computed hash, but events reference
@@ -293,10 +288,7 @@ fn redact_event(val: &mut serde_json::Value) {
         if let Some(meta) = obj.get_mut("metadata").and_then(|v| v.as_object_mut()) {
             meta.remove("raw");
             if meta.contains_key("diff_preview") {
-                meta.insert(
-                    "diff_preview".to_string(),
-                    serde_json::json!("[REDACTED]"),
-                );
+                meta.insert("diff_preview".to_string(), serde_json::json!("[REDACTED]"));
             }
         }
     }
@@ -367,10 +359,7 @@ mod tests {
         assert_eq!(parsed["version"], 2);
         assert_eq!(parsed["run"]["id"], "run-port001");
         assert!(parsed["blobs"][&blob.key].is_object());
-        assert_eq!(
-            parsed["blobs"][&blob.key]["size"].as_u64().unwrap(),
-            10
-        );
+        assert_eq!(parsed["blobs"][&blob.key]["size"].as_u64().unwrap(), 10);
     }
 
     #[tokio::test]
@@ -433,9 +422,7 @@ mod tests {
 
         // Fresh store simulates another machine
         let store2 = Arc::new(SqliteStore::open_memory().unwrap());
-        let result = import_portable(store2.as_ref(), &json, true)
-            .await
-            .unwrap();
+        let result = import_portable(store2.as_ref(), &json, true).await.unwrap();
         assert_ne!(result.run_id, run.id);
         assert_eq!(result.events, 1);
         assert_eq!(result.blobs, 1);
@@ -552,7 +539,10 @@ mod tests {
         assert_eq!(imported.len(), 2);
 
         // Parent event should have no parent_event_id (it was null originally)
-        let parent = imported.iter().find(|e| e.parent_event_id.is_none()).unwrap();
+        let parent = imported
+            .iter()
+            .find(|e| e.parent_event_id.is_none())
+            .unwrap();
         // Child event should have parent_event_id pointing to the parent's new ID
         let child = imported
             .iter()
@@ -582,15 +572,27 @@ mod tests {
         let blob_ref = store.store_blob(secret_blob).await.unwrap();
         let mut ev = make_event(1);
         ev.output_blob = Some(blob_ref.key.clone());
-        ev.metadata.insert("diff_preview".into(), serde_json::json!("secret token sk-abcdefghijklmnopqrstuvwxyz012345"));
-        ev.metadata.insert("raw".into(), serde_json::json!("raw content with secret"));
+        ev.metadata.insert(
+            "diff_preview".into(),
+            serde_json::json!("secret token sk-abcdefghijklmnopqrstuvwxyz012345"),
+        );
+        ev.metadata
+            .insert("raw".into(), serde_json::json!("raw content with secret"));
         store.insert_event(&ev).await.unwrap();
         let events = store.get_events(&run.id).await.unwrap();
-        let output = export_portable(store.as_ref(), &run, &events, true).await.unwrap();
+        let output = export_portable(store.as_ref(), &run, &events, true)
+            .await
+            .unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
         assert_eq!(parsed["run"]["cwd"], "secret-project");
         let event_meta = &parsed["events"][0]["metadata"];
-        assert!(!event_meta.get("raw").is_some_and(|v| !v.is_null()), "raw metadata should be removed");
-        assert_eq!(event_meta["diff_preview"], "[REDACTED]", "diff_preview should be redacted");
+        assert!(
+            !event_meta.get("raw").is_some_and(|v| !v.is_null()),
+            "raw metadata should be removed"
+        );
+        assert_eq!(
+            event_meta["diff_preview"], "[REDACTED]",
+            "diff_preview should be redacted"
+        );
     }
 }

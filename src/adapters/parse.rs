@@ -16,8 +16,10 @@ fn session_re() -> &'static Regex {
 fn tool_use_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r#"(?i)(?:tool[_-]?use|using tool|tool call)[:\s]+[`'"]?([A-Za-z_][A-Za-z0-9_]*)"#)
-            .expect("tool_use regex")
+        Regex::new(
+            r#"(?i)(?:tool[_-]?use|using tool|tool call)[:\s]+[`'"]?([A-Za-z_][A-Za-z0-9_]*)"#,
+        )
+        .expect("tool_use regex")
     })
 }
 
@@ -27,8 +29,8 @@ pub fn tool_side_effect(name: &str) -> SideEffect {
     match lower.as_str() {
         "read" | "read_file" | "grep" | "glob" | "search" | "list" | "ls" | "find"
         | "web_search" | "webfetch" | "get" | "cat" | "view" | "stat" => SideEffect::Read,
-        "write" | "write_file" | "edit" | "str_replace" | "strreplace" | "create"
-        | "mkdir" | "apply_patch" | "notebook_edit" => SideEffect::LocalWrite,
+        "write" | "write_file" | "edit" | "str_replace" | "strreplace" | "create" | "mkdir"
+        | "apply_patch" | "notebook_edit" => SideEffect::LocalWrite,
         "bash" | "shell" | "run" | "execute" | "terminal" | "cmd" => SideEffect::Unknown,
         "delete" | "remove" | "rm" => SideEffect::Destructive,
         "browser" | "http" | "curl" | "fetch" | "post" => SideEffect::ExternalWrite,
@@ -156,10 +158,7 @@ pub fn parse_claude_json_line(run_id: &str, line: &str) -> Vec<TraceEvent> {
 
     match typ {
         "assistant" => {
-            if let Some(content) = val
-                .pointer("/message/content")
-                .and_then(|c| c.as_array())
-            {
+            if let Some(content) = val.pointer("/message/content").and_then(|c| c.as_array()) {
                 for block in content {
                     let btype = block.get("type").and_then(|t| t.as_str()).unwrap_or("");
                     match btype {
@@ -185,10 +184,7 @@ pub fn parse_claude_json_line(run_id: &str, line: &str) -> Vec<TraceEvent> {
             }
         }
         "user" => {
-            if let Some(content) = val
-                .pointer("/message/content")
-                .and_then(|c| c.as_array())
-            {
+            if let Some(content) = val.pointer("/message/content").and_then(|c| c.as_array()) {
                 for block in content {
                     if block.get("type").and_then(|t| t.as_str()) == Some("tool_result") {
                         let id = block.get("tool_use_id").and_then(|i| i.as_str());
@@ -212,10 +208,7 @@ pub fn parse_claude_json_line(run_id: &str, line: &str) -> Vec<TraceEvent> {
                 .get("id")
                 .or_else(|| val.get("tool_use_id"))
                 .and_then(|i| i.as_str());
-            let input = val
-                .get("input")
-                .or_else(|| val.get("arguments"))
-                .cloned();
+            let input = val.get("input").or_else(|| val.get("arguments")).cloned();
             events.push(tool_call_event(run_id, name, input, id));
         }
         "tool_result" | "function_call_output" => {
@@ -227,10 +220,7 @@ pub fn parse_claude_json_line(run_id: &str, line: &str) -> Vec<TraceEvent> {
                 .get("is_error")
                 .and_then(|e| e.as_bool())
                 .unwrap_or(false);
-            let output = val
-                .get("content")
-                .or_else(|| val.get("output"))
-                .cloned();
+            let output = val.get("content").or_else(|| val.get("output")).cloned();
             events.push(tool_result_event(run_id, id, output, is_error));
         }
         "result" => {

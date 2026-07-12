@@ -128,7 +128,9 @@ impl GitCapture {
 
     /// Check if the given directory is inside a git repository.
     pub async fn is_git_repo(path: &Path) -> bool {
-        git_run(&["rev-parse", "--is-inside-work-tree"], path).await.is_ok()
+        git_run(&["rev-parse", "--is-inside-work-tree"], path)
+            .await
+            .is_ok()
     }
 
     /// Get the current commit hash (HEAD).
@@ -179,7 +181,11 @@ impl GitCapture {
                     "git diff exceeds size limit; truncating"
                 );
                 let end = combined.floor_char_boundary(MAX_DIFF_BYTES);
-                Some(format!("{}...\n[truncated at {} bytes]", &combined[..end], MAX_DIFF_BYTES))
+                Some(format!(
+                    "{}...\n[truncated at {} bytes]",
+                    &combined[..end],
+                    MAX_DIFF_BYTES
+                ))
             } else {
                 Some(combined)
             }
@@ -308,7 +314,9 @@ impl CaptureLayer for GitCapture {
             );
 
             if tx.send(ev).await.is_err() {
-                tracing::debug!("git capture event channel closed, dropping filesystem manifest event");
+                tracing::debug!(
+                    "git capture event channel closed, dropping filesystem manifest event"
+                );
             }
             self.event_tx = Some(tx);
             return Ok(rx);
@@ -334,9 +342,7 @@ impl CaptureLayer for GitCapture {
 
         // Capture initial diff snapshot (before the run starts producing changes)
         if let Some(diff) = Self::capture_diff(&cwd).await {
-            self.before_diff_blob = self
-                .emit_diff_event(&run.id, "git.diff", &diff, &tx)
-                .await;
+            self.before_diff_blob = self.emit_diff_event(&run.id, "git.diff", &diff, &tx).await;
         }
 
         self.event_tx = Some(tx);
@@ -379,13 +385,19 @@ impl CaptureLayer for GitCapture {
                     .insert("commit".to_string(), serde_json::json!(hash));
                 self.after_commit_hash = Some(hash);
                 if tx.send(ev).await.is_err() {
-                    tracing::debug!("git capture event channel closed, dropping commit.after event");
+                    tracing::debug!(
+                        "git capture event channel closed, dropping commit.after event"
+                    );
                 }
             }
         } else {
             // After-run filesystem manifest
             let manifest = Self::filesystem_manifest(&cwd);
-            let mut ev = TraceEvent::new(&run_id, EventSource::Filesystem, "filesystem.manifest.after");
+            let mut ev = TraceEvent::new(
+                &run_id,
+                EventSource::Filesystem,
+                "filesystem.manifest.after",
+            );
             ev.status = EventStatus::Success;
             if let Some(ref store) = self.store {
                 if let Ok(reference) = store.store_blob(manifest.as_bytes()).await {
@@ -396,9 +408,11 @@ impl CaptureLayer for GitCapture {
                     self.after_diff_blob = Some(reference.key);
                 }
             }
-        if tx.send(ev).await.is_err() {
-            tracing::debug!("git capture event channel closed, dropping after-run manifest event");
-        }
+            if tx.send(ev).await.is_err() {
+                tracing::debug!(
+                    "git capture event channel closed, dropping after-run manifest event"
+                );
+            }
         }
 
         let mut stop_ev = TraceEvent::new(&run_id, EventSource::Git, "git.observer.stopped");
@@ -417,43 +431,43 @@ mod tests {
 
     /// Helper to create a temporary git repository with an initial commit.
     fn setup_git_repo() -> (tempfile::TempDir, std::path::PathBuf) {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let root = dir.path().to_path_buf();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().to_path_buf();
 
-    // Initialize git repo
-    std::process::Command::new("git")
-        .args(["init"])
-        .current_dir(&root)
-        .output()
-        .expect("git init");
+        // Initialize git repo
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&root)
+            .output()
+            .expect("git init");
 
-    // Configure local user so commits work
-    std::process::Command::new("git")
-        .args(["config", "user.email", "test@blackbox"])
-        .current_dir(&root)
-        .output()
-        .expect("git config email");
-    std::process::Command::new("git")
-        .args(["config", "user.name", "Blackbox Test"])
-        .current_dir(&root)
-        .output()
-        .expect("git config name");
+        // Configure local user so commits work
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@blackbox"])
+            .current_dir(&root)
+            .output()
+            .expect("git config email");
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Blackbox Test"])
+            .current_dir(&root)
+            .output()
+            .expect("git config name");
 
-    // Create initial commit
-    std::fs::write(root.join("README.md"), b"# Test").expect("write readme");
-    std::process::Command::new("git")
-        .args(["add", "README.md"])
-        .current_dir(&root)
-        .output()
-        .expect("git add");
-    std::process::Command::new("git")
-        .args(["commit", "-m", "initial"])
-        .current_dir(&root)
-        .output()
-        .expect("git commit");
+        // Create initial commit
+        std::fs::write(root.join("README.md"), b"# Test").expect("write readme");
+        std::process::Command::new("git")
+            .args(["add", "README.md"])
+            .current_dir(&root)
+            .output()
+            .expect("git add");
+        std::process::Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(&root)
+            .output()
+            .expect("git commit");
 
-    (dir, root)
-}
+        (dir, root)
+    }
 
     #[tokio::test]
     async fn is_git_repo_returns_true_for_git_dir() {

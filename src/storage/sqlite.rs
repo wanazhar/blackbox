@@ -1,9 +1,9 @@
-use std::sync::LazyLock;
 use crate::redaction::scanner::SecretScanner;
 use crate::redaction::RedactionConfig;
+use std::sync::LazyLock;
 
-use std::path::{Path, PathBuf};
 use parking_lot::Mutex;
+use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use rusqlite::{params, Connection};
@@ -32,7 +32,6 @@ struct SerializedEvent {
     side_effect: String,
     metadata: String,
 }
-
 
 /// SQLite-backed trace store with content-addressed blob storage.
 ///
@@ -67,7 +66,10 @@ impl SqliteStore {
     }
 
     /// Open with an explicit blob directory (used by path resolver / tests).
-    pub fn open_with_blobs(db_path: impl AsRef<Path>, blob_dir: impl AsRef<Path>) -> anyhow::Result<Self> {
+    pub fn open_with_blobs(
+        db_path: impl AsRef<Path>,
+        blob_dir: impl AsRef<Path>,
+    ) -> anyhow::Result<Self> {
         let db_path = db_path.as_ref().to_path_buf();
         let blob_dir = blob_dir.as_ref().to_path_buf();
 
@@ -149,10 +151,8 @@ impl SqliteStore {
         conn.execute_batch("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;")
             .context("failed to set pragmas")?;
 
-        let blob_dir = std::env::temp_dir().join(format!(
-            "blackbox-test-blobs-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let blob_dir =
+            std::env::temp_dir().join(format!("blackbox-test-blobs-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&blob_dir).context("failed to create test blob directory")?;
 
         let store = Self {
@@ -179,7 +179,6 @@ impl SqliteStore {
         self.conn.lock()
     }
 
-
     /// Run schema migrations up to `SCHEMA_VERSION`.
     fn migrate(&self) -> anyhow::Result<()> {
         let conn = self.lock();
@@ -200,7 +199,8 @@ impl SqliteStore {
             .unwrap_or(0);
 
         if current < 1 {
-            let tx = conn.unchecked_transaction()
+            let tx = conn
+                .unchecked_transaction()
                 .context("failed to start transaction for v1 migration")?;
             Self::migrate_v1(&tx)?;
             tx.execute("INSERT INTO schema_version (version) VALUES (1)", [])
@@ -209,7 +209,8 @@ impl SqliteStore {
         }
 
         if current < 2 {
-            let tx = conn.unchecked_transaction()
+            let tx = conn
+                .unchecked_transaction()
                 .context("failed to start transaction for v2 migration")?;
             Self::migrate_v2(&tx, &self.blob_dir)?;
             tx.execute("INSERT INTO schema_version (version) VALUES (2)", [])
@@ -218,7 +219,8 @@ impl SqliteStore {
         }
 
         if current < 3 {
-            let tx = conn.unchecked_transaction()
+            let tx = conn
+                .unchecked_transaction()
                 .context("failed to start transaction for v3 migration")?;
             Self::migrate_v3(&tx)?;
             tx.execute("INSERT INTO schema_version (version) VALUES (3)", [])
@@ -226,7 +228,8 @@ impl SqliteStore {
             tx.commit().context("failed to commit v3 migration")?;
         }
         if current < 4 {
-            let tx = conn.unchecked_transaction()
+            let tx = conn
+                .unchecked_transaction()
                 .context("failed to start transaction for v4 migration")?;
             Self::migrate_v4(&tx)?;
             tx.execute("INSERT INTO schema_version (version) VALUES (4)", [])
@@ -234,7 +237,8 @@ impl SqliteStore {
             tx.commit().context("failed to commit v4 migration")?;
         }
         if current < 5 {
-            let tx = conn.unchecked_transaction()
+            let tx = conn
+                .unchecked_transaction()
                 .context("failed to start transaction for v5 migration")?;
             Self::migrate_v5(&tx)?;
             tx.execute("INSERT INTO schema_version (version) VALUES (5)", [])
@@ -436,7 +440,9 @@ impl SqliteStore {
              CREATE INDEX IF NOT EXISTS idx_checkpoints_event_id   ON checkpoints(event_id);",
         )
         .context("failed to create v5 indexes")?;
-        tracing::info!("v5: added missing indexes on events.parent_event_id and checkpoints.event_id");
+        tracing::info!(
+            "v5: added missing indexes on events.parent_event_id and checkpoints.event_id"
+        );
         Ok(())
     }
 
@@ -594,8 +600,7 @@ impl TraceStore for SqliteStore {
             let conn = self.lock();
             let command_json =
                 serde_json::to_string(&run.command).context("failed to serialize command")?;
-            let tags_json =
-                serde_json::to_string(&run.tags).context("failed to serialize tags")?;
+            let tags_json = serde_json::to_string(&run.tags).context("failed to serialize tags")?;
             let status_json =
                 serde_json::to_string(&run.status).context("failed to serialize status")?;
             conn.execute(
@@ -629,8 +634,7 @@ impl TraceStore for SqliteStore {
             let conn = self.lock();
             let command_json =
                 serde_json::to_string(&run.command).context("failed to serialize command")?;
-            let tags_json =
-                serde_json::to_string(&run.tags).context("failed to serialize tags")?;
+            let tags_json = serde_json::to_string(&run.tags).context("failed to serialize tags")?;
             let status_json =
                 serde_json::to_string(&run.status).context("failed to serialize status")?;
             conn.execute(
@@ -696,19 +700,18 @@ impl TraceStore for SqliteStore {
         let run_id = run_id.to_string();
         let deleted = {
             let conn = self.lock();
-            let tx = conn.unchecked_transaction()
+            let tx = conn
+                .unchecked_transaction()
                 .context("failed to start transaction for delete_run")?;
             // FK order: events and checkpoints before runs
-            if let Err(e) = tx.execute("DELETE FROM events_fts WHERE run_id = ?1", params![run_id]) {
+            if let Err(e) = tx.execute("DELETE FROM events_fts WHERE run_id = ?1", params![run_id])
+            {
                 tracing::warn!(error = %e, run_id = %run_id, "FTS cleanup failed during delete_run; proceeding");
             }
             tx.execute("DELETE FROM events WHERE run_id = ?1", params![run_id])
                 .context("failed to delete events")?;
-            tx.execute(
-                "DELETE FROM checkpoints WHERE run_id = ?1",
-                params![run_id],
-            )
-            .context("failed to delete checkpoints")?;
+            tx.execute("DELETE FROM checkpoints WHERE run_id = ?1", params![run_id])
+                .context("failed to delete checkpoints")?;
             let n = tx
                 .execute("DELETE FROM runs WHERE id = ?1", params![run_id])
                 .context("failed to delete run")?;
@@ -723,18 +726,19 @@ impl TraceStore for SqliteStore {
         let event = event.clone();
         // Serialize structured fields upfront so that serde_json errors
         // propagate instead of silently corrupting data via unwrap_or_default().
-        let source_json = serde_json::to_string(&event.source)
-            .context("failed to serialize event.source")?;
-        let status_json = serde_json::to_string(&event.status)
-            .context("failed to serialize event.status")?;
+        let source_json =
+            serde_json::to_string(&event.source).context("failed to serialize event.source")?;
+        let status_json =
+            serde_json::to_string(&event.status).context("failed to serialize event.status")?;
         let side_effect_json = serde_json::to_string(&event.side_effect)
             .context("failed to serialize event.side_effect")?;
-        let metadata_json = serde_json::to_string(&event.metadata)
-            .context("failed to serialize event.metadata")?;
+        let metadata_json =
+            serde_json::to_string(&event.metadata).context("failed to serialize event.metadata")?;
         {
             let conn = self.lock();
             // Wrap event INSERT + FTS upsert in a single transaction for atomicity.
-            let tx = conn.unchecked_transaction()
+            let tx = conn
+                .unchecked_transaction()
                 .context("failed to start transaction for insert_event")?;
             tx.execute(
                 "INSERT INTO events (id, run_id, parent_event_id, sequence, source, kind, started_at, ended_at, duration_ms, status, side_effect, input_blob, output_blob, error_blob, metadata)
@@ -761,7 +765,8 @@ impl TraceStore for SqliteStore {
             // FTS upsert within the same transaction (best-effort: table may be
             // missing on ancient DBs mid-migrate)
             let _ = fts_upsert_in_tx(&tx, &event);
-            tx.commit().context("failed to commit insert_event transaction")?;
+            tx.commit()
+                .context("failed to commit insert_event transaction")?;
         }
         tokio::task::yield_now().await;
         Ok(())
@@ -805,18 +810,19 @@ impl TraceStore for SqliteStore {
     async fn update_event(&self, event: &TraceEvent) -> anyhow::Result<()> {
         let event = event.clone();
         // Serialize structured fields upfront to propagate serde_json errors.
-        let source_json = serde_json::to_string(&event.source)
-            .context("failed to serialize event.source")?;
-        let status_json = serde_json::to_string(&event.status)
-            .context("failed to serialize event.status")?;
+        let source_json =
+            serde_json::to_string(&event.source).context("failed to serialize event.source")?;
+        let status_json =
+            serde_json::to_string(&event.status).context("failed to serialize event.status")?;
         let side_effect_json = serde_json::to_string(&event.side_effect)
             .context("failed to serialize event.side_effect")?;
-        let metadata_json = serde_json::to_string(&event.metadata)
-            .context("failed to serialize event.metadata")?;
+        let metadata_json =
+            serde_json::to_string(&event.metadata).context("failed to serialize event.metadata")?;
         {
             let conn = self.lock();
             // Wrap event UPDATE + FTS upsert in a single transaction for atomicity.
-            let tx = conn.unchecked_transaction()
+            let tx = conn
+                .unchecked_transaction()
                 .context("failed to start transaction for update_event")?;
             let n = tx.execute(
                 "UPDATE events SET run_id=?2, parent_event_id=?3, sequence=?4, source=?5, kind=?6,
@@ -848,7 +854,8 @@ impl TraceStore for SqliteStore {
             }
             // FTS upsert within the same transaction
             let _ = fts_upsert_in_tx(&tx, &event);
-            tx.commit().context("failed to commit update_event transaction")?;
+            tx.commit()
+                .context("failed to commit update_event transaction")?;
         }
         tokio::task::yield_now().await;
         Ok(())
@@ -884,9 +891,7 @@ impl TraceStore for SqliteStore {
                 ))
             });
             match rows {
-                Ok(iter) => Ok(Some(
-                    iter.filter_map(|r| r.ok()).collect::<Vec<_>>(),
-                )),
+                Ok(iter) => Ok(Some(iter.filter_map(|r| r.ok()).collect::<Vec<_>>())),
                 Err(e) => Err(e.into()),
             }
         };
@@ -957,11 +962,9 @@ impl TraceStore for SqliteStore {
                 let target = blob_dir.join(&key_for_write);
                 // Use atomic write: write to temp file, then rename
                 let temp = target.with_extension("tmp");
-                std::fs::write(&temp, &data_for_write)
-                    .context("failed to write blob temp file")?;
+                std::fs::write(&temp, &data_for_write).context("failed to write blob temp file")?;
                 // rename is atomic on the same filesystem
-                std::fs::rename(&temp, &target)
-                    .context("failed to rename blob temp file")?;
+                std::fs::rename(&temp, &target).context("failed to rename blob temp file")?;
                 Ok(())
             })
             .await??;
@@ -1006,11 +1009,7 @@ impl TraceStore for SqliteStore {
         .await?
     }
 
-    async fn move_blob(
-        &self,
-        from_key: &str,
-        to_key: &str,
-    ) -> anyhow::Result<()> {
+    async fn move_blob(&self, from_key: &str, to_key: &str) -> anyhow::Result<()> {
         // Move the file on disk
         {
             let blob_dir = self.blob_dir.clone();
@@ -1020,8 +1019,7 @@ impl TraceStore for SqliteStore {
                 let from = blob_dir.join(&fk);
                 let to = blob_dir.join(&tk);
                 if from.exists() && !to.exists() {
-                    std::fs::rename(&from, &to)
-                        .context("failed to rename blob file")?;
+                    std::fs::rename(&from, &to).context("failed to rename blob file")?;
                 }
                 Ok(())
             })
@@ -1032,7 +1030,8 @@ impl TraceStore for SqliteStore {
         // without the new row inserted.
         {
             let conn = self.lock();
-            let tx = conn.unchecked_transaction()
+            let tx = conn
+                .unchecked_transaction()
                 .context("failed to start transaction for move_blob")?;
             let meta: (i64, bool, Option<String>) = tx
                 .query_row(
@@ -1047,7 +1046,8 @@ impl TraceStore for SqliteStore {
                  VALUES (?1, ?2, ?3, ?4)",
                 params![to_key, meta.0, meta.1, meta.2],
             )?;
-            tx.commit().context("failed to commit move_blob transaction")?;
+            tx.commit()
+                .context("failed to commit move_blob transaction")?;
         }
         Ok(())
     }
@@ -1074,7 +1074,8 @@ impl TraceStore for SqliteStore {
             .collect::<anyhow::Result<Vec<_>>>()?;
         {
             let conn = self.lock();
-            let tx = conn.unchecked_transaction()
+            let tx = conn
+                .unchecked_transaction()
                 .context("failed to start transaction for insert_events_batch")?;
             for (i, event) in events.iter().enumerate() {
                 let s = &prepared[i];
@@ -1102,7 +1103,8 @@ impl TraceStore for SqliteStore {
                 .context("failed to insert event in batch")?;
                 let _ = fts_upsert_in_tx(&tx, event);
             }
-            tx.commit().context("failed to commit insert_events_batch transaction")?;
+            tx.commit()
+                .context("failed to commit insert_events_batch transaction")?;
         }
         // Flush WAL after batch write to keep WAL size bounded.
         if let Err(e) = self.wal_checkpoint() {
@@ -1137,8 +1139,7 @@ impl TraceStore for SqliteStore {
                 .with_context(|| format!("failed to delete blob metadata for {key}"))?;
             deleted += n;
         }
-        tx.commit()
-            .context("failed to commit delete_blob_keys")?;
+        tx.commit().context("failed to commit delete_blob_keys")?;
         Ok(deleted)
     }
 }
@@ -1165,11 +1166,10 @@ fn event_search_body(event: &TraceEvent) -> String {
 }
 
 fn fts_upsert(conn: &Connection, event: &TraceEvent) -> anyhow::Result<()> {
-    let source_str = serde_json::to_string(&event.source)
-        .unwrap_or_else(|_| "Unknown".to_string());
-    let status_str = serde_json::to_string(&event.status)
-        .unwrap_or_else(|_| "Unknown".to_string());
-    let tx = conn.unchecked_transaction()
+    let source_str = serde_json::to_string(&event.source).unwrap_or_else(|_| "Unknown".to_string());
+    let status_str = serde_json::to_string(&event.status).unwrap_or_else(|_| "Unknown".to_string());
+    let tx = conn
+        .unchecked_transaction()
         .context("failed to start transaction for FTS upsert")?;
     // Replace existing row for this event_id
     tx.execute(
@@ -1196,10 +1196,8 @@ fn fts_upsert(conn: &Connection, event: &TraceEvent) -> anyhow::Result<()> {
 
 /// FTS upsert that operates within an existing transaction (no inner txn).
 fn fts_upsert_in_tx(tx: &rusqlite::Transaction, event: &TraceEvent) -> anyhow::Result<()> {
-    let source_str = serde_json::to_string(&event.source)
-        .unwrap_or_else(|_| "Unknown".to_string());
-    let status_str = serde_json::to_string(&event.status)
-        .unwrap_or_else(|_| "Unknown".to_string());
+    let source_str = serde_json::to_string(&event.source).unwrap_or_else(|_| "Unknown".to_string());
+    let status_str = serde_json::to_string(&event.status).unwrap_or_else(|_| "Unknown".to_string());
     // Replace existing row for this event_id
     tx.execute(
         "DELETE FROM events_fts WHERE event_id = ?1",
@@ -1279,8 +1277,13 @@ fn run_from_row(row: &rusqlite::Row) -> rusqlite::Result<Run> {
         started_at: chrono::DateTime::parse_from_rfc3339(&started_at_str)
             .map(|dt| dt.with_timezone(&chrono::Utc))
             .map_err(|e| {
-                tracing::warn!("corrupt started_at for run {}: {e}", row.get::<_, String>(0).unwrap_or_default());
-                rusqlite::Error::InvalidParameterName(format!("corrupt timestamp: {started_at_str}: {e}"))
+                tracing::warn!(
+                    "corrupt started_at for run {}: {e}",
+                    row.get::<_, String>(0).unwrap_or_default()
+                );
+                rusqlite::Error::InvalidParameterName(format!(
+                    "corrupt timestamp: {started_at_str}: {e}"
+                ))
             })?,
         ended_at: ended_at_str.and_then(|s| {
             chrono::DateTime::parse_from_rfc3339(&s)
@@ -1312,8 +1315,13 @@ fn event_from_row(row: &rusqlite::Row) -> rusqlite::Result<TraceEvent> {
         started_at: chrono::DateTime::parse_from_rfc3339(&started_at_str)
             .map(|dt| dt.with_timezone(&chrono::Utc))
             .map_err(|e| {
-                tracing::warn!("corrupt started_at for event {}: {e}", row.get::<_, String>(0).unwrap_or_default());
-                rusqlite::Error::InvalidParameterName(format!("corrupt timestamp: {started_at_str}: {e}"))
+                tracing::warn!(
+                    "corrupt started_at for event {}: {e}",
+                    row.get::<_, String>(0).unwrap_or_default()
+                );
+                rusqlite::Error::InvalidParameterName(format!(
+                    "corrupt timestamp: {started_at_str}: {e}"
+                ))
             })?,
         ended_at: ended_at_str.and_then(|s| {
             chrono::DateTime::parse_from_rfc3339(&s)
@@ -1362,8 +1370,13 @@ fn checkpoint_from_row(row: &rusqlite::Row) -> rusqlite::Result<Checkpoint> {
         created_at: chrono::DateTime::parse_from_rfc3339(&created_at_str)
             .map(|dt| dt.with_timezone(&chrono::Utc))
             .map_err(|e| {
-                tracing::warn!("corrupt created_at for checkpoint {}: {e}", row.get::<_, String>(0).unwrap_or_default());
-                rusqlite::Error::InvalidParameterName(format!("corrupt timestamp: {created_at_str}: {e}"))
+                tracing::warn!(
+                    "corrupt created_at for checkpoint {}: {e}",
+                    row.get::<_, String>(0).unwrap_or_default()
+                );
+                rusqlite::Error::InvalidParameterName(format!(
+                    "corrupt timestamp: {created_at_str}: {e}"
+                ))
             })?,
     })
 }
@@ -1371,9 +1384,9 @@ fn checkpoint_from_row(row: &rusqlite::Row) -> rusqlite::Result<Checkpoint> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
     use crate::core::event::{EventSource, EventStatus};
     use crate::core::run::RunStatus;
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn store_and_load_run() {
@@ -1476,8 +1489,7 @@ mod tests {
 
         // Open once to run migrations through v3
         {
-            let _store =
-                SqliteStore::open_with_blobs(&db_path, &blob_dir).unwrap();
+            let _store = SqliteStore::open_with_blobs(&db_path, &blob_dir).unwrap();
         }
 
         // Verify schema_version has all 3 versions recorded
@@ -1492,8 +1504,7 @@ mod tests {
         assert_eq!(count, 3, "all 3 migration versions should be recorded");
 
         // Re-opening should be a no-op (already at current version)
-        let store =
-            SqliteStore::open_with_blobs(&db_path, &blob_dir).unwrap();
+        let store = SqliteStore::open_with_blobs(&db_path, &blob_dir).unwrap();
         let run = Run::new(vec!["echo".into()], "/tmp".into());
         tokio::runtime::Runtime::new()
             .unwrap()
@@ -1519,8 +1530,7 @@ mod tests {
         let run = Run::new(vec!["true".into()], "/tmp".into());
         rt.block_on(store.insert_run(&run)).unwrap();
 
-        let mut ev =
-            TraceEvent::new(&run.id, EventSource::System, "test.event");
+        let mut ev = TraceEvent::new(&run.id, EventSource::System, "test.event");
         ev.status = EventStatus::Success;
         rt.block_on(store.insert_event(&ev)).unwrap();
 
@@ -1531,11 +1541,10 @@ mod tests {
         assert!(rt.block_on(store.delete_run(&run.id)).unwrap());
         assert!(rt.block_on(store.get_run(&run.id)).unwrap().is_none());
         assert!(rt.block_on(store.get_events(&run.id)).unwrap().is_empty());
-        assert!(
-            rt.block_on(store.get_checkpoints(&run.id))
-                .unwrap()
-                .is_empty()
-        );
+        assert!(rt
+            .block_on(store.get_checkpoints(&run.id))
+            .unwrap()
+            .is_empty());
     }
     #[test]
     fn test_migrate_v2_blobs() {
@@ -1556,12 +1565,20 @@ mod tests {
             ).unwrap();
             conn.execute(
                 "INSERT INTO blobs (key, data, size, compressed) VALUES (?1, ?2, ?3, 0)",
-                rusqlite::params!["test-blob-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", b"blob-payload-data", 16i64],
-            ).unwrap();
+                rusqlite::params![
+                    "test-blob-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    b"blob-payload-data",
+                    16i64
+                ],
+            )
+            .unwrap();
         }
         let _store = SqliteStore::open_with_blobs(&db_path, &blob_dir).unwrap();
         let extracted = blob_dir.join("test-blob-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-        assert!(extracted.exists(), "v2 migration should extract blobs to disk");
+        assert!(
+            extracted.exists(),
+            "v2 migration should extract blobs to disk"
+        );
         assert_eq!(std::fs::read(&extracted).unwrap(), b"blob-payload-data");
     }
 
@@ -1583,8 +1600,15 @@ mod tests {
         let store = SqliteStore::open_with_blobs(&db_path, &blob_dir).unwrap();
         let rt = tokio::runtime::Runtime::new().unwrap();
         let loaded = rt.block_on(store.get_run(run_id)).unwrap().unwrap();
-        assert_eq!(loaded.status, RunStatus::Failed, "Running run should be recovered to Failed on re-open");
-        assert!(loaded.ended_at.is_some(), "recovered run should have ended_at set");
+        assert_eq!(
+            loaded.status,
+            RunStatus::Failed,
+            "Running run should be recovered to Failed on re-open"
+        );
+        assert!(
+            loaded.ended_at.is_some(),
+            "recovered run should have ended_at set"
+        );
     }
 
     #[tokio::test]
@@ -1600,8 +1624,14 @@ mod tests {
                 store.insert_run(&run).await.unwrap();
             }));
         }
-        for h in handles { h.await.unwrap(); }
+        for h in handles {
+            h.await.unwrap();
+        }
         let runs = store.list_runs().await.unwrap();
-        assert_eq!(runs.len(), 50, "all 50 concurrent inserts should be persisted");
+        assert_eq!(
+            runs.len(),
+            50,
+            "all 50 concurrent inserts should be persisted"
+        );
     }
 }

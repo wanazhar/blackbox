@@ -457,9 +457,7 @@ fn s3_client(bucket: &str, prefix: &str) -> anyhow::Result<(Arc<dyn ObjectStore>
     let s3 = AmazonS3Builder::from_env()
         .with_bucket_name(bucket)
         .build()
-        .context(
-            "build S3 client (set AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION)",
-        )?;
+        .context("build S3 client (set AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION)")?;
     let root = prefix.trim_matches('/').to_string();
     Ok((Arc::new(s3), root))
 }
@@ -473,10 +471,7 @@ fn obj_path(root: &str, rel: &str) -> ObjPath {
     ObjPath::from(full)
 }
 
-async fn s3_load_manifest(
-    s3: &dyn ObjectStore,
-    root: &str,
-) -> anyhow::Result<SyncManifest> {
+async fn s3_load_manifest(s3: &dyn ObjectStore, root: &str) -> anyhow::Result<SyncManifest> {
     let key = obj_path(root, "manifest.json");
     match s3.get(&key).await {
         Ok(r) => {
@@ -530,12 +525,10 @@ pub fn parse_s3_url(url: &str) -> anyhow::Result<(String, String)> {
 async fn import_with_fallback(store: &dyn TraceStore, json: &str) -> anyhow::Result<()> {
     match import_portable(store, json, false).await {
         Ok(_) => Ok(()),
-        Err(e) => {
-            import_portable(store, json, true)
-                .await
-                .map(|_| ())
-                .with_context(|| format!("keep-id import failed ({e}); remapped also failed"))
-        }
+        Err(e) => import_portable(store, json, true)
+            .await
+            .map(|_| ())
+            .with_context(|| format!("keep-id import failed ({e}); remapped also failed")),
     }
 }
 
@@ -629,10 +622,7 @@ pub async fn manifest_from_store(store: &dyn TraceStore) -> anyhow::Result<SyncM
                     SyncRunEntry {
                         file: format!("runs/{}.json", run.id),
                         sha256: String::new(),
-                        exported_at: run
-                            .ended_at
-                            .unwrap_or(run.started_at)
-                            .to_rfc3339(),
+                        exported_at: run.ended_at.unwrap_or(run.started_at).to_rfc3339(),
                         name: run.name.clone(),
                         command: run.command.clone(),
                         status: format!("{:?}", run.status),
@@ -647,10 +637,7 @@ pub async fn manifest_from_store(store: &dyn TraceStore) -> anyhow::Result<SyncM
             SyncRunEntry {
                 file: format!("runs/{}.json", run.id),
                 sha256: hash,
-                exported_at: run
-                    .ended_at
-                    .unwrap_or(run.started_at)
-                    .to_rfc3339(),
+                exported_at: run.ended_at.unwrap_or(run.started_at).to_rfc3339(),
                 name: run.name.clone(),
                 command: run.command.clone(),
                 status: format!("{:?}", run.status),
@@ -732,7 +719,11 @@ mod tests {
         let store2 = Arc::new(SqliteStore::open_memory().unwrap());
         let pull = sync_pull(store2.as_ref(), &dir).await.unwrap();
         assert_eq!(pull.pulled, 0, "corrupted file should not be imported");
-        assert!(pull.errors.iter().any(|e| e.contains("checksum mismatch")), "should report checksum mismatch, errors: {:?}", pull.errors);
+        assert!(
+            pull.errors.iter().any(|e| e.contains("checksum mismatch")),
+            "should report checksum mismatch, errors: {:?}",
+            pull.errors
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -6,11 +6,7 @@ use crate::transcript::rebuild_tool_transcript;
 ///
 /// Includes tool summary, event table with detail column, client-side
 /// filter, and a light/dark theme via prefers-color-scheme.
-pub fn export_html(
-    run: &Run,
-    events: &[TraceEvent],
-    redact: bool,
-) -> anyhow::Result<String> {
+pub fn export_html(run: &Run, events: &[TraceEvent], redact: bool) -> anyhow::Result<String> {
     let run_json = {
         let mut v = serde_json::to_value(run)?;
         if redact {
@@ -72,10 +68,7 @@ pub fn export_html(
         if body.is_empty() {
             r#"<p class="empty">No tool.call events.</p>"#.to_string()
         } else {
-            format!(
-                r#"<pre class="tools">{}</pre>"#,
-                html_escape(&body)
-            )
+            format!(r#"<pre class="tools">{}</pre>"#, html_escape(&body))
         }
     };
 
@@ -398,10 +391,7 @@ fn event_detail(ev_json: &serde_json::Value) -> String {
     // Read from the serialized+redacted JSON value, not the raw event,
     // so secrets removed by redaction are never surfaced.
     let meta = ev_json.get("metadata");
-    if let Some(p) = meta
-        .and_then(|m| m.get("preview"))
-        .and_then(|v| v.as_str())
-    {
+    if let Some(p) = meta.and_then(|m| m.get("preview")).and_then(|v| v.as_str()) {
         return p.replace('\n', "⏎");
     }
     if let Some(n) = meta
@@ -422,10 +412,7 @@ fn event_detail(ev_json: &serde_json::Value) -> String {
             .unwrap_or_default();
         return format!("{n} {input}");
     }
-    if let Some(p) = meta
-        .and_then(|m| m.get("path"))
-        .and_then(|v| v.as_str())
-    {
+    if let Some(p) = meta.and_then(|m| m.get("path")).and_then(|v| v.as_str()) {
         return p.to_string();
     }
     if let Some(c) = meta.and_then(|m| m.get("exit_code")) {
@@ -471,10 +458,7 @@ fn redact_event(val: &mut serde_json::Value) {
         if let Some(meta) = obj.get_mut("metadata").and_then(|v| v.as_object_mut()) {
             meta.remove("raw");
             if meta.contains_key("diff_preview") {
-                meta.insert(
-                    "diff_preview".to_string(),
-                    serde_json::json!("[REDACTED]"),
-                );
+                meta.insert("diff_preview".to_string(), serde_json::json!("[REDACTED]"));
             }
         }
     }

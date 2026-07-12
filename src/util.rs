@@ -39,10 +39,7 @@ pub fn redact_event(val: &mut serde_json::Value) {
         if let Some(meta) = obj.get_mut("metadata").and_then(|v| v.as_object_mut()) {
             meta.remove("raw");
             if meta.contains_key("diff_preview") {
-                meta.insert(
-                    "diff_preview".to_string(),
-                    serde_json::json!("[REDACTED]"),
-                );
+                meta.insert("diff_preview".to_string(), serde_json::json!("[REDACTED]"));
             }
         }
     }

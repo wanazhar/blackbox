@@ -189,7 +189,6 @@ fn sanitize_run_id(id: &str) -> String {
         .collect::<String>()
 }
 
-
 #[async_trait::async_trait]
 impl ReplayEngine for SandboxReplay {
     fn name(&self) -> &'static str {
@@ -210,10 +209,8 @@ impl ReplayEngine for SandboxReplay {
             std::fs::create_dir_all(ws)?;
             ws.clone()
         } else {
-            let dir = std::env::temp_dir().join(format!(
-                "blackbox-sandbox-{}",
-                sanitize_run_id(&run.id)
-            ));
+            let dir =
+                std::env::temp_dir().join(format!("blackbox-sandbox-{}", sanitize_run_id(&run.id)));
             std::fs::create_dir_all(&dir)?;
             cleanup_guard = TempDirGuard::new(dir.clone());
             dir
@@ -268,9 +265,7 @@ impl ReplayEngine for SandboxReplay {
             };
 
             // Re-classify shell tools as Unknown → treat as blocked unless policy Live
-            let side = if event.side_effect == SideEffect::Unknown
-                && event.kind == "tool.call"
-            {
+            let side = if event.side_effect == SideEffect::Unknown && event.kind == "tool.call" {
                 // Bash is unknown — only allow under Live
                 SideEffect::Unknown
             } else {
@@ -315,11 +310,7 @@ impl ReplayEngine for SandboxReplay {
             if !stderr.trim().is_empty() {
                 println!("      stderr: {}", truncate(stderr.trim(), 200));
             }
-            tracing::info!(
-                seq = event.sequence,
-                exit = code,
-                "sandbox: executed event"
-            );
+            tracing::info!(seq = event.sequence, exit = code, "sandbox: executed event");
             executed += 1;
         }
 
@@ -331,7 +322,6 @@ impl ReplayEngine for SandboxReplay {
         );
         println!("─── {} ───", summary);
         cleanup_guard.disarm();
-
 
         Ok(ReplayOutcome::Sandboxed {
             executed,
@@ -436,8 +426,22 @@ fn is_readonly_command(cmd: &[String]) -> bool {
 
     matches!(
         first,
-        "ls" | "cat" | "head" | "tail" | "pwd" | "echo" | "true" | "false" | "which" | "env"
-            | "printenv" | "wc" | "grep" | "rg" | "find" | "stat" | "file"
+        "ls" | "cat"
+            | "head"
+            | "tail"
+            | "pwd"
+            | "echo"
+            | "true"
+            | "false"
+            | "which"
+            | "env"
+            | "printenv"
+            | "wc"
+            | "grep"
+            | "rg"
+            | "find"
+            | "stat"
+            | "file"
     ) && !joined.contains("rm ")
         && !joined.contains(">")
         && !joined.contains("curl")
@@ -463,10 +467,8 @@ mod tests {
         let mut ev = TraceEvent::new(&run.id, EventSource::Process, "process.command");
         ev.status = EventStatus::Success;
         ev.side_effect = SideEffect::Read;
-        ev.metadata.insert(
-            "command".into(),
-            serde_json::json!(["echo", "sandbox-ok"]),
-        );
+        ev.metadata
+            .insert("command".into(), serde_json::json!(["echo", "sandbox-ok"]));
 
         let ws = std::env::temp_dir().join(format!("bb-sbx-test-{}", uuid::Uuid::new_v4()));
         let mut engine = SandboxReplay::new()
@@ -488,13 +490,14 @@ mod tests {
         std::fs::create_dir_all(&src).unwrap();
         std::fs::write(src.join("hello.txt"), b"seed-me").unwrap();
 
-        let run = Run::new(vec!["cat".into(), "hello.txt".into()], src.to_string_lossy().into());
+        let run = Run::new(
+            vec!["cat".into(), "hello.txt".into()],
+            src.to_string_lossy().into(),
+        );
         let mut ev = TraceEvent::new(&run.id, EventSource::Process, "process.command");
         ev.side_effect = SideEffect::Read;
-        ev.metadata.insert(
-            "command".into(),
-            serde_json::json!(["cat", "hello.txt"]),
-        );
+        ev.metadata
+            .insert("command".into(), serde_json::json!(["cat", "hello.txt"]));
 
         let mut engine = SandboxReplay::new().with_workspace(ws.clone());
         let outcome = engine.start(&run, &[ev], None).await.unwrap();
@@ -541,20 +544,48 @@ mod tests {
     fn is_readonly_blocks_shell_interpreters() {
         // R2-C3 / R2-H13: shell passthrough would allow `sh -c "rm -rf /"`
         // even when the event was mis-tagged as Read.
-        assert!(is_shell_interpreter(&["sh".into(), "-c".into(), "echo hi".into()]));
-        assert!(is_shell_interpreter(&["/bin/bash".into(), "-c".into(), "rm -rf /".into()]));
+        assert!(is_shell_interpreter(&[
+            "sh".into(),
+            "-c".into(),
+            "echo hi".into()
+        ]));
+        assert!(is_shell_interpreter(&[
+            "/bin/bash".into(),
+            "-c".into(),
+            "rm -rf /".into()
+        ]));
         assert!(is_shell_interpreter(&["zsh".into()]));
         assert!(!is_shell_interpreter(&["echo".into(), "hi".into()]));
-        assert!(!is_readonly_command(&["sh".into(), "-c".into(), "echo hi".into()]));
+        assert!(!is_readonly_command(&[
+            "sh".into(),
+            "-c".into(),
+            "echo hi".into()
+        ]));
         assert!(!is_readonly_command(&[
             "bash".into(),
             "-c".into(),
             "rm -rf /".into()
         ]));
-        assert!(!is_readonly_command(&["zsh".into(), "-c".into(), "true".into()]));
-        assert!(!is_readonly_command(&["fish".into(), "-c".into(), "true".into()]));
-        assert!(!is_readonly_command(&["dash".into(), "-c".into(), "true".into()]));
-        assert!(!is_readonly_command(&["ksh".into(), "-c".into(), "true".into()]));
+        assert!(!is_readonly_command(&[
+            "zsh".into(),
+            "-c".into(),
+            "true".into()
+        ]));
+        assert!(!is_readonly_command(&[
+            "fish".into(),
+            "-c".into(),
+            "true".into()
+        ]));
+        assert!(!is_readonly_command(&[
+            "dash".into(),
+            "-c".into(),
+            "true".into()
+        ]));
+        assert!(!is_readonly_command(&[
+            "ksh".into(),
+            "-c".into(),
+            "true".into()
+        ]));
         // Legitimate read-only tools still allowed
         assert!(is_readonly_command(&["echo".into(), "hi".into()]));
         assert!(is_readonly_command(&["cat".into(), "file.txt".into()]));

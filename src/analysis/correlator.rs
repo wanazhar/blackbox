@@ -18,7 +18,11 @@ impl EventCorrelator {
     ///
     /// Uses temporal proximity, process ancestry, and known
     /// side-effect patterns to estimate causal relationships.
-    pub fn find_parent(&self, event: &TraceEvent, events: &[TraceEvent]) -> Option<(String, Confidence)> {
+    pub fn find_parent(
+        &self,
+        event: &TraceEvent,
+        events: &[TraceEvent],
+    ) -> Option<(String, Confidence)> {
         let pos = events.iter().position(|e| e.id == event.id)?;
         if pos == 0 {
             return None;
@@ -84,7 +88,9 @@ impl EventCorrelator {
 
             if matches!(
                 confidence,
-                Confidence::Confirmed | Confidence::StronglyCorrelated | Confidence::WeaklyCorrelated
+                Confidence::Confirmed
+                    | Confidence::StronglyCorrelated
+                    | Confidence::WeaklyCorrelated
             ) {
                 let score = match confidence {
                     Confidence::Confirmed => 3,
@@ -92,10 +98,7 @@ impl EventCorrelator {
                     Confidence::WeaklyCorrelated => 1,
                     Confidence::Unknown => 0,
                 };
-                let better = best
-                    .as_ref()
-                    .map(|(_, _, s)| score > *s)
-                    .unwrap_or(true);
+                let better = best.as_ref().map(|(_, _, s)| score > *s).unwrap_or(true);
                 if better {
                     best = Some((prev.id.clone(), confidence, score));
                 }
@@ -172,7 +175,9 @@ impl EventCorrelator {
 
             if matches!(
                 confidence,
-                Confidence::Confirmed | Confidence::StronglyCorrelated | Confidence::WeaklyCorrelated
+                Confidence::Confirmed
+                    | Confidence::StronglyCorrelated
+                    | Confidence::WeaklyCorrelated
             ) {
                 let score = match confidence {
                     Confidence::Confirmed => 3,
@@ -180,10 +185,7 @@ impl EventCorrelator {
                     Confidence::WeaklyCorrelated => 1,
                     Confidence::Unknown => 0,
                 };
-                let better = best
-                    .as_ref()
-                    .map(|(_, _, s)| score > *s)
-                    .unwrap_or(true);
+                let better = best.as_ref().map(|(_, _, s)| score > *s).unwrap_or(true);
                 if better {
                     best = Some((prev.id.clone(), confidence, score));
                 }
@@ -232,7 +234,8 @@ impl AnalysisPass for EventCorrelator {
                 continue;
             }
 
-            if let Some((parent_id, confidence)) = self.find_parent_btree(event, events, &ts_index) {
+            if let Some((parent_id, confidence)) = self.find_parent_btree(event, events, &ts_index)
+            {
                 // Quiet: only Confirmed / StronglyCorrelated (drop Weakly)
                 if !matches!(
                     confidence,

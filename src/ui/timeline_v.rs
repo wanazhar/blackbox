@@ -27,8 +27,8 @@ impl Panel for TimelineView {
             .collect();
 
         let content = text.join("\n");
-        let para = Paragraph::new(content)
-            .block(Block::default().borders(Borders::ALL).title("Timeline"));
+        let para =
+            Paragraph::new(content).block(Block::default().borders(Borders::ALL).title("Timeline"));
         frame.render_widget(para, area);
     }
 }

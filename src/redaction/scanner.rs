@@ -13,21 +13,81 @@ static BASE_PATTERNS: LazyLock<Vec<(RedactionReason, Regex)>> = LazyLock::new(||
         }
     };
 
-    add(&mut patterns, RedactionReason::AuthorizationHeader, r"(?i)(bearer|basic)\s+[A-Za-z0-9\-._~+/]+=*");
-    add(&mut patterns, RedactionReason::ApiKey, r#"(?i)api[_-]?key[_-]?\s*[:=]\s*['"]?[A-Za-z0-9_\-]{16,}"#);
-    add(&mut patterns, RedactionReason::PatternMatch, r#"(?i)(secret|password|passwd|token|credential)[_-]?\s*[:=]\s*['"]?[^\s'"]{8,}"#);
-    add(&mut patterns, RedactionReason::ApiKey, r"(?i)\b(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{36,}\b");
-    add(&mut patterns, RedactionReason::ApiKey, r"\bsk-[A-Za-z0-9]{20,}\b");
-    add(&mut patterns, RedactionReason::ApiKey, r"\bsk-ant-[A-Za-z0-9\-_]{20,}\b");
-    add(&mut patterns, RedactionReason::CloudCredential, r"\b(AKIA|ASIA)[0-9A-Z]{16}\b");
-    add(&mut patterns, RedactionReason::ApiKey, r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b");
-    add(&mut patterns, RedactionReason::PatternMatch, r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b");
-    add(&mut patterns, RedactionReason::SshKey, r"(?i)-----BEGIN (RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY-----");
-    add(&mut patterns, RedactionReason::ConnectionString, r#"(?i)(postgres|mysql|mongodb|redis)://[^\s:]+:[^\s@]+@[^\s]+"#);
-    add(&mut patterns, RedactionReason::ApiKey, r"\bAIza[0-9A-Za-z\-_]{35}\b");
-    add(&mut patterns, RedactionReason::ApiKey, r"\b(?:sk_live|pk_live|sk_test|pk_test)_[0-9a-zA-Z]{24,}\b");
-    add(&mut patterns, RedactionReason::ApiKey, r"\bnpm_[A-Za-z0-9]{36}\b");
-    add(&mut patterns, RedactionReason::SshKey, r"^[A-Za-z0-9+/]{40,}={0,2}$");
+    add(
+        &mut patterns,
+        RedactionReason::AuthorizationHeader,
+        r"(?i)(bearer|basic)\s+[A-Za-z0-9\-._~+/]+=*",
+    );
+    add(
+        &mut patterns,
+        RedactionReason::ApiKey,
+        r#"(?i)api[_-]?key[_-]?\s*[:=]\s*['"]?[A-Za-z0-9_\-]{16,}"#,
+    );
+    add(
+        &mut patterns,
+        RedactionReason::PatternMatch,
+        r#"(?i)(secret|password|passwd|token|credential)[_-]?\s*[:=]\s*['"]?[^\s'"]{8,}"#,
+    );
+    add(
+        &mut patterns,
+        RedactionReason::ApiKey,
+        r"(?i)\b(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{36,}\b",
+    );
+    add(
+        &mut patterns,
+        RedactionReason::ApiKey,
+        r"\bsk-[A-Za-z0-9]{20,}\b",
+    );
+    add(
+        &mut patterns,
+        RedactionReason::ApiKey,
+        r"\bsk-ant-[A-Za-z0-9\-_]{20,}\b",
+    );
+    add(
+        &mut patterns,
+        RedactionReason::CloudCredential,
+        r"\b(AKIA|ASIA)[0-9A-Z]{16}\b",
+    );
+    add(
+        &mut patterns,
+        RedactionReason::ApiKey,
+        r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b",
+    );
+    add(
+        &mut patterns,
+        RedactionReason::PatternMatch,
+        r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b",
+    );
+    add(
+        &mut patterns,
+        RedactionReason::SshKey,
+        r"(?i)-----BEGIN (RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY-----",
+    );
+    add(
+        &mut patterns,
+        RedactionReason::ConnectionString,
+        r#"(?i)(postgres|mysql|mongodb|redis)://[^\s:]+:[^\s@]+@[^\s]+"#,
+    );
+    add(
+        &mut patterns,
+        RedactionReason::ApiKey,
+        r"\bAIza[0-9A-Za-z\-_]{35}\b",
+    );
+    add(
+        &mut patterns,
+        RedactionReason::ApiKey,
+        r"\b(?:sk_live|pk_live|sk_test|pk_test)_[0-9a-zA-Z]{24,}\b",
+    );
+    add(
+        &mut patterns,
+        RedactionReason::ApiKey,
+        r"\bnpm_[A-Za-z0-9]{36}\b",
+    );
+    add(
+        &mut patterns,
+        RedactionReason::SshKey,
+        r"^[A-Za-z0-9+/]{40,}={0,2}$",
+    );
 
     patterns
 });
@@ -202,7 +262,7 @@ mod tests {
     fn redacts_openai_and_aws() {
         let s = default_scanner();
         let text = "key=sk-abcdefghijklmnopqrstuvwxyz012345 and AKIAIOSFODNN7EXAMPLE";
-        let out = s.redact(&text);
+        let out = s.redact(text);
         assert!(!out.contains("sk-abcdef"));
         assert!(!out.contains("AKIAIOSFODNN7EXAMPLE"));
         assert!(out.contains("[REDACTED]"));
@@ -227,7 +287,7 @@ mod tests {
     fn redacts_github_personal_token() {
         let s = default_scanner();
         let text = "token=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgh12";
-        let out = s.redact(&text);
+        let out = s.redact(text);
         assert_eq!(out, "[REDACTED]", "generic token= pattern matches first");
     }
 
@@ -235,7 +295,7 @@ mod tests {
     fn redacts_github_oauth_token() {
         let s = default_scanner();
         let text = "gho_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgh12 push";
-        let out = s.redact(&text);
+        let out = s.redact(text);
         assert!(!out.contains("gho_"));
         assert!(out.contains("[REDACTED]"));
     }
@@ -244,7 +304,7 @@ mod tests {
     fn redacts_github_app_token() {
         let s = default_scanner();
         let text = "ghu_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgh12";
-        let out = s.redact(&text);
+        let out = s.redact(text);
         assert_eq!(out, "[REDACTED]");
     }
 
@@ -252,7 +312,7 @@ mod tests {
     fn redacts_github_refresh_token() {
         let s = default_scanner();
         let text = "ghs_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgh12";
-        let out = s.redact(&text);
+        let out = s.redact(text);
         assert_eq!(out, "[REDACTED]");
     }
 
@@ -260,7 +320,7 @@ mod tests {
     fn redacts_github_runner_token() {
         let s = default_scanner();
         let text = "ghr_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgh12";
-        let out = s.redact(&text);
+        let out = s.redact(text);
         assert_eq!(out, "[REDACTED]");
     }
 
@@ -269,7 +329,13 @@ mod tests {
     #[test]
     fn redacts_slack_bot_token() {
         let s = default_scanner();
-        let text = format!("export SLACK_TOKEN={}", concat!("xox", "b-123456789012-1234567890123-AbCdEfGhIjKlMnOpQrStUvWx"));
+        let text = format!(
+            "export SLACK_TOKEN={}",
+            concat!(
+                "xox",
+                "b-123456789012-1234567890123-AbCdEfGhIjKlMnOpQrStUvWx"
+            )
+        );
         let out = s.redact(&text);
         assert!(!out.contains("xoxb-"));
         assert!(out.contains("[REDACTED]"));
@@ -278,24 +344,33 @@ mod tests {
     #[test]
     fn redacts_slack_user_token() {
         let s = default_scanner();
-        let text = concat!("xox", "p-123456789012-1234567890123-AbCdEfGhIjKlMnOpQrStUvWx");
-        let out = s.redact(&text);
+        let text = concat!(
+            "xox",
+            "p-123456789012-1234567890123-AbCdEfGhIjKlMnOpQrStUvWx"
+        );
+        let out = s.redact(text);
         assert_eq!(out, "[REDACTED]");
     }
 
     #[test]
     fn redacts_slack_app_token() {
         let s = default_scanner();
-        let text = concat!("xox", "a-123456789012-1234567890123-AbCdEfGhIjKlMnOpQrStUvWx");
-        let out = s.redact(&text);
+        let text = concat!(
+            "xox",
+            "a-123456789012-1234567890123-AbCdEfGhIjKlMnOpQrStUvWx"
+        );
+        let out = s.redact(text);
         assert_eq!(out, "[REDACTED]");
     }
 
     #[test]
     fn redacts_slack_refresh_token() {
         let s = default_scanner();
-        let text = concat!("xox", "r-123456789012-1234567890123-AbCdEfGhIjKlMnOpQrStUvWx");
-        let out = s.redact(&text);
+        let text = concat!(
+            "xox",
+            "r-123456789012-1234567890123-AbCdEfGhIjKlMnOpQrStUvWx"
+        );
+        let out = s.redact(text);
         assert_eq!(out, "[REDACTED]");
     }
 
@@ -329,7 +404,7 @@ mod tests {
     fn redacts_ssh_pem_private_key() {
         let s = default_scanner();
         let text = "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA0...";
-        let out = s.redact(&text);
+        let out = s.redact(text);
         assert!(!out.contains("BEGIN RSA PRIVATE KEY"));
         assert!(out.contains("[REDACTED]"));
     }
@@ -338,7 +413,7 @@ mod tests {
     fn redacts_openssh_private_key() {
         let s = default_scanner();
         let text = "-----BEGIN OPENSSH PRIVATE KEY-----";
-        let out = s.redact(&text);
+        let out = s.redact(text);
         assert_eq!(out, "[REDACTED]");
     }
 
@@ -346,7 +421,7 @@ mod tests {
     fn redacts_ec_private_key() {
         let s = default_scanner();
         let text = "-----BEGIN EC PRIVATE KEY-----";
-        let out = s.redact(&text);
+        let out = s.redact(text);
         assert_eq!(out, "[REDACTED]");
     }
 
@@ -354,7 +429,7 @@ mod tests {
     fn redacts_encrypted_private_key() {
         let s = default_scanner();
         let text = "-----BEGIN ENCRYPTED PRIVATE KEY-----";
-        let out = s.redact(&text);
+        let out = s.redact(text);
         assert_eq!(out, "[REDACTED]");
     }
 
@@ -364,7 +439,7 @@ mod tests {
     fn redacts_postgres_connection_string() {
         let s = default_scanner();
         let text = "DATABASE_URL=postgres://admin:s3cret@db.example.com:5432/mydb";
-        let out = s.redact(&text);
+        let out = s.redact(text);
         assert!(!out.contains("admin:s3cret"));
         assert!(out.contains("[REDACTED]"));
     }
@@ -373,7 +448,7 @@ mod tests {
     fn redacts_mysql_connection_string() {
         let s = default_scanner();
         let text = "mysql://root:passw0rd@localhost/mydb";
-        let out = s.redact(&text);
+        let out = s.redact(text);
         assert!(!out.contains("root:passw0rd"));
         assert!(out.contains("[REDACTED]"));
     }
@@ -382,7 +457,7 @@ mod tests {
     fn redacts_mongodb_connection_string() {
         let s = default_scanner();
         let text = "mongodb://user:secret123@mongo.example.com:27017/db";
-        let out = s.redact(&text);
+        let out = s.redact(text);
         assert!(!out.contains("user:secret123"));
         assert!(out.contains("[REDACTED]"));
     }
@@ -391,7 +466,7 @@ mod tests {
     fn redacts_redis_connection_string() {
         let s = default_scanner();
         let text = "redis://default:mypassword@redis.example.com:6379/0";
-        let out = s.redact(&text);
+        let out = s.redact(text);
         assert!(!out.contains("mypassword"));
         assert!(out.contains("[REDACTED]"));
     }
@@ -402,7 +477,7 @@ mod tests {
     fn redacts_anthropic_key() {
         let s = default_scanner();
         let text = "key=sk-ant-api03-abcdefghijklmnopqrstuvwxyz123456";
-        let out = s.redact(&text);
+        let out = s.redact(text);
         assert!(!out.contains("sk-ant-api03"));
         assert!(out.contains("[REDACTED]"));
     }
@@ -410,7 +485,11 @@ mod tests {
     #[test]
     fn scan_detects_anthropic_key() {
         let s = default_scanner();
-        let records = s.scan("sk-ant-api03-abcdefghijklmnopqrstuvwxyz123456", "test", None);
+        let records = s.scan(
+            "sk-ant-api03-abcdefghijklmnopqrstuvwxyz123456",
+            "test",
+            None,
+        );
         assert!(
             records.iter().any(|r| r.reason == RedactionReason::ApiKey),
             "should detect Anthropic key as ApiKey"
@@ -527,7 +606,7 @@ mod tests {
         };
         let s = SecretScanner::new(config);
         let text = "sk-abcdefghijklmnopqrstuvwxyz012345";
-        let out = s.redact(&text);
+        let out = s.redact(text);
         assert_eq!(out, text, "disabled scanner must not modify text");
     }
 
@@ -539,7 +618,10 @@ mod tests {
         };
         let s = SecretScanner::new(config);
         let records = s.scan("sk-abcdefghijklmnopqrstuvwxyz012345", "test", None);
-        assert!(records.is_empty(), "disabled scanner must return no records");
+        assert!(
+            records.is_empty(),
+            "disabled scanner must return no records"
+        );
     }
 
     // --- custom patterns from config ---
@@ -555,7 +637,9 @@ mod tests {
         let text = "val=my_secret_abcdef123456";
         let records = s.scan(text, "test", None);
         assert!(
-            records.iter().any(|r| r.reason == RedactionReason::PatternMatch),
+            records
+                .iter()
+                .any(|r| r.reason == RedactionReason::PatternMatch),
             "custom pattern should be detected"
         );
     }
@@ -569,7 +653,7 @@ mod tests {
         };
         let s = SecretScanner::new(config);
         let text = "val=my_secret_abcdef123456";
-        let out = s.redact(&text);
+        let out = s.redact(text);
         assert!(!out.contains("my_secret_abcdef123456"));
         assert!(out.contains("[REDACTED]"));
     }
@@ -580,7 +664,7 @@ mod tests {
     fn sequential_redaction_preserves_surrounding_text() {
         let s = default_scanner();
         let text = "prefix ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgh12 suffix";
-        let out = s.redact(&text);
+        let out = s.redact(text);
         assert!(out.starts_with("prefix "));
         assert!(out.ends_with(" suffix"));
         assert_eq!(out, "prefix [REDACTED] suffix");
@@ -590,7 +674,7 @@ mod tests {
     fn multiple_secrets_in_one_string_all_redacted() {
         let s = default_scanner();
         let text = "key1=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgh12 key2=sk-abcdefghijklmnopqrstuvwxyz012345";
-        let out = s.redact(&text);
+        let out = s.redact(text);
         assert!(!out.contains("ghp_"));
         assert!(!out.contains("sk-abcdef"));
         assert_eq!(out, "key1=[REDACTED] key2=[REDACTED]");
@@ -600,7 +684,7 @@ mod tests {
     fn redaction_does_not_corrupt_non_secret_text() {
         let s = default_scanner();
         let text = "The quick brown fox jumps over the lazy dog. No secrets here.";
-        let out = s.redact(&text);
+        let out = s.redact(text);
         assert_eq!(out, text, "non-secret text must be unchanged");
     }
 
@@ -608,7 +692,7 @@ mod tests {
     fn redaction_preserves_adjacent_secret_fragments() {
         let s = default_scanner();
         let text = "postgres://admin:s3cret@db.com AKIAIOSFODNN7EXAMPLE";
-        let out = s.redact(&text);
+        let out = s.redact(text);
         assert!(!out.contains("s3cret"));
         assert!(!out.contains("AKIAIOSFODNN7EXAMPLE"));
         assert!(out.contains("[REDACTED]"));
@@ -622,7 +706,13 @@ mod tests {
         let text = "key=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgh12 and AKIAIOSFODNN7EXAMPLE";
         let records = s.scan(text, "loc", None);
         let reasons: Vec<_> = records.iter().map(|r| &r.reason).collect();
-        assert!(reasons.contains(&&RedactionReason::ApiKey), "should find GitHub token");
-        assert!(reasons.contains(&&RedactionReason::CloudCredential), "should find AWS key");
+        assert!(
+            reasons.contains(&&RedactionReason::ApiKey),
+            "should find GitHub token"
+        );
+        assert!(
+            reasons.contains(&&RedactionReason::CloudCredential),
+            "should find AWS key"
+        );
     }
 }

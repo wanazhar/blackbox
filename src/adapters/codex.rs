@@ -34,7 +34,8 @@ impl HarnessAdapter for CodexAdapter {
 
     fn detect(&self, command: &[String]) -> bool {
         command.first().is_some_and(|c| {
-            std::path::Path::new(c).file_name()
+            std::path::Path::new(c)
+                .file_name()
                 .and_then(|n| n.to_str())
                 .map(|n| n == "codex")
                 .unwrap_or(false)
@@ -83,11 +84,7 @@ impl HarnessAdapter for CodexAdapter {
     fn discover_session_id(&self, events: &[TraceEvent]) -> Option<String> {
         for ev in events.iter().rev() {
             if ev.kind == "harness.session" {
-                if let Some(sid) = ev
-                    .metadata
-                    .get("session_id")
-                    .and_then(|v| v.as_str())
-                {
+                if let Some(sid) = ev.metadata.get("session_id").and_then(|v| v.as_str()) {
                     return Some(sid.to_string());
                 }
             }

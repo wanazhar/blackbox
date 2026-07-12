@@ -136,9 +136,7 @@ impl FilesystemCapture {
             EventKind::Create(CreateKind::File) | EventKind::Create(CreateKind::Any) => {
                 ("filesystem.created", SideEffect::LocalWrite)
             }
-            EventKind::Create(CreateKind::Folder) => {
-                ("filesystem.created", SideEffect::LocalWrite)
-            }
+            EventKind::Create(CreateKind::Folder) => ("filesystem.created", SideEffect::LocalWrite),
             EventKind::Modify(ModifyKind::Data(_))
             | EventKind::Modify(ModifyKind::Any)
             | EventKind::Modify(ModifyKind::Metadata(_)) => {
@@ -152,9 +150,7 @@ impl FilesystemCapture {
             }
             EventKind::Remove(RemoveKind::File)
             | EventKind::Remove(RemoveKind::Folder)
-            | EventKind::Remove(RemoveKind::Any) => {
-                ("filesystem.removed", SideEffect::Destructive)
-            }
+            | EventKind::Remove(RemoveKind::Any) => ("filesystem.removed", SideEffect::Destructive),
             // Collapse noisy other kinds
             EventKind::Access(_) | EventKind::Other | EventKind::Any => return out,
             _ => return out,
@@ -181,10 +177,8 @@ impl FilesystemCapture {
             if let Ok(meta) = std::fs::metadata(&path) {
                 ev.metadata
                     .insert("size".to_string(), serde_json::json!(meta.len()));
-                ev.metadata.insert(
-                    "is_dir".to_string(),
-                    serde_json::json!(meta.is_dir()),
-                );
+                ev.metadata
+                    .insert("is_dir".to_string(), serde_json::json!(meta.is_dir()));
             }
             out.push(ev);
         }
@@ -207,18 +201,19 @@ impl CaptureLayer for FilesystemCapture {
     async fn start(&mut self, run: &Run) -> anyhow::Result<mpsc::Receiver<TraceEvent>> {
         let (tx, rx) = mpsc::channel(1024);
 
-        let mut started =
-            TraceEvent::new(&run.id, EventSource::Filesystem, "filesystem.observer.started");
-        started.status = EventStatus::Success;
-        started.metadata.insert(
-            "mode".to_string(),
-            serde_json::json!("live-notify"),
+        let mut started = TraceEvent::new(
+            &run.id,
+            EventSource::Filesystem,
+            "filesystem.observer.started",
         );
+        started.status = EventStatus::Success;
+        started
+            .metadata
+            .insert("mode".to_string(), serde_json::json!("live-notify"));
         tx.send(started).await?;
 
         let manifest = Self::snapshot(&run.cwd);
-        let mut snap_ev =
-            TraceEvent::new(&run.id, EventSource::Filesystem, "filesystem.snapshot");
+        let mut snap_ev = TraceEvent::new(&run.id, EventSource::Filesystem, "filesystem.snapshot");
         snap_ev.status = EventStatus::Success;
         snap_ev.metadata.insert(
             "entry_count".to_string(),
@@ -302,8 +297,7 @@ impl CaptureLayer for FilesystemCapture {
         let after = Self::snapshot(&cwd);
         let changed = self.start_manifest.as_deref() != Some(after.as_str());
 
-        let mut snap_ev =
-            TraceEvent::new(&run_id, EventSource::Filesystem, "filesystem.snapshot");
+        let mut snap_ev = TraceEvent::new(&run_id, EventSource::Filesystem, "filesystem.snapshot");
         snap_ev.status = EventStatus::Success;
         snap_ev.metadata.insert(
             "entry_count".to_string(),
@@ -317,8 +311,11 @@ impl CaptureLayer for FilesystemCapture {
             .insert("changed".to_string(), serde_json::json!(changed));
         let _ = tx.send(snap_ev).await;
 
-        let mut stop_ev =
-            TraceEvent::new(&run_id, EventSource::Filesystem, "filesystem.observer.stopped");
+        let mut stop_ev = TraceEvent::new(
+            &run_id,
+            EventSource::Filesystem,
+            "filesystem.observer.stopped",
+        );
         stop_ev.status = EventStatus::Success;
         let _ = tx.send(stop_ev).await;
 
@@ -339,10 +336,18 @@ mod tests {
 
     #[test]
     fn ignore_noise_paths() {
-        assert!(FilesystemCapture::should_ignore(Path::new("/proj/target/debug/foo")));
-        assert!(FilesystemCapture::should_ignore(Path::new("/proj/.git/objects/xx")));
-        assert!(FilesystemCapture::should_ignore(Path::new("/proj/node_modules/x")));
-        assert!(!FilesystemCapture::should_ignore(Path::new("/proj/src/main.rs")));
+        assert!(FilesystemCapture::should_ignore(Path::new(
+            "/proj/target/debug/foo"
+        )));
+        assert!(FilesystemCapture::should_ignore(Path::new(
+            "/proj/.git/objects/xx"
+        )));
+        assert!(FilesystemCapture::should_ignore(Path::new(
+            "/proj/node_modules/x"
+        )));
+        assert!(!FilesystemCapture::should_ignore(Path::new(
+            "/proj/src/main.rs"
+        )));
     }
 
     #[test]

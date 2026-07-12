@@ -8,7 +8,6 @@ use crate::config::{BlackboxPaths, CapturePolicy};
 use crate::storage::sqlite::SqliteStore;
 use crate::storage::TraceStore;
 
-
 /// Default bind address for `blackbox serve`.
 #[allow(dead_code)] // documented constant — clap requires a string literal for default_value
 const DEFAULT_SERVE_PORT: &str = "127.0.0.1:7788";
@@ -352,7 +351,6 @@ pub struct ExportArgs {
     pub format: ExportFormat,
 
     // TODO(L-20): add --output / -o flag to write to a file instead of stdout
-
     /// Include secrets (disable redaction). Default is redacted.
     #[arg(long)]
     pub no_redact: bool,
@@ -478,10 +476,7 @@ fn open_store(cli: &Cli) -> anyhow::Result<SqliteStore> {
 }
 
 /// Resolve a run id: `"latest"`, full UUID, or unique prefix.
-async fn resolve_run_id(
-    store: &dyn TraceStore,
-    spec: &str,
-) -> anyhow::Result<String> {
+async fn resolve_run_id(store: &dyn TraceStore, spec: &str) -> anyhow::Result<String> {
     if spec == "latest" {
         let runs = store.list_runs().await?;
         return runs
@@ -554,11 +549,7 @@ async fn resolve_event_id(
     match candidates.len() {
         0 => anyhow::bail!("event not found: {}", event_spec),
         1 => Ok(candidates.into_iter().next().unwrap()),
-        n => anyhow::bail!(
-            "ambiguous event id prefix '{}': {} matches",
-            event_spec,
-            n
-        ),
+        n => anyhow::bail!("ambiguous event id prefix '{}': {} matches", event_spec, n),
     }
 }
 
@@ -636,9 +627,19 @@ async fn cmd_runs(cli: &Cli, args: &RunsArgs) -> anyhow::Result<()> {
     }
     if let Some(status) = &args.status {
         // Validate against known status values with a helpful error
-        let valid_statuses = ["pending", "running", "succeeded", "failed", "cancelled", "unknown"];
+        let valid_statuses = [
+            "pending",
+            "running",
+            "succeeded",
+            "failed",
+            "cancelled",
+            "unknown",
+        ];
         let s = status.to_lowercase();
-        if !valid_statuses.iter().any(|v| v.contains(&s) || s.contains(v)) {
+        if !valid_statuses
+            .iter()
+            .any(|v| v.contains(&s) || s.contains(v))
+        {
             anyhow::bail!(
                 "unknown status {:?}; valid values: Pending, Running, Succeeded, Failed, Cancelled, Unknown",
                 status
@@ -802,19 +803,14 @@ async fn cmd_stats(cli: &Cli, args: &StatsArgs) -> anyhow::Result<()> {
     let mut by_adapter: HashMap<String, usize> = HashMap::new();
     let mut tagged = 0usize;
     for run in &runs {
-        *by_status
-            .entry(format!("{:?}", run.status))
-            .or_insert(0) += 1;
+        *by_status.entry(format!("{:?}", run.status)).or_insert(0) += 1;
         if !run.tags.is_empty() {
             tagged += 1;
         }
         let adapter = run
             .notes
             .as_deref()
-            .and_then(|n| {
-                n.split(';')
-                    .find_map(|p| p.trim().strip_prefix("adapter:"))
-            })
+            .and_then(|n| n.split(';').find_map(|p| p.trim().strip_prefix("adapter:")))
             .unwrap_or("unknown");
         *by_adapter.entry(adapter.to_string()).or_insert(0) += 1;
     }
@@ -1207,7 +1203,9 @@ async fn cmd_diff(cli: &Cli, args: &DiffArgs) -> anyhow::Result<()> {
     let id_a = resolve_run_id(&store, &args.run_a).await?;
     let id_b = resolve_run_id(&store, &args.run_b).await?;
     if id_a == id_b {
-        eprintln!("warning: diffing a run against itself (L-19: self-diff produces no useful output)");
+        eprintln!(
+            "warning: diffing a run against itself (L-19: self-diff produces no useful output)"
+        );
     }
 
     let run_a = store
@@ -1273,9 +1271,18 @@ async fn cmd_diff(cli: &Cli, args: &DiffArgs) -> anyhow::Result<()> {
         .collect();
     if !tools_a.is_empty() || !tools_b.is_empty() {
         println!();
-        println!("  Tools only in A: {:?}", tools_a.difference(&tools_b).collect::<Vec<_>>());
-        println!("  Tools only in B: {:?}", tools_b.difference(&tools_a).collect::<Vec<_>>());
-        println!("  Tools in both:   {:?}", tools_a.intersection(&tools_b).collect::<Vec<_>>());
+        println!(
+            "  Tools only in A: {:?}",
+            tools_a.difference(&tools_b).collect::<Vec<_>>()
+        );
+        println!(
+            "  Tools only in B: {:?}",
+            tools_b.difference(&tools_a).collect::<Vec<_>>()
+        );
+        println!(
+            "  Tools in both:   {:?}",
+            tools_a.intersection(&tools_b).collect::<Vec<_>>()
+        );
     }
 
     let mut kinds_a: HashMap<String, usize> = HashMap::new();
@@ -1398,12 +1405,13 @@ async fn cmd_sync(cli: &Cli, args: &SyncArgs) -> anyhow::Result<()> {
         SyncAction::Push(d) => {
             let redact = d.redact && !d.no_redact;
             if d.no_redact {
-                eprintln!("warning: --no-redact includes unredacted secrets in sync archives (L-29)");
+                eprintln!(
+                    "warning: --no-redact includes unredacted secrets in sync archives (L-29)"
+                );
             }
             if let Some(ref remote) = d.remote {
                 println!("Sync push → {remote}");
-                let report =
-                    sync_push_http(&store, remote, d.token.as_deref(), redact).await?;
+                let report = sync_push_http(&store, remote, d.token.as_deref(), redact).await?;
                 print_report("http", report);
             } else if let Some(ref s3) = d.s3 {
                 let (bucket, prefix) = parse_s3_url(s3)?;
@@ -1505,7 +1513,11 @@ async fn cmd_fork(cli: &Cli, args: &ForkArgs) -> anyhow::Result<()> {
     let checkpoints = store.get_checkpoints(&run_id).await?;
 
     let from_event = if let Some(ref at) = args.at {
-        Some(resolve_event_id(store.as_ref(), at, Some(&run_id)).await?.id)
+        Some(
+            resolve_event_id(store.as_ref(), at, Some(&run_id))
+                .await?
+                .id,
+        )
     } else {
         None
     };
@@ -1708,8 +1720,7 @@ async fn cmd_scrub(cli: &Cli, args: &ScrubArgs) -> anyhow::Result<()> {
     println!("{}", format_report(&report));
 
     if args.gc {
-        let (files, meta) =
-            gc_unreferenced_blobs(store.as_ref(), &blob_dir, args.dry_run).await?;
+        let (files, meta) = gc_unreferenced_blobs(store.as_ref(), &blob_dir, args.dry_run).await?;
         println!(
             "{}orphan blobs: {} file(s), {} metadata row(s) ({})",
             if args.dry_run { "[dry-run] " } else { "" },
@@ -1746,10 +1757,7 @@ async fn cmd_search(cli: &Cli, args: &SearchArgs) -> anyhow::Result<()> {
         hits.len(),
         args.max_runs
     );
-    let backend = hits
-        .first()
-        .map(|h| h.backend)
-        .unwrap_or("scan");
+    let backend = hits.first().map(|h| h.backend).unwrap_or("scan");
     println!(
         "{:<10} {:<8} {:<22} {:<6} SNIPPET  [{}]",
         "RUN", "SCORE", "KIND", "SEQ", backend
@@ -1775,10 +1783,7 @@ async fn cmd_search(cli: &Cli, args: &SearchArgs) -> anyhow::Result<()> {
                 short_id(eid)
             );
         } else {
-            println!(
-                "           show:    blackbox show {}",
-                short_id(&h.run_id)
-            );
+            println!("           show:    blackbox show {}", short_id(&h.run_id));
         }
     }
     Ok(())
@@ -1798,9 +1803,7 @@ async fn cmd_watch(cli: &Cli, args: &WatchArgs) -> anyhow::Result<()> {
     println!(
         "Watching run {} ({}) — Ctrl+C to stop",
         short_id(&run_id),
-        run.name
-            .as_deref()
-            .unwrap_or(&run.command.join(" "))
+        run.name.as_deref().unwrap_or(&run.command.join(" "))
     );
     println!("{:<6} {:<12} {:<28} DETAIL", "SEQ", "SRC", "KIND");
     println!("{}", "-".repeat(72));
@@ -2041,9 +2044,7 @@ async fn cmd_doctor(cli: &Cli, args: &DoctorArgs) -> anyhow::Result<()> {
             }
         }
         if dirty > 0 {
-            println!(
-                "warning:    {dirty} recent run command(s) still match secret patterns"
-            );
+            println!("warning:    {dirty} recent run command(s) still match secret patterns");
             println!("            run: blackbox scrub");
         } else {
             println!("secrets:    no secret patterns in recent run argv");
@@ -2099,10 +2100,29 @@ mod tests {
         // Test that every subcommand is recognized (even if it needs more args).
         // We use --help to verify the subcommand exists without requiring args.
         let all_subs = vec![
-            "run", "runs", "show", "timeline", "inspect", "diff",
-            "export", "import", "replay", "fork", "analyze", "scrub",
-            "doctor", "rm", "purge", "search", "watch", "tags", "tag",
-            "stats", "completions", "serve", "sync",
+            "run",
+            "runs",
+            "show",
+            "timeline",
+            "inspect",
+            "diff",
+            "export",
+            "import",
+            "replay",
+            "fork",
+            "analyze",
+            "scrub",
+            "doctor",
+            "rm",
+            "purge",
+            "search",
+            "watch",
+            "tags",
+            "tag",
+            "stats",
+            "completions",
+            "serve",
+            "sync",
         ];
         for sub in all_subs {
             let result = Cli::command().try_get_matches_from(["blackbox", sub, "--help"]);
@@ -2122,14 +2142,25 @@ mod tests {
 
     #[test]
     fn test_cli_parse_run_with_command() {
-        let result = Cli::command().try_get_matches_from(["blackbox", "run", "--", "echo", "hello"]);
+        let result =
+            Cli::command().try_get_matches_from(["blackbox", "run", "--", "echo", "hello"]);
         assert!(result.is_ok(), "run subcommand with args should parse");
     }
 
     #[test]
     fn test_cli_parse_sync_subcommands() {
-        assert!(Cli::command().try_get_matches_from(["blackbox", "sync", "push"]).is_ok(), "sync push should parse");
-        assert!(Cli::command().try_get_matches_from(["blackbox", "sync", "pull"]).is_ok(), "sync pull should parse");
+        assert!(
+            Cli::command()
+                .try_get_matches_from(["blackbox", "sync", "push"])
+                .is_ok(),
+            "sync push should parse"
+        );
+        assert!(
+            Cli::command()
+                .try_get_matches_from(["blackbox", "sync", "pull"])
+                .is_ok(),
+            "sync pull should parse"
+        );
     }
 
     #[test]
@@ -2146,30 +2177,55 @@ mod tests {
 
     #[test]
     fn test_cli_parse_store_global_flag() {
-        assert!(Cli::command().try_get_matches_from(["blackbox", "--store", "/tmp/test.db", "runs"]).is_ok(), "--store global flag should parse");
+        assert!(
+            Cli::command()
+                .try_get_matches_from(["blackbox", "--store", "/tmp/test.db", "runs"])
+                .is_ok(),
+            "--store global flag should parse"
+        );
     }
 
     #[test]
     fn test_cli_parse_export_with_format() {
-        let result = Cli::command().try_get_matches_from(["blackbox", "export", "run-123", "--format", "html"]);
-        assert!(result.is_ok() || matches!(&result, Err(e) if e.kind() == clap::error::ErrorKind::DisplayHelp));
+        let result = Cli::command()
+            .try_get_matches_from(["blackbox", "export", "run-123", "--format", "html"]);
+        assert!(
+            result.is_ok()
+                || matches!(&result, Err(e) if e.kind() == clap::error::ErrorKind::DisplayHelp)
+        );
     }
 
     #[test]
     fn test_cli_parse_scrub_flags() {
-        let result = Cli::command().try_get_matches_from(["blackbox", "scrub", "--dry-run", "--gc", "--no-redact"]);
+        let result = Cli::command().try_get_matches_from([
+            "blackbox",
+            "scrub",
+            "--dry-run",
+            "--gc",
+            "--no-redact",
+        ]);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_cli_parse_watch_interval() {
-        let result = Cli::command().try_get_matches_from(["blackbox", "watch", "run-id", "--interval-ms", "500"]);
-        assert!(result.is_ok(), "watch with interval should parse: {result:?}");
+        let result = Cli::command().try_get_matches_from([
+            "blackbox",
+            "watch",
+            "run-id",
+            "--interval-ms",
+            "500",
+        ]);
+        assert!(
+            result.is_ok(),
+            "watch with interval should parse: {result:?}"
+        );
     }
 
     #[test]
     fn test_cli_parse_purge_flags() {
-        let result = Cli::command().try_get_matches_from(["blackbox", "purge", "--keep", "5", "--yes"]);
+        let result =
+            Cli::command().try_get_matches_from(["blackbox", "purge", "--keep", "5", "--yes"]);
         assert!(result.is_ok());
     }
 

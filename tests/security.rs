@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use blackbox::core::event::{EventSource, EventStatus, TraceEvent};
 use blackbox::core::run::{Run, RunStatus};
-use blackbox::redaction::RedactionConfig;
 use blackbox::redaction::scanner::SecretScanner;
+use blackbox::redaction::RedactionConfig;
 use blackbox::storage::sqlite::SqliteStore;
 use blackbox::storage::TraceStore;
 
@@ -20,11 +20,7 @@ async fn test_secret_no_leak() {
 
     // Simulate a command that outputs an AWS key
     let mut run = Run::new(
-        vec![
-            "sh".into(),
-            "-c".into(),
-            "echo AKIAIOSFODNN7EXAMPLE".into(),
-        ],
+        vec!["sh".into(), "-c".into(), "echo AKIAIOSFODNN7EXAMPLE".into()],
         "/tmp".into(),
     );
     run.status = RunStatus::Succeeded;

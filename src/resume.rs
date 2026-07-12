@@ -71,9 +71,19 @@ pub fn resume_command(
         Some("codex") => CodexAdapter::new().build_resume_command(&session),
         _ => {
             // Heuristic from parent command
-            if run.command.first().map(|c| c.contains("claude")).unwrap_or(false) {
+            if run
+                .command
+                .first()
+                .map(|c| c.contains("claude"))
+                .unwrap_or(false)
+            {
                 ClaudeAdapter::new().build_resume_command(&session)
-            } else if run.command.first().map(|c| c.contains("codex")).unwrap_or(false) {
+            } else if run
+                .command
+                .first()
+                .map(|c| c.contains("codex"))
+                .unwrap_or(false)
+            {
                 CodexAdapter::new().build_resume_command(&session)
             } else {
                 None

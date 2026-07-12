@@ -25,7 +25,12 @@ impl EnvironmentRedactor {
         let mut records = Vec::new();
         for name in env.keys() {
             let upper = name.to_uppercase();
-            if self.config.env_var_patterns.iter().any(|p| upper.contains(p)) {
+            if self
+                .config
+                .env_var_patterns
+                .iter()
+                .any(|p| upper.contains(p))
+            {
                 records.push(RedactionRecord {
                     reason: RedactionReason::EnvironmentSecret,
                     pattern: name.clone(),
@@ -44,7 +49,12 @@ impl EnvironmentRedactor {
         let mut result = HashMap::new();
         for (name, value) in env {
             let upper = name.to_uppercase();
-            if self.config.env_var_patterns.iter().any(|p| upper.contains(p)) {
+            if self
+                .config
+                .env_var_patterns
+                .iter()
+                .any(|p| upper.contains(p))
+            {
                 result.insert(name.clone(), "[REDACTED]".to_string());
             } else {
                 result.insert(name.clone(), value.clone());
@@ -64,7 +74,10 @@ mod tests {
     }
 
     fn env_from_pairs(pairs: &[(&str, &str)]) -> HashMap<String, String> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     // --- scan_env finds API_KEY, TOKEN, SECRET, PASSWORD patterns ---
@@ -117,7 +130,11 @@ mod tests {
             ("app_secret", "value3"),
         ]);
         let records = r.scan_env(&env);
-        assert_eq!(records.len(), 3, "all lowercase/mixed case names should match");
+        assert_eq!(
+            records.len(),
+            3,
+            "all lowercase/mixed case names should match"
+        );
     }
 
     // --- scan_env skips non-sensitive vars like PATH, HOME ---
@@ -132,7 +149,10 @@ mod tests {
             ("LANG", "en_US.UTF-8"),
         ]);
         let records = r.scan_env(&env);
-        assert!(records.is_empty(), "non-sensitive vars should not be flagged");
+        assert!(
+            records.is_empty(),
+            "non-sensitive vars should not be flagged"
+        );
     }
 
     #[test]
@@ -153,10 +173,7 @@ mod tests {
     #[test]
     fn redact_env_replaces_sensitive_values() {
         let r = default_redactor();
-        let env = env_from_pairs(&[
-            ("API_KEY", "super-secret-key"),
-            ("TOKEN", "tok_abc123xyz"),
-        ]);
+        let env = env_from_pairs(&[("API_KEY", "super-secret-key"), ("TOKEN", "tok_abc123xyz")]);
         let result = r.redact_env(&env);
         assert_eq!(result["API_KEY"], "[REDACTED]");
         assert_eq!(result["TOKEN"], "[REDACTED]");
@@ -203,7 +220,10 @@ mod tests {
         let r = EnvironmentRedactor::new(config);
         let env = env_from_pairs(&[("API_KEY", "super-secret")]);
         let records = r.scan_env(&env);
-        assert!(records.is_empty(), "disabled redactor must return no scan records");
+        assert!(
+            records.is_empty(),
+            "disabled redactor must return no scan records"
+        );
     }
 
     #[test]
@@ -253,11 +273,7 @@ mod tests {
     #[test]
     fn redact_env_preserves_all_keys() {
         let r = default_redactor();
-        let env = env_from_pairs(&[
-            ("A", "1"),
-            ("B_API_KEY", "secret"),
-            ("C", "3"),
-        ]);
+        let env = env_from_pairs(&[("A", "1"), ("B_API_KEY", "secret"), ("C", "3")]);
         let result = r.redact_env(&env);
         assert_eq!(result.len(), 3);
         assert!(result.contains_key("A"));

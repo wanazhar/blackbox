@@ -6,6 +6,13 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::export::html::export_html;
+use crate::export::portable::{export_portable, import_portable};
+use crate::search::search_store;
+use crate::storage::sqlite::SqliteStore;
+use crate::storage::TraceStore;
+use crate::sync::manifest_from_store;
+use crate::transcript::{rebuild_terminal_transcript, rebuild_tool_transcript};
 use axum::extract::{Path, Query, Request, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::middleware::{from_fn_with_state, Next};
@@ -16,13 +23,6 @@ use axum::{Json, Router};
 use futures_util::stream::{self, Stream};
 use serde::Deserialize;
 use tokio::sync::Semaphore;
-use crate::export::portable::{export_portable, import_portable};
-use crate::export::html::export_html;
-use crate::search::search_store;
-use crate::storage::sqlite::SqliteStore;
-use crate::storage::TraceStore;
-use crate::sync::manifest_from_store;
-use crate::transcript::{rebuild_terminal_transcript, rebuild_tool_transcript};
 
 #[derive(Clone)]
 struct AppState {
@@ -66,7 +66,10 @@ pub async fn serve(store: Arc<SqliteStore>, opts: ServeOptions) -> anyhow::Resul
         .route("/api/runs/{id}/events/stream", get(api_event_stream))
         .route("/api/search", get(api_search))
         .route("/api/sync/manifest", get(api_sync_manifest))
-        .route("/api/sync/runs/{id}", get(api_sync_get_run).put(api_sync_put_run))
+        .route(
+            "/api/sync/runs/{id}",
+            get(api_sync_get_run).put(api_sync_put_run),
+        )
         .route("/search", get(search_page))
         .layer(from_fn_with_state(state.clone(), auth_middleware))
         .layer(from_fn_with_state(state.clone(), timeout_middleware))
@@ -93,11 +96,7 @@ pub async fn serve(store: Arc<SqliteStore>, opts: ServeOptions) -> anyhow::Resul
     Ok(())
 }
 
-async fn auth_middleware(
-    State(state): State<AppState>,
-    request: Request,
-    next: Next,
-) -> Response {
+async fn auth_middleware(State(state): State<AppState>, request: Request, next: Next) -> Response {
     let mut response = if let Some(expected) = &state.token {
         if token_ok(expected, request.headers(), request.uri().query()) {
             next.run(request).await
@@ -144,7 +143,10 @@ async fn timeout_middleware(
 /// proxies, browsers, and CDN edge caches. Prefer the `Authorization`
 /// header in production use.
 fn token_ok(expected: &str, headers: &HeaderMap, query: Option<&str>) -> bool {
-    if let Some(auth) = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()) {
+    if let Some(auth) = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+    {
         // Constant-time comparison to avoid timing side-channels.
         let provided = auth.strip_prefix("Bearer ").unwrap_or(auth);
         if constant_time_eq(provided.as_bytes(), expected.as_bytes()) {
@@ -259,10 +261,7 @@ es.onerror = () => {{ streamEl.textContent = 'live list: reconnecting…'; }};
 }
 
 fn run_row_html(run: &crate::core::run::Run) -> String {
-    let label = run
-        .name
-        .clone()
-        .unwrap_or_else(|| run.command.join(" "));
+    let label = run.name.clone().unwrap_or_else(|| run.command.join(" "));
     let status = format!("{:?}", run.status);
     let tags = if run.tags.is_empty() {
         String::new()
@@ -365,10 +364,7 @@ async fn run_live_page(
     let Some(run) = state.store.get_run(&run_id).await? else {
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
-    let label = run
-        .name
-        .clone()
-        .unwrap_or_else(|| run.command.join(" "));
+    let label = run.name.clone().unwrap_or_else(|| run.command.join(" "));
 
     let body = format!(
         r#"<p><a href="/">← Runs</a> · <a href="/runs/{id}">Static view</a></p>
@@ -460,11 +456,10 @@ async fn watch_latest_page(State(state): State<AppState>) -> Result<Response, Ap
         .into_response());
     };
     // Redirect-style: serve live page for latest
-    Ok(axum::response::Redirect::temporary(&format!(
-        "/runs/{}/live",
-        urlencoding(&run.id)
-    ))
-    .into_response())
+    Ok(
+        axum::response::Redirect::temporary(&format!("/runs/{}/live", urlencoding(&run.id)))
+            .into_response(),
+    )
 }
 
 async fn run_export_html(
@@ -560,7 +555,12 @@ async fn api_runs_stream(
                 Err(e) => {
                     tracing::error!(error = %e, "SSE: failed to list runs");
                     tokio::time::sleep(Duration::from_millis(800)).await;
-                    return Some((Ok(Event::default().event("error").data(format!("list_runs failed: {e}"))), st));
+                    return Some((
+                        Ok(Event::default()
+                            .event("error")
+                            .data(format!("list_runs failed: {e}"))),
+                        st,
+                    ));
                 }
             };
 
@@ -588,7 +588,10 @@ async fn api_runs_stream(
                             tracing::error!(error = %e, run_id = %run.id, "SSE: failed to serialize run");
                             st.known.remove(&run.id);
                             let err_data = serde_json::json!({"error": "serialization failed", "run_id": run.id});
-                            return Some((Ok(Event::default().event("error").data(err_data.to_string())), st));
+                            return Some((
+                                Ok(Event::default().event("error").data(err_data.to_string())),
+                                st,
+                            ));
                         }
                     }
                 }
@@ -630,11 +633,11 @@ async fn api_events(
 }
 
 /// Server-Sent Events stream of run events (historical first, then live tail).
-    // NOTE: This SSE endpoint polls SQLite on every tick (400ms). When many
-    // clients connect simultaneously (thundering-herd), each poll contends on
-    // the Mutex<Connection>, serializing all readers. A future improvement
-    // would be to use a tokio::sync::watch or broadcast channel so the
-    // write-path notifies all active streams, eliminating polling entirely.
+// NOTE: This SSE endpoint polls SQLite on every tick (400ms). When many
+// clients connect simultaneously (thundering-herd), each poll contends on
+// the Mutex<Connection>, serializing all readers. A future improvement
+// would be to use a tokio::sync::watch or broadcast channel so the
+// write-path notifies all active streams, eliminating polling entirely.
 async fn api_event_stream(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -687,17 +690,11 @@ async fn api_event_stream(
                 });
                 if finished && !st.finished {
                     st.finished = true;
-                    st.queue.push_back(
-                        Event::default()
-                            .event("status")
-                            .data(data.to_string()),
-                    );
+                    st.queue
+                        .push_back(Event::default().event("status").data(data.to_string()));
                 } else if st.ticks_idle % 5 == 0 {
-                    st.queue.push_back(
-                        Event::default()
-                            .event("status")
-                            .data(data.to_string()),
-                    );
+                    st.queue
+                        .push_back(Event::default().event("status").data(data.to_string()));
                 }
                 if !finished {
                     st.ticks_idle = 0;
@@ -716,10 +713,7 @@ async fn api_event_stream(
             tokio::time::sleep(Duration::from_millis(400)).await;
             st.ticks_idle = st.ticks_idle.saturating_add(1);
             // heartbeat comment via empty data event name "ping"
-            Some((
-                Ok(Event::default().event("ping").data("ok")),
-                st,
-            ))
+            Some((Ok(Event::default().event("ping").data("ok")), st))
         },
     );
 
@@ -818,11 +812,7 @@ async fn api_sync_get_run(
     let events = state.store.get_events(&run_id).await?;
     // Full portable with blobs for offline-complete pull
     let json = export_portable(state.store.as_ref(), &run, &events, true).await?;
-    Ok((
-        [(header::CONTENT_TYPE, "application/json")],
-        json,
-    )
-        .into_response())
+    Ok(([(header::CONTENT_TYPE, "application/json")], json).into_response())
 }
 
 async fn api_sync_put_run(
@@ -832,7 +822,9 @@ async fn api_sync_put_run(
 ) -> Result<Json<serde_json::Value>, AppError> {
     const MAX_SYNC_BODY: usize = 10 * 1024 * 1024; // 10 MB
     if body.len() > MAX_SYNC_BODY {
-        return Err(AppError::payload_too_large(anyhow::anyhow!("payload too large: exceeds 10 MB limit")));
+        return Err(AppError::payload_too_large(anyhow::anyhow!(
+            "payload too large: exceeds 10 MB limit"
+        )));
     }
     if state.token.is_none() {
         return Err(AppError::forbidden(anyhow::anyhow!(
@@ -909,8 +901,12 @@ async fn resolve_prefix(store: &dyn TraceStore, spec: &str) -> Result<String, Ap
         .collect();
     match matches.len() {
         1 => Ok(matches[0].clone()),
-        0 => Err(AppError::not_found(anyhow::anyhow!("run not found: {spec}"))),
-        _ => Err(AppError::bad_request(anyhow::anyhow!("ambiguous run id: {spec}"))),
+        0 => Err(AppError::not_found(anyhow::anyhow!(
+            "run not found: {spec}"
+        ))),
+        _ => Err(AppError::bad_request(anyhow::anyhow!(
+            "ambiguous run id: {spec}"
+        ))),
     }
 }
 
@@ -1048,7 +1044,8 @@ impl IntoResponse for AppError {
             AppErrorKind::PayloadTooLarge(e) => (StatusCode::PAYLOAD_TOO_LARGE, e),
             AppErrorKind::Internal(e) => {
                 tracing::debug!(error = %e, "returning 500 Internal Server Error");
-                return (StatusCode::INTERNAL_SERVER_ERROR, "internal server error").into_response();
+                return (StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
+                    .into_response();
             }
         };
         (status, format!("error: {}", err)).into_response()
@@ -1092,45 +1089,81 @@ mod testing {
         store.insert_run(&run1).await.unwrap();
         store.insert_run(&run2).await.unwrap();
 
-        let mut ev1 = crate::core::event::TraceEvent::new(&run1.id, crate::core::event::EventSource::Terminal, "terminal.output");
+        let mut ev1 = crate::core::event::TraceEvent::new(
+            &run1.id,
+            crate::core::event::EventSource::Terminal,
+            "terminal.output",
+        );
         ev1.status = crate::core::event::EventStatus::Success;
         ev1.sequence = 0;
         store.insert_event(&ev1).await.unwrap();
 
-        let mut ev2 = crate::core::event::TraceEvent::new(&run1.id, crate::core::event::EventSource::Tool, "tool.call");
+        let mut ev2 = crate::core::event::TraceEvent::new(
+            &run1.id,
+            crate::core::event::EventSource::Tool,
+            "tool.call",
+        );
         ev2.status = crate::core::event::EventStatus::Running;
         ev2.sequence = 1;
-        ev2.metadata.insert("tool_name".into(), serde_json::json!("Bash"));
+        ev2.metadata
+            .insert("tool_name".into(), serde_json::json!("Bash"));
         store.insert_event(&ev2).await.unwrap();
 
         let state = AppState::new(store.clone());
         let app = build_router(state);
 
         // ── Test GET /api/runs ────────────────────────────────
-        let resp = app.clone()
-            .oneshot(Request::builder().uri("/api/runs").body(Body::empty()).unwrap())
-            .await.unwrap();
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/runs")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let runs: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
         assert_eq!(runs.len(), 2, "should list both runs");
 
         // ── Test GET /api/runs/{id} ──────────────────────────
-        let resp = app.clone()
-            .oneshot(Request::builder().uri(format!("/api/runs/{}", run1.id)).body(Body::empty()).unwrap())
-            .await.unwrap();
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/runs/{}", run1.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let run_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(run_json["id"].as_str().unwrap(), run1.id);
         assert_eq!(run_json["command"].as_array().unwrap().len(), 2);
 
         // ── Test GET /api/runs/{id}/events ────────────────────
-        let resp = app.clone()
-            .oneshot(Request::builder().uri(format!("/api/runs/{}/events", run1.id)).body(Body::empty()).unwrap())
-            .await.unwrap();
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/runs/{}/events", run1.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let events: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
         assert_eq!(events.len(), 2, "should return both events for run1");
         assert_eq!(events[0]["sequence"].as_u64().unwrap(), 0);
@@ -1138,9 +1171,19 @@ mod testing {
 
         // ── Test 404 for non-existent run ────────────────────
         let resp = app
-            .oneshot(Request::builder().uri("/api/runs/nonexistent-id-12345").body(Body::empty()).unwrap())
-            .await.unwrap();
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND, "should return 404 for missing run");
+            .oneshot(
+                Request::builder()
+                    .uri("/api/runs/nonexistent-id-12345")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::NOT_FOUND,
+            "should return 404 for missing run"
+        );
     }
     #[test]
     fn test_auth_token_comparison() {
@@ -1156,44 +1199,82 @@ mod testing {
     #[tokio::test]
     async fn test_auth_middleware_rejects_without_token() {
         let store = Arc::new(SqliteStore::open_memory().unwrap());
-        let state = AppState { store, token: Some("test-secret".into()), sse_semaphore: Arc::new(Semaphore::new(100)) };
-        let app = Router::new().route("/", get(test_handler))
+        let state = AppState {
+            store,
+            token: Some("test-secret".into()),
+            sse_semaphore: Arc::new(Semaphore::new(100)),
+        };
+        let app = Router::new()
+            .route("/", get(test_handler))
             .layer(from_fn_with_state(state.clone(), auth_middleware))
             .with_state(state);
-        let resp = app.oneshot(Request::builder().uri("/").body(Body::empty()).unwrap()).await.unwrap();
+        let resp = app
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
     async fn test_auth_middleware_accepts_valid_token() {
         let store = Arc::new(SqliteStore::open_memory().unwrap());
-        let state = AppState { store, token: Some("test-secret".into()), sse_semaphore: Arc::new(Semaphore::new(100)) };
-        let app = Router::new().route("/", get(test_handler))
+        let state = AppState {
+            store,
+            token: Some("test-secret".into()),
+            sse_semaphore: Arc::new(Semaphore::new(100)),
+        };
+        let app = Router::new()
+            .route("/", get(test_handler))
             .layer(from_fn_with_state(state.clone(), auth_middleware))
             .with_state(state);
-        let resp = app.oneshot(Request::builder().uri("/").header(header::AUTHORIZATION, "Bearer test-secret").body(Body::empty()).unwrap()).await.unwrap();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .header(header::AUTHORIZATION, "Bearer test-secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
     #[tokio::test]
     async fn test_auth_middleware_passthrough_when_no_token() {
         let store = Arc::new(SqliteStore::open_memory().unwrap());
-        let state = AppState { store, token: None, sse_semaphore: Arc::new(Semaphore::new(100)) };
-        let app = Router::new().route("/", get(test_handler))
+        let state = AppState {
+            store,
+            token: None,
+            sse_semaphore: Arc::new(Semaphore::new(100)),
+        };
+        let app = Router::new()
+            .route("/", get(test_handler))
             .layer(from_fn_with_state(state.clone(), auth_middleware))
             .with_state(state);
-        let resp = app.oneshot(Request::builder().uri("/").body(Body::empty()).unwrap()).await.unwrap();
+        let resp = app
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
     #[tokio::test]
     async fn test_auth_middleware_sets_security_headers() {
         let store = Arc::new(SqliteStore::open_memory().unwrap());
-        let state = AppState { store, token: None, sse_semaphore: Arc::new(Semaphore::new(100)) };
-        let app = Router::new().route("/", get(test_handler))
+        let state = AppState {
+            store,
+            token: None,
+            sse_semaphore: Arc::new(Semaphore::new(100)),
+        };
+        let app = Router::new()
+            .route("/", get(test_handler))
             .layer(from_fn_with_state(state.clone(), auth_middleware))
             .with_state(state);
-        let resp = app.oneshot(Request::builder().uri("/").body(Body::empty()).unwrap()).await.unwrap();
+        let resp = app
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let headers = resp.headers();
         assert_eq!(headers.get("x-content-type-options").unwrap(), "nosniff");

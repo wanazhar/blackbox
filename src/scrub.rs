@@ -39,10 +39,7 @@ pub async fn scrub_store(
     let runs = store.list_runs().await?;
     for mut run in runs {
         if let Some(filter) = run_filter {
-            if filter != "all"
-                && run.id != filter
-                && !run.id.starts_with(filter)
-            {
+            if filter != "all" && run.id != filter && !run.id.starts_with(filter) {
                 continue;
             }
         }
@@ -337,10 +334,7 @@ mod tests {
     #[tokio::test]
     async fn test_scrub_rewrites_blobs() {
         let store = Arc::new(SqliteStore::open_memory().unwrap());
-        let run = crate::core::run::Run::new(
-            vec!["echo".into(), "test".into()],
-            "/tmp".into(),
-        );
+        let run = crate::core::run::Run::new(vec!["echo".into(), "test".into()], "/tmp".into());
         store.insert_run(&run).await.unwrap();
 
         let secret_content = b"output from command:AKIAIOSFODNN7EXAMPLE";
@@ -356,7 +350,11 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(report.blobs_rewritten >= 1, "expected blobs_rewritten >= 1, got {}", report.blobs_rewritten);
+        assert!(
+            report.blobs_rewritten >= 1,
+            "expected blobs_rewritten >= 1, got {}",
+            report.blobs_rewritten
+        );
 
         let events = store.get_events(&run.id).await.unwrap();
         let new_key = events[0].output_blob.as_ref().unwrap();
@@ -367,7 +365,10 @@ mod tests {
             .await
             .unwrap();
         let text = String::from_utf8_lossy(&new_blob);
-        assert!(!text.contains("AKIAIOSFODNN7"), "secret must not appear in scrubbed blob: {text}");
+        assert!(
+            !text.contains("AKIAIOSFODNN7"),
+            "secret must not appear in scrubbed blob: {text}"
+        );
         assert!(text.contains("[REDACTED]"));
     }
 
@@ -389,11 +390,7 @@ mod tests {
 
         // Blob file and metadata exist
         assert!(blob_dir.join(&blob.key).exists());
-        assert!(store
-            .all_blob_keys()
-            .await
-            .unwrap()
-            .contains(&blob.key));
+        assert!(store.all_blob_keys().await.unwrap().contains(&blob.key));
 
         // Delete run → event reference gone; blob remains until GC
         assert!(store.delete_run(&run.id).await.unwrap());
@@ -405,11 +402,7 @@ mod tests {
         assert_eq!(files, 1, "should delete orphan blob file");
         assert_eq!(meta, 1, "should prune orphan blobs-table row");
         assert!(!blob_dir.join(&blob.key).exists());
-        assert!(!store
-            .all_blob_keys()
-            .await
-            .unwrap()
-            .contains(&blob.key));
+        assert!(!store.all_blob_keys().await.unwrap().contains(&blob.key));
     }
 
     #[tokio::test]

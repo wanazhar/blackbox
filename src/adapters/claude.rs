@@ -1,7 +1,5 @@
 use crate::adapters::harness::HarnessAdapter;
-use crate::adapters::parse::{
-    parse_claude_json_line, parse_plaintext,
-};
+use crate::adapters::parse::{parse_claude_json_line, parse_plaintext};
 use crate::adapters::{LaunchContext, PreparedLaunch, RunContext};
 use crate::core::event::TraceEvent;
 
@@ -85,11 +83,7 @@ impl HarnessAdapter for ClaudeAdapter {
     fn discover_session_id(&self, events: &[TraceEvent]) -> Option<String> {
         for ev in events.iter().rev() {
             if ev.kind == "harness.session" {
-                if let Some(sid) = ev
-                    .metadata
-                    .get("session_id")
-                    .and_then(|v| v.as_str())
-                {
+                if let Some(sid) = ev.metadata.get("session_id").and_then(|v| v.as_str()) {
                     return Some(sid.to_string());
                 }
             }
@@ -169,10 +163,7 @@ mod tests {
         let prepared = a
             .prepare_launch(&["claude".into(), "-p".into(), "hi".into()], &ctx)
             .unwrap();
-        assert!(prepared
-            .command
-            .iter()
-            .any(|c| c == "stream-json"));
+        assert!(prepared.command.iter().any(|c| c == "stream-json"));
     }
 
     #[test]

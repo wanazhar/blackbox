@@ -20,11 +20,7 @@ impl MockReplay {
         let mut map: HashMap<String, &TraceEvent> = HashMap::new();
         for ev in events {
             if ev.kind == "tool.result" {
-                if let Some(id) = ev
-                    .metadata
-                    .get("tool_use_id")
-                    .and_then(|v| v.as_str())
-                {
+                if let Some(id) = ev.metadata.get("tool_use_id").and_then(|v| v.as_str()) {
                     // Prefer richer results if duplicates exist
                     let replace = match map.get(id) {
                         None => true,
@@ -44,7 +40,8 @@ impl MockReplay {
         let mut seen = HashSet::new();
         let mut out = Vec::new();
         for ev in events {
-            if ev.kind != "tool.call" && !(ev.source == EventSource::Tool && ev.kind != "tool.result")
+            if ev.kind != "tool.call"
+                && !(ev.source == EventSource::Tool && ev.kind != "tool.result")
             {
                 continue;
             }
@@ -184,10 +181,7 @@ impl ReplayEngine for MockReplay {
                 .get("tool_name")
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown");
-            let tool_use_id = event
-                .metadata
-                .get("tool_use_id")
-                .and_then(|v| v.as_str());
+            let tool_use_id = event.metadata.get("tool_use_id").and_then(|v| v.as_str());
             let input = Self::input_preview(event);
             let from_native = event.metadata.contains_key("native_log");
 
@@ -204,17 +198,15 @@ impl ReplayEngine for MockReplay {
                     }
                 });
 
-            let output = result_ev
-                .map(Self::output_preview)
-                .unwrap_or_else(|| {
-                    if event.metadata.contains_key("output")
-                        || event.metadata.contains_key("output_full")
-                    {
-                        Self::output_preview(event)
-                    } else {
-                        "(no recorded result)".to_string()
-                    }
-                });
+            let output = result_ev.map(Self::output_preview).unwrap_or_else(|| {
+                if event.metadata.contains_key("output")
+                    || event.metadata.contains_key("output_full")
+                {
+                    Self::output_preview(event)
+                } else {
+                    "(no recorded result)".to_string()
+                }
+            });
             if !output.starts_with("(no recorded") {
                 with_output += 1;
             }
@@ -284,8 +276,7 @@ mod tests {
         ev.status = EventStatus::Success;
         ev.metadata
             .insert("tool_use_id".into(), serde_json::json!(id));
-        ev.metadata
-            .insert("output".into(), serde_json::json!(body));
+        ev.metadata.insert("output".into(), serde_json::json!(body));
         ev.metadata
             .insert("output_full".into(), serde_json::json!(body));
         ev

@@ -1,7 +1,7 @@
-pub mod pty;
-pub mod process;
 pub mod filesystem;
 pub mod git;
+pub mod process;
+pub mod pty;
 
 use crate::core::event::TraceEvent;
 use crate::core::run::Run;
@@ -18,7 +18,8 @@ pub trait CaptureLayer: Send + 'static {
     /// Start capturing events from the given run.
     ///
     /// Returns a receiver that yields events as they occur.
-    async fn start(&mut self, run: &Run) -> anyhow::Result<tokio::sync::mpsc::Receiver<TraceEvent>>;
+    async fn start(&mut self, run: &Run)
+        -> anyhow::Result<tokio::sync::mpsc::Receiver<TraceEvent>>;
 
     /// Stop capturing and clean up resources.
     async fn stop(&mut self) -> anyhow::Result<()>;

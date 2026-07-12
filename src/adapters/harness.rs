@@ -22,11 +22,8 @@ pub trait HarnessAdapter: Send + Sync {
     fn detect(&self, command: &[String]) -> bool;
 
     /// Prepare the launch configuration.
-    fn prepare_launch(
-        &self,
-        command: &[String],
-        context: &LaunchContext,
-    ) -> Option<PreparedLaunch>;
+    fn prepare_launch(&self, command: &[String], context: &LaunchContext)
+        -> Option<PreparedLaunch>;
 
     /// Parse a terminal output chunk (or complete line) into semantic events.
     ///

@@ -31,8 +31,7 @@ impl ProcessCapture {
 
     /// Emit a process.spawned event if the channel is still open.
     pub async fn emit_spawned(&self) {
-        if let (Some(tx), Some(run_id), Some(pid)) =
-            (&self.event_tx, &self.run_id, self.child_pid)
+        if let (Some(tx), Some(run_id), Some(pid)) = (&self.event_tx, &self.run_id, self.child_pid)
         {
             let mut ev = TraceEvent::new(run_id, EventSource::Process, "process.spawned");
             ev.status = EventStatus::Success;
@@ -58,8 +57,7 @@ impl CaptureLayer for ProcessCapture {
     async fn start(&mut self, run: &Run) -> anyhow::Result<mpsc::Receiver<TraceEvent>> {
         let (tx, rx) = mpsc::channel(1024);
 
-        let mut ev =
-            TraceEvent::new(&run.id, EventSource::Process, "process.observer.started");
+        let mut ev = TraceEvent::new(&run.id, EventSource::Process, "process.observer.started");
         ev.status = EventStatus::Success;
         ev.metadata.insert(
             "command".to_string(),

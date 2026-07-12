@@ -53,9 +53,10 @@ pub async fn search_store(
             let Some(ev) = store.get_event(&event_id).await? else {
                 continue;
             };
-            let run = store.get_run(&run_id).await?.unwrap_or_else(|| {
-                Run::new(vec!["?".into()], ".".into())
-            });
+            let run = store
+                .get_run(&run_id)
+                .await?
+                .unwrap_or_else(|| Run::new(vec!["?".into()], ".".into()));
             // Fix run id if synthetic
             let mut run = run;
             if run.command == ["?"] {
@@ -97,9 +98,7 @@ fn rank_to_score(rank: f64) -> u32 {
 }
 
 fn run_label(run: &Run) -> String {
-    run.name
-        .clone()
-        .unwrap_or_else(|| run.command.join(" "))
+    run.name.clone().unwrap_or_else(|| run.command.join(" "))
 }
 
 fn score_run(run: &Run, terms: &[&str]) -> Option<SearchHit> {
@@ -142,10 +141,7 @@ fn score_event(
     terms: &[&str],
     backend: &'static str,
 ) -> Option<SearchHit> {
-    let mut hay = format!(
-        "{} {} {:?} {:?}",
-        ev.kind, ev.id, ev.source, ev.status
-    );
+    let mut hay = format!("{} {} {:?} {:?}", ev.kind, ev.id, ev.source, ev.status);
     for (k, v) in &ev.metadata {
         hay.push(' ');
         hay.push_str(k);
@@ -226,16 +222,17 @@ mod tests {
     #[tokio::test]
     async fn finds_tool_by_name_fts() {
         let store = Arc::new(SqliteStore::open_memory().unwrap());
-        let run = Run::new(vec!["claude".into(), "-p".into(), "x".into()], "/tmp".into());
+        let run = Run::new(
+            vec!["claude".into(), "-p".into(), "x".into()],
+            "/tmp".into(),
+        );
         store.insert_run(&run).await.unwrap();
         let mut ev = TraceEvent::new(&run.id, EventSource::Tool, "tool.call");
         ev.status = EventStatus::Running;
         ev.metadata
             .insert("tool_name".into(), serde_json::json!("Bash"));
-        ev.metadata.insert(
-            "input".into(),
-            serde_json::json!({"command": "ls src"}),
-        );
+        ev.metadata
+            .insert("input".into(), serde_json::json!({"command": "ls src"}));
         store.insert_event(&ev).await.unwrap();
 
         let hits = search_store(store.as_ref(), "bash", 10, 20).await.unwrap();

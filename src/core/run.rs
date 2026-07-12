@@ -169,7 +169,10 @@ mod tests {
 
     #[test]
     fn serde_round_trip() {
-        let mut r = Run::new(vec!["bash".into(), "-c".into(), "ls".into()], "/home".into());
+        let mut r = Run::new(
+            vec!["bash".into(), "-c".into(), "ls".into()],
+            "/home".into(),
+        );
         r.status = RunStatus::Succeeded;
         r.exit_code = Some(0);
         r.tags = vec!["test".into(), "demo".into()];

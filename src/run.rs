@@ -271,9 +271,7 @@ impl RunSupervisor {
         let (rows, cols) = match term_size::dimensions() {
             Some((w, h)) => (h as u16, w as u16),
             None => {
-                tracing::info!(
-                    "terminal size unavailable; defaulting to 24x80 (L-25)"
-                );
+                tracing::info!("terminal size unavailable; defaulting to 24x80 (L-25)");
                 (24, 80)
             }
         };
@@ -484,7 +482,11 @@ impl RunSupervisor {
                                 if let Err(e) = m.resize(size) {
                                     tracing::debug!(error = %e, "PTY resize failed");
                                 } else {
-                                    tracing::debug!(rows = size.rows, cols = size.cols, "PTY resized");
+                                    tracing::debug!(
+                                        rows = size.rows,
+                                        cols = size.cols,
+                                        "PTY resized"
+                                    );
                                 }
                             }
                             Err(e) => tracing::debug!(error = %e, "PTY master lock poisoned"),
@@ -517,8 +519,7 @@ impl RunSupervisor {
             let mut event_count: u64 = 0;
             let mut line_buf = String::new();
             let mut total_redactions: u64 = 0;
-            let mut coalescer =
-                TerminalCoalescer::new(CoalescePolicy::default(), insecure_raw);
+            let mut coalescer = TerminalCoalescer::new(CoalescePolicy::default(), insecure_raw);
 
             // Persist one coalesced terminal.output event
             async fn emit_terminal(
@@ -545,10 +546,8 @@ impl RunSupervisor {
                 ev.metadata
                     .insert("preview".to_string(), serde_json::json!(seg.preview));
                 if seg.redactions > 0 {
-                    ev.metadata.insert(
-                        "redactions".to_string(),
-                        serde_json::json!(seg.redactions),
-                    );
+                    ev.metadata
+                        .insert("redactions".to_string(), serde_json::json!(seg.redactions));
                 }
                 writer.write(ev).await?;
                 Ok(())
@@ -622,7 +621,9 @@ impl RunSupervisor {
                                 scanner_term.redact_json(&mut meta_val);
                                 match serde_json::from_value(meta_val) {
                                     Ok(m) => parsed.metadata = m,
-                                    Err(e) => tracing::warn!(error = %e, "metadata deserialization failed after redaction; keeping original"),
+                                    Err(e) => {
+                                        tracing::warn!(error = %e, "metadata deserialization failed after redaction; keeping original")
+                                    }
                                 }
                             }
                             if let Err(e) = event_writer.write(parsed).await {
@@ -646,7 +647,9 @@ impl RunSupervisor {
                             scanner_term.redact_json(&mut meta_val);
                             match serde_json::from_value(meta_val) {
                                 Ok(m) => parsed.metadata = m,
-                                Err(e) => tracing::warn!(error = %e, "metadata deserialization failed after redaction; keeping original"),
+                                Err(e) => {
+                                    tracing::warn!(error = %e, "metadata deserialization failed after redaction; keeping original")
+                                }
                             }
                         }
                         if let Err(e) = event_writer.write(parsed).await {
@@ -767,7 +770,9 @@ impl RunSupervisor {
                     (0, 0)
                 }
                 Err(_elapsed) => {
-                    tracing::warn!("cleanup timeout: output collector did not finish after 5s, zeroing counts");
+                    tracing::warn!(
+                        "cleanup timeout: output collector did not finish after 5s, zeroing counts"
+                    );
                     (0, 0)
                 }
             };

@@ -9,21 +9,21 @@
 
 use std::sync::Arc;
 
+use blackbox::analysis::classifier::SideEffectClassifier;
 use blackbox::analysis::correlator::EventCorrelator;
 use blackbox::analysis::error_detector::ErrorDetector;
-use blackbox::analysis::classifier::SideEffectClassifier;
 use blackbox::analysis::AnalysisPass;
-use blackbox::capture::pty::PtyCapture;
-use blackbox::capture::process::ProcessCapture;
 use blackbox::capture::filesystem::FilesystemCapture;
-use blackbox::capture::{CaptureLayer, merge_layers};
+use blackbox::capture::process::ProcessCapture;
+use blackbox::capture::pty::PtyCapture;
+use blackbox::capture::{merge_layers, CaptureLayer};
 use blackbox::core::checkpoint::Checkpoint;
 use blackbox::core::event::{Confidence, EventSource, EventStatus, SideEffect, TraceEvent};
 use blackbox::core::run::{Run, RunStatus};
-use blackbox::replay::{ReplayEngine, ReplayOutcome, ReplayPolicy, events_from};
-use blackbox::replay::sandbox::SandboxReplay;
 use blackbox::redaction::scanner::SecretScanner;
 use blackbox::redaction::RedactionConfig;
+use blackbox::replay::sandbox::SandboxReplay;
+use blackbox::replay::{events_from, ReplayEngine, ReplayOutcome, ReplayPolicy};
 use blackbox::search::search_store;
 use blackbox::storage::sqlite::SqliteStore;
 use blackbox::storage::TraceStore;
@@ -98,7 +98,10 @@ fn test_run_supervisor_redacts() {
 
     // Verify the secret is NOT in the stored command
     assert!(
-        !stored_run.command.join(" ").contains("sk-test1234567890abcdef"),
+        !stored_run
+            .command
+            .join(" ")
+            .contains("sk-test1234567890abcdef"),
         "stored command must not contain the raw secret"
     );
 
@@ -164,7 +167,10 @@ async fn test_capture_lifecycle() {
     let mut proc = ProcessCapture::new();
     assert_eq!(proc.name(), "process");
     let mut proc_rx = proc.start(&run).await.unwrap();
-    let ev = proc_rx.recv().await.expect("should get process.observer.started");
+    let ev = proc_rx
+        .recv()
+        .await
+        .expect("should get process.observer.started");
     assert_eq!(ev.kind, "process.observer.started");
     proc.stop().await.unwrap();
 
@@ -173,10 +179,7 @@ async fn test_capture_lifecycle() {
     assert_eq!(fs.name(), "filesystem");
     let mut fs_rx = fs.start(&run).await.unwrap();
     // Should emit a filesystem.snapshot event
-    let ev = fs_rx
-        .recv()
-        .await
-        .expect("should get filesystem.snapshot");
+    let ev = fs_rx.recv().await.expect("should get filesystem.snapshot");
     assert_eq!(ev.kind, "filesystem.observer.started");
     assert_eq!(ev.status, EventStatus::Success);
     fs.stop().await.unwrap();
@@ -234,8 +237,7 @@ async fn test_replay_sandbox() {
     let outcome = engine.start(&run, &[ev_write], None).await.unwrap();
     match outcome {
         ReplayOutcome::Sandboxed {
-            executed,
-            skipped, ..
+            executed, skipped, ..
         } => {
             assert_eq!(executed, 0, "ReadOnly policy should block LocalWrite");
             assert_eq!(skipped, 1);
@@ -248,10 +250,9 @@ async fn test_replay_sandbox() {
     let run2 = make_run(vec!["echo".into(), "live".into()], "/tmp");
     let mut ev_ext = make_event(&run2.id, EventSource::Process, "process.command");
     ev_ext.side_effect = SideEffect::ExternalWrite;
-    ev_ext.metadata.insert(
-        "command".into(),
-        serde_json::json!(["echo", "allowed"]),
-    );
+    ev_ext
+        .metadata
+        .insert("command".into(), serde_json::json!(["echo", "allowed"]));
 
     let ws2 = temp_dir();
     let mut engine2 = SandboxReplay::new()
@@ -261,10 +262,7 @@ async fn test_replay_sandbox() {
     let outcome2 = engine2.start(&run2, &[ev_ext], None).await.unwrap();
     match outcome2 {
         ReplayOutcome::Sandboxed { executed, .. } => {
-            assert_eq!(
-                executed, 1,
-                "Live policy should allow ExternalWrite events"
-            );
+            assert_eq!(executed, 1, "Live policy should allow ExternalWrite events");
         }
         other => panic!("expected Sandboxed, got {:?}", other),
     }
@@ -303,10 +301,7 @@ async fn test_replay_sandbox() {
         ws3.join("a.txt").exists(),
         "a.txt should be seeded into workspace"
     );
-    assert!(
-        ws3.join("sub/b.txt").exists(),
-        "sub/b.txt should be seeded"
-    );
+    assert!(ws3.join("sub/b.txt").exists(), "sub/b.txt should be seeded");
     // .git should be skipped
     assert!(
         !ws3.join(".git").exists(),
@@ -365,14 +360,14 @@ async fn test_storage_edge_cases() {
     empty_run.exit_code = Some(0);
     store.insert_run(&empty_run).await.unwrap();
     let loaded = store.get_run(&empty_run.id).await.unwrap().unwrap();
-    assert!(loaded.command.is_empty(), "empty command should be preserved");
+    assert!(
+        loaded.command.is_empty(),
+        "empty command should be preserved"
+    );
     assert_eq!(loaded.status, RunStatus::Succeeded);
 
     // ── Loading blob with invalid key returns error ───────────
-    let fake_ref = blackbox::core::blob::BlobReference::new(
-        "a".repeat(64),
-        100,
-    );
+    let fake_ref = blackbox::core::blob::BlobReference::new("a".repeat(64), 100);
     let result = store.load_blob(&fake_ref).await;
     assert!(result.is_err(), "loading non-existent blob should fail");
 
@@ -405,7 +400,10 @@ async fn test_storage_edge_cases() {
 
     // ── List runs on mostly-empty store ────────────────────────
     let runs = store.list_runs().await.unwrap();
-    assert!(!runs.is_empty(), "should have at least the runs we inserted");
+    assert!(
+        !runs.is_empty(),
+        "should have at least the runs we inserted"
+    );
 
     // ── Store and retrieve checkpoint ──────────────────────────
     let run2 = Run::new(vec!["true".into()], "/tmp".to_string());
@@ -441,7 +439,10 @@ async fn test_terminal_recorder() {
     assert_eq!(recorder.segment_count(), 1);
     assert_eq!(recorder.total_bytes(), 11);
 
-    recorder.record_output(b"\x1b[32mgreen\x1b[0m").await.unwrap();
+    recorder
+        .record_output(b"\x1b[32mgreen\x1b[0m")
+        .await
+        .unwrap();
     assert_eq!(recorder.segment_count(), 2);
     assert_eq!(recorder.total_bytes(), 11 + 14);
 
@@ -526,7 +527,10 @@ async fn test_analyzer() {
 
     // ── SideEffectClassifier ───────────────────────────────────
     assert_eq!(classifier.classify_command("ls -la"), SideEffect::Read);
-    assert_eq!(classifier.classify_command("cat file.txt"), SideEffect::Read);
+    assert_eq!(
+        classifier.classify_command("cat file.txt"),
+        SideEffect::Read
+    );
     assert_eq!(
         classifier.classify_command("git push origin main"),
         SideEffect::ExternalWrite
@@ -545,20 +549,14 @@ async fn test_analyzer() {
 
     let events = vec![ev_ok, ev_err.clone()];
     let derived = detector.analyze(&events).await.unwrap();
-    assert!(
-        !derived.is_empty(),
-        "analyzer should detect the rust error"
-    );
+    assert!(!derived.is_empty(), "analyzer should detect the rust error");
     let err_ev = &derived[0];
     assert_eq!(err_ev.kind, "analysis.error");
     assert_eq!(
         err_ev.metadata.get("error_type").unwrap().as_str().unwrap(),
         "rustc[E0432]"
     );
-    assert_eq!(
-        err_ev.parent_event_id.as_deref(),
-        Some(ev_err.id.as_str())
-    );
+    assert_eq!(err_ev.parent_event_id.as_deref(), Some(ev_err.id.as_str()));
 
     // ── Correlator: analyze pass ───────────────────────────────
     let run_id2 = "correlator-test-run";
@@ -583,7 +581,10 @@ async fn test_analyzer() {
 
     // ── Pipeline: empty input ──────────────────────────────────
     let empty_derived = detector.analyze(&[]).await.unwrap();
-    assert!(empty_derived.is_empty(), "empty input should produce no derived events");
+    assert!(
+        empty_derived.is_empty(),
+        "empty input should produce no derived events"
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -610,7 +611,10 @@ fn test_correlator() {
     ev_b.started_at = ev_a.started_at + chrono::Duration::milliseconds(50);
 
     let result = correlator.find_parent(&ev_b, &[ev_a.clone(), ev_b.clone()]);
-    assert!(result.is_some(), "should find parent for same-source close events");
+    assert!(
+        result.is_some(),
+        "should find parent for same-source close events"
+    );
     let (parent_id, _confidence) = result.unwrap();
     assert_eq!(parent_id, ev_a.id);
     // Same source within 500ms should produce a non-Unknown confidence
@@ -630,7 +634,10 @@ fn test_correlator() {
     ev_fs.started_at = ev_proc.started_at + chrono::Duration::milliseconds(200);
 
     let result = correlator.find_parent(&ev_fs, &[ev_proc.clone(), ev_fs.clone()]);
-    assert!(result.is_some(), "should find parent for cross-layer events");
+    assert!(
+        result.is_some(),
+        "should find parent for cross-layer events"
+    );
     let (parent_id, confidence) = result.unwrap();
     assert_eq!(parent_id, ev_proc.id);
     // Process → Filesystem within 2s should produce a non-Unknown confidence
@@ -673,7 +680,10 @@ fn test_correlator() {
     ev_proc2.started_at = ev_term.started_at + chrono::Duration::milliseconds(300);
 
     let result = correlator.find_parent(&ev_proc2, &[ev_term, ev_proc2.clone()]);
-    assert!(result.is_some(), "Terminal→Process within 2s should correlate");
+    assert!(
+        result.is_some(),
+        "Terminal→Process within 2s should correlate"
+    );
     let (_, confidence) = result.unwrap();
     assert!(
         confidence >= Confidence::StronglyCorrelated,
@@ -738,11 +748,7 @@ fn test_error_detector() {
     for js_err in &js_errors {
         let ev = make_error_event("r1", js_err);
         let errors = det.extract_errors(&ev);
-        assert!(
-            !errors.is_empty(),
-            "should detect JS error: {}",
-            js_err
-        );
+        assert!(!errors.is_empty(), "should detect JS error: {}", js_err);
         assert_eq!(errors[0].error_type, "javascript");
     }
 
@@ -822,10 +828,7 @@ fn test_error_detector() {
         serde_json::Value::String("error[E0001]: test error\n --> test.rs:1:1".to_string()),
     );
     let errors = det.extract_errors(&ev_full);
-    assert!(
-        !errors.is_empty(),
-        "should use output_full as fallback"
-    );
+    assert!(!errors.is_empty(), "should use output_full as fallback");
     assert_eq!(errors[0].error_type, "rustc[E0001]");
 }
 
@@ -922,9 +925,7 @@ async fn test_search() {
     let hits_exact = search_store(store.as_ref(), "build-project", 10, 20)
         .await
         .unwrap();
-    let hits_partial = search_store(store.as_ref(), "build", 10, 20)
-        .await
-        .unwrap();
+    let hits_partial = search_store(store.as_ref(), "build", 10, 20).await.unwrap();
     if !hits_exact.is_empty() && !hits_partial.is_empty() {
         let exact_score = hits_exact[0].score;
         let partial_score = hits_partial[0].score;
@@ -938,21 +939,14 @@ async fn test_search() {
     }
 
     // ── Limit respects max_runs ────────────────────────────────
-    let hits = search_store(store.as_ref(), "test", 1, 20)
-        .await
-        .unwrap();
+    let hits = search_store(store.as_ref(), "test", 1, 20).await.unwrap();
     // With max_runs=1, only one run's events should be searched
     let unique_runs: std::collections::HashSet<&str> =
         hits.iter().map(|h| h.run_id.as_str()).collect();
-    assert!(
-        unique_runs.len() <= 1,
-        "max_runs=1 should limit to one run"
-    );
+    assert!(unique_runs.len() <= 1, "max_runs=1 should limit to one run");
 
     // ── Truncation of long snippets ────────────────────────────
-    let hits = search_store(store.as_ref(), "error", 10, 20)
-        .await
-        .unwrap();
+    let hits = search_store(store.as_ref(), "error", 10, 20).await.unwrap();
     for hit in &hits {
         assert!(
             hit.snippet.len() <= 200,
@@ -971,22 +965,17 @@ async fn test_search() {
     let hits = search_store(store2.as_ref(), "fallback-test", 10, 20)
         .await
         .unwrap();
-    assert!(
-        !hits.is_empty(),
-        "should find run via scan fallback"
-    );
+    assert!(!hits.is_empty(), "should find run via scan fallback");
     assert_eq!(hits[0].run_id, run3.id);
 
     // ── Backend field indicates source ──────────────────────────
     let hits = search_store(store.as_ref(), "WriteFile", 10, 20)
         .await
         .unwrap();
+    assert!(!hits.is_empty(), "should find WriteFile event");
     assert!(
-        !hits.is_empty(),
-        "should find WriteFile event"
-    );
-    assert!(
-        hits.iter().any(|h| h.backend == "fts5" || h.backend == "scan"),
+        hits.iter()
+            .any(|h| h.backend == "fts5" || h.backend == "scan"),
         "backend should be fts5 or scan, got {:?}",
         hits.iter().map(|h| h.backend).collect::<Vec<_>>()
     );

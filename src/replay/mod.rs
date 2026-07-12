@@ -1,7 +1,7 @@
-pub mod timeline;
+pub mod fork;
 pub mod mock;
 pub mod sandbox;
-pub mod fork;
+pub mod timeline;
 
 use crate::core::event::TraceEvent;
 use crate::core::run::Run;
@@ -51,7 +51,12 @@ impl std::fmt::Display for ReplayOutcome {
             ReplayOutcome::Forked {
                 new_run_id,
                 summary,
-            } => write!(f, "forked run {} — {}", &new_run_id[..8.min(new_run_id.len())], summary),
+            } => write!(
+                f,
+                "forked run {} — {}",
+                &new_run_id[..8.min(new_run_id.len())],
+                summary
+            ),
         }
     }
 }
@@ -89,12 +94,13 @@ pub trait ReplayEngine: Send + 'static {
 }
 
 /// Slice events from an optional starting event id.
-pub fn events_from<'a>(
-    events: &'a [TraceEvent],
-    from_event_id: Option<&str>,
-) -> &'a [TraceEvent] {
+pub fn events_from<'a>(events: &'a [TraceEvent], from_event_id: Option<&str>) -> &'a [TraceEvent] {
     let start_idx = from_event_id
-        .and_then(|id| events.iter().position(|e| e.id == id || e.id.starts_with(id)))
+        .and_then(|id| {
+            events
+                .iter()
+                .position(|e| e.id == id || e.id.starts_with(id))
+        })
         .unwrap_or(0);
     &events[start_idx..]
 }

@@ -1,5 +1,5 @@
-use clap::Parser;
 use blackbox::cli::Cli;
+use clap::Parser;
 
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()

@@ -248,7 +248,12 @@ fn render_layout(frame: &mut Frame, app: &App) {
                 Style::default()
             };
             Line::from(Span::styled(
-                format!("{} {}  {}", status, run.id.get(..8).unwrap_or(&run.id), name),
+                format!(
+                    "{} {}  {}",
+                    status,
+                    run.id.get(..8).unwrap_or(&run.id),
+                    name
+                ),
                 style,
             ))
         })
@@ -279,12 +284,10 @@ fn render_layout(frame: &mut Frame, app: &App) {
             } else {
                 Style::default()
             };
-            Line::from(vec![
-                Span::styled(
-                    format!("{}  {}  {:?}", offset, ev.kind, ev.status),
-                    style,
-                ),
-            ])
+            Line::from(vec![Span::styled(
+                format!("{}  {}  {:?}", offset, ev.kind, ev.status),
+                style,
+            )])
         })
         .collect();
     let timeline_para = Paragraph::new(timeline_items).block(timeline_block);
@@ -306,11 +309,7 @@ fn render_layout(frame: &mut Frame, app: &App) {
                 .metadata
                 .get("preview")
                 .and_then(|v| v.as_str())
-                .or_else(|| {
-                    ev.metadata
-                        .get("tool_name")
-                        .and_then(|v| v.as_str())
-                })
+                .or_else(|| ev.metadata.get("tool_name").and_then(|v| v.as_str()))
                 .unwrap_or("");
             // M-29: Truncate long metadata previews to avoid rendering huge text blocks.
             const MAX_PREVIEW: usize = 200;

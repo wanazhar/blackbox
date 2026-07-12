@@ -1,12 +1,11 @@
 use crate::core::event::{EventStatus, TraceEvent};
 use crate::core::run::Run;
-use crate::replay::{ReplayEngine, ReplayOutcome};
+use crate::replay::{events_from, ReplayEngine, ReplayOutcome};
 
 /// Timeline replay — no commands are executed.
 ///
-/// The user watches the original run unfold from recorded events.
-/// This is purely a visualization mode: events are displayed in
-/// chronological order with their original timing.
+/// Prints a human-readable chronological timeline of the original run
+/// to stdout. Purely observational.
 pub struct TimelineReplay;
 
 #[async_trait::async_trait]
@@ -17,25 +16,62 @@ impl ReplayEngine for TimelineReplay {
 
     async fn start(
         &mut self,
-        _run: &Run,
+        run: &Run,
         events: &[TraceEvent],
         from_event_id: Option<&str>,
     ) -> anyhow::Result<ReplayOutcome> {
-        let start_idx = from_event_id
-            .and_then(|id| events.iter().position(|e| e.id == id))
-            .unwrap_or(0);
+        let slice = events_from(events, from_event_id);
 
-        for event in &events[start_idx..] {
+        println!("═══ Timeline replay ═══");
+        println!(
+            "Run {}  cmd={:?}  status={:?}",
+            &run.id[..8.min(run.id.len())],
+            run.command,
+            run.status
+        );
+        println!(
+            "{:<6} {:<12} {:<24} {:<10} {}",
+            "SEQ", "SOURCE", "KIND", "STATUS", "TIME"
+        );
+        println!("{}", "─".repeat(80));
+
+        let mut errors = 0u64;
+        for event in slice {
+            let status = match &event.status {
+                EventStatus::Success => "ok",
+                EventStatus::Error => {
+                    errors += 1;
+                    "ERR"
+                }
+                EventStatus::Running => "run",
+                EventStatus::Pending => "pend",
+                EventStatus::Cancelled => "canc",
+                EventStatus::Unknown => "?",
+            };
+            println!(
+                "{:<6} {:<12} {:<24} {:<10} {}",
+                event.sequence,
+                format!("{:?}", event.source),
+                event.kind,
+                status,
+                event.started_at.format("%H:%M:%S%.3f"),
+            );
             tracing::info!(
                 seq = event.sequence,
                 kind = %event.kind,
                 source = ?event.source,
                 "timeline event"
             );
-            if event.status == EventStatus::Error {
-                tracing::warn!("event errored: {}", event.id);
-            }
         }
-        Ok(ReplayOutcome::Completed)
+
+        let summary = format!(
+            "{} events ({} errors) from seq {}",
+            slice.len(),
+            errors,
+            slice.first().map(|e| e.sequence).unwrap_or(0)
+        );
+        println!("─── {} ───", summary);
+
+        Ok(ReplayOutcome::Completed { summary })
     }
 }

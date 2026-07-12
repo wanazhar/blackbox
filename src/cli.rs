@@ -424,27 +424,34 @@ async fn cmd_replay(args: &ReplayArgs) -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("run not found: {}", run_id))?;
     let events = store.get_events(&run_id).await?;
 
+    // --live means unrestricted sandbox policy
     let mut engine: Box<dyn ReplayEngine> = if args.mock_tools {
         Box::new(MockReplay)
-    } else if args.sandbox {
-        Box::new(SandboxReplay::new())
+    } else if args.sandbox || args.live {
+        let policy = if args.live {
+            crate::replay::ReplayPolicy::Live
+        } else {
+            crate::replay::ReplayPolicy::Sandbox
+        };
+        Box::new(SandboxReplay::new().with_policy(policy))
     } else {
         Box::new(TimelineReplay)
     };
 
     tracing::info!(engine = engine.name(), "starting replay");
     let outcome = engine.start(&run, &events, args.from.as_deref()).await?;
-    println!("Replay finished: {:?}", outcome);
+    println!("Replay finished: {}", outcome);
     Ok(())
 }
 
 async fn cmd_fork(args: &ForkArgs) -> anyhow::Result<()> {
+    use std::sync::Arc;
     use crate::storage::sqlite::SqliteStore;
     use crate::storage::TraceStore;
     use crate::replay::ReplayEngine;
     use crate::replay::fork::ForkManager;
 
-    let store = SqliteStore::open("blackbox.db")?;
+    let store = Arc::new(SqliteStore::open("blackbox.db")?);
 
     let run_id = if args.run_id == "latest" {
         let runs = store.list_runs().await?;
@@ -461,10 +468,12 @@ async fn cmd_fork(args: &ForkArgs) -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("run not found: {}", run_id))?;
     let events = store.get_events(&run_id).await?;
 
-    let mut fork = ForkManager;
+    let mut fork = ForkManager::new()
+        .with_store(store.clone())
+        .with_name(args.name.clone());
     let from_event = args.at.as_deref();
     tracing::info!(from = ?from_event, name = ?args.name, "forking run");
     let outcome = fork.start(&run, &events, from_event).await?;
-    println!("Fork finished: {:?}", outcome);
+    println!("Fork finished: {}", outcome);
     Ok(())
 }

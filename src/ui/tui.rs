@@ -34,8 +34,8 @@ enum Focus {
 pub struct App {
     focus: Focus,
     runs: RunsView,
-    timeline: TimelineView,
-    event_detail: EventView,
+    _timeline: TimelineView,
+    _event_detail: EventView,
     events: Vec<TraceEvent>,
     selected_run_idx: usize,
     run_ids: Vec<String>,
@@ -56,8 +56,8 @@ impl App {
         Ok(Self {
             focus: Focus::Runs,
             runs: RunsView::new(runs),
-            timeline: TimelineView::new(events.clone()),
-            event_detail: EventView::new(),
+            _timeline: TimelineView::new(events.clone()),
+            _event_detail: EventView::new(),
             events,
             selected_run_idx: 0,
             run_ids,
@@ -240,9 +240,9 @@ fn render_layout(frame: &mut Frame, app: &App) {
                 "ID:     {}\nKind:   {}\nSource: {:?}\nStatus: {:?}\nStart:  {}",
                 ev.id,
                 ev.kind,
+                ev.source,
                 ev.status,
                 ev.started_at.format("%H:%M:%S.%3f"),
-                ev.id,
             )
         }
         None => "Select an event to inspect".to_string(),

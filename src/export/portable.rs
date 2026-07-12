@@ -158,9 +158,21 @@ pub async fn import_portable(
         if !run.tags.iter().any(|t| t == "imported") {
             run.tags.push("imported".into());
         }
+        // Build old→new ID map so parent_event_id references stay valid
+        let mut id_map = std::collections::HashMap::new();
         for ev in &mut events {
+            let old_ev_id = ev.id.clone();
             ev.id = uuid::Uuid::new_v4().to_string();
             ev.run_id = run.id.clone();
+            id_map.insert(old_ev_id, ev.id.clone());
+        }
+        // Remap parent_event_id to new IDs
+        for ev in &mut events {
+            if let Some(pid) = &ev.parent_event_id {
+                if let Some(new_pid) = id_map.get(pid) {
+                    ev.parent_event_id = Some(new_pid.clone());
+                }
+            }
         }
         remapped = true;
     } else {
@@ -444,5 +456,99 @@ mod tests {
         assert_eq!(result.events, 0);
         assert_eq!(result.blobs, 0);
         assert!(store.get_run(&result.run_id).await.unwrap().is_some());
+    }
+    #[tokio::test]
+    async fn import_new_ids_remaps_parent_event_id() {
+        let store = Arc::new(SqliteStore::open_memory().unwrap());
+
+        // Build a JSON archive with events that have parent_event_id references
+        let parent_id = "aaaaaaaa-1111-2222-3333-aaaaaaaaaaaa";
+        let child_id = "bbbbbbbb-4444-5555-6666-bbbbbbbbbbbb";
+        let json = serde_json::json!({
+            "version": 2,
+            "run": {
+                "id": "run-old001",
+                "name": null,
+                "command": ["echo", "hi"],
+                "cwd": "/tmp",
+                "project_dir": "/tmp",
+                "tags": [],
+                "notes": null,
+                "status": "Succeeded",
+                "started_at": "2026-01-01T00:00:00Z",
+                "ended_at": "2026-01-01T00:00:01Z",
+                "exit_code": 0,
+                "parent_run_id": null,
+                "next_sequence": 3
+            },
+            "events": [
+                {
+                    "id": parent_id,
+                    "run_id": "run-old001",
+                    "parent_event_id": null,
+                    "sequence": 1,
+                    "source": "Terminal",
+                    "kind": "terminal.output",
+                    "started_at": "2026-01-01T00:00:00Z",
+                    "ended_at": null,
+                    "duration_ms": null,
+                    "status": "Success",
+                    "side_effect": "None",
+                    "input_blob": null,
+                    "output_blob": null,
+                    "error_blob": null,
+                    "metadata": {}
+                },
+                {
+                    "id": child_id,
+                    "run_id": "run-old001",
+                    "parent_event_id": parent_id,
+                    "sequence": 2,
+                    "source": "Tool",
+                    "kind": "tool.call",
+                    "started_at": "2026-01-01T00:00:00Z",
+                    "ended_at": null,
+                    "duration_ms": null,
+                    "status": "Success",
+                    "side_effect": "None",
+                    "input_blob": null,
+                    "output_blob": null,
+                    "error_blob": null,
+                    "metadata": {}
+                }
+            ],
+            "blobs": {},
+            "exported_at": "2026-01-01T00:00:02Z"
+        });
+
+        let result = import_portable(store.as_ref(), &json.to_string(), true)
+            .await
+            .unwrap();
+        assert!(result.remapped);
+        assert_eq!(result.events, 2);
+
+        let imported = store.get_events(&result.run_id).await.unwrap();
+        assert_eq!(imported.len(), 2);
+
+        // Parent event should have no parent_event_id (it was null originally)
+        let parent = imported.iter().find(|e| e.parent_event_id.is_none()).unwrap();
+        // Child event should have parent_event_id pointing to the parent's new ID
+        let child = imported
+            .iter()
+            .find(|e| e.parent_event_id.is_some())
+            .unwrap();
+        assert_eq!(
+            child.parent_event_id.as_deref(),
+            Some(parent.id.as_str()),
+            "parent_event_id must be remapped to the new parent ID"
+        );
+        // Ensure the old IDs are gone
+        assert_ne!(parent.id, parent_id);
+        assert_ne!(child.id, child_id);
+        assert_ne!(
+            child.parent_event_id.as_deref(),
+            Some(parent_id),
+            "parent_event_id must NOT still reference the old ID"
+        );
     }
 }

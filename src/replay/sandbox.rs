@@ -410,7 +410,7 @@ fn is_readonly_command(cmd: &[String]) -> bool {
     matches!(
         first,
         "ls" | "cat" | "head" | "tail" | "pwd" | "echo" | "true" | "false" | "which" | "env"
-            | "printenv" | "wc" | "grep" | "rg" | "find" | "stat" | "file" | "sh"
+            | "printenv" | "wc" | "grep" | "rg" | "find" | "stat" | "file"
     ) && !joined.contains("rm ")
         && !joined.contains(">")
         && !joined.contains("curl")

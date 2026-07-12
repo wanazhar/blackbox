@@ -20,8 +20,14 @@ const SCHEMA_VERSION: i32 = 3;
 /// Metadata lives in SQLite; large payloads (blobs) are stored as
 /// files in a content-addressed directory (`blob_dir/<sha256>`).
 ///
-/// A single `Mutex<Connection>` serializes access and avoids
-/// SQLITE_BUSY races from concurrent open-per-call connections.
+/// A single `parking_lot::Mutex<Connection>` serializes access and
+/// avoids SQLITE_BUSY races from concurrent open-per-call connections.
+///
+/// **Known limitation:** The `Mutex` blocks the tokio worker thread
+/// for the duration of every synchronous SQLite call. This is acceptable
+/// for the current single-dashboard + CLI usage pattern but will need
+/// replacement with `tokio::sync::Mutex` (or an r2d2 pool) if the
+/// server faces concurrent write-heavy workloads.
 pub struct SqliteStore {
     conn: Mutex<Connection>,
     blob_dir: PathBuf,
@@ -204,23 +210,35 @@ impl SqliteStore {
         )
         .context("failed to create events_fts")?;
 
-        // Backfill from existing events
-        let mut stmt = conn
-            .prepare(
-                "SELECT id, run_id, parent_event_id, sequence, source, kind, started_at, ended_at,
-                        duration_ms, status, side_effect, input_blob, output_blob, error_blob, metadata
-                 FROM events",
-            )
-            .context("failed to prepare events backfill")?;
-        let events: Vec<TraceEvent> = stmt
-            .query_map([], event_from_row)?
-            .collect::<Result<Vec<_>, _>>()?;
-        drop(stmt);
-
-        for ev in &events {
-            fts_upsert(conn, ev)?;
+        // Backfill from existing events in batches to avoid loading
+        // the entire table into memory at once.
+        const BATCH: i64 = 500;
+        let mut offset: i64 = 0;
+        let mut total: usize = 0;
+        loop {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, run_id, parent_event_id, sequence, source, kind, started_at, ended_at,
+                            duration_ms, status, side_effect, input_blob, output_blob, error_blob, metadata
+                     FROM events
+                     ORDER BY rowid
+                     LIMIT ?1 OFFSET ?2",
+                )
+                .context("failed to prepare events backfill")?;
+            let batch: Vec<TraceEvent> = stmt
+                .query_map(params![BATCH, offset], event_from_row)?
+                .collect::<Result<Vec<_>, _>>()?;
+            drop(stmt);
+            if batch.is_empty() {
+                break;
+            }
+            for ev in &batch {
+                fts_upsert(conn, ev)?;
+            }
+            total += batch.len();
+            offset += BATCH;
         }
-        tracing::info!(count = events.len(), "FTS index backfilled");
+        tracing::info!(count = total, "FTS index backfilled");
         Ok(())
     }
 
@@ -228,20 +246,31 @@ impl SqliteStore {
     pub fn reindex_fts(&self) -> anyhow::Result<usize> {
         let conn = self.lock();
         conn.execute("DELETE FROM events_fts", [])?;
-        let mut stmt = conn.prepare(
-            "SELECT id, run_id, parent_event_id, sequence, source, kind, started_at, ended_at,
-                    duration_ms, status, side_effect, input_blob, output_blob, error_blob, metadata
-             FROM events",
-        )?;
-        let events: Vec<TraceEvent> = stmt
-            .query_map([], event_from_row)?
-            .collect::<Result<Vec<_>, _>>()?;
-        drop(stmt);
-        let n = events.len();
-        for ev in &events {
-            fts_upsert(&conn, ev)?;
+        const BATCH: i64 = 500;
+        let mut offset: i64 = 0;
+        let mut total: usize = 0;
+        loop {
+            let mut stmt = conn.prepare(
+                "SELECT id, run_id, parent_event_id, sequence, source, kind, started_at, ended_at,
+                        duration_ms, status, side_effect, input_blob, output_blob, error_blob, metadata
+                 FROM events
+                 ORDER BY rowid
+                 LIMIT ?1 OFFSET ?2",
+            )?;
+            let batch: Vec<TraceEvent> = stmt
+                .query_map(params![BATCH, offset], event_from_row)?
+                .collect::<Result<Vec<_>, _>>()?;
+            drop(stmt);
+            if batch.is_empty() {
+                break;
+            }
+            for ev in &batch {
+                fts_upsert(&conn, ev)?;
+            }
+            total += batch.len();
+            offset += BATCH;
         }
-        Ok(n)
+        Ok(total)
     }
 
     /// V1: core tables (runs, events, checkpoints, blobs metadata).

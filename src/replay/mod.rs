@@ -55,6 +55,12 @@ impl std::fmt::Display for ReplayOutcome {
         }
     }
 }
+impl ReplayOutcome {
+    /// Returns `true` when the replay completed without error.
+    pub fn success(&self) -> bool {
+        !matches!(self, ReplayOutcome::Errored(_))
+    }
+}
 
 /// Replay policy for side effects during replay.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

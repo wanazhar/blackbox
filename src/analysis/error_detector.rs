@@ -55,21 +55,25 @@ impl ErrorDetector {
                 let trimmed_line = line.trim();
                 let rest = trimmed_line;
                 if let Some(colon) = rest.find(": ") {
-                    let code = &rest[6..colon - 1]; // skip "error[E", exclude trailing "]"
-                    let message = &rest[colon + 2..];
-                    // Location may be on the same line or the next line (Rust style)
-                    let (file, line_num, col) = if self.parse_file_location(trimmed_line).0.is_some() {
-                        self.parse_file_location(trimmed_line)
-                    } else {
-                        lines.get(i + 1).map(|next| self.parse_file_location(next)).unwrap_or((None, None, None))
-                    };
-                    errors.push(StructuredError {
-                        error_type: format!("rustc[{}]", code),
-                        message: message.to_string(),
-                        file,
-                        line: line_num,
-                        column: col,
-                    });
+                    // Extract error code between "error[E" (6 chars) and "]" before ": ".
+                    // Guard against malformed lines where "]" is missing or colon is too close.
+                    if colon > 7 && rest.as_bytes().get(5) == Some(&b'[') {
+                        let code = &rest[6..colon - 1]; // skip "error[", exclude trailing "]"
+                        let message = &rest[colon + 2..];
+                        // Location may be on the same line or the next line (Rust style)
+                        let (file, line_num, col) = if self.parse_file_location(trimmed_line).0.is_some() {
+                            self.parse_file_location(trimmed_line)
+                        } else {
+                            lines.get(i + 1).map(|next| self.parse_file_location(next)).unwrap_or((None, None, None))
+                        };
+                        errors.push(StructuredError {
+                            error_type: format!("rustc[{}]", code),
+                            message: message.to_string(),
+                            file,
+                            line: line_num,
+                            column: col,
+                        });
+                    }
                 }
             }
         }

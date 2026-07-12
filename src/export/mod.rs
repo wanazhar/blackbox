@@ -2,6 +2,8 @@ pub mod html;
 pub mod jsonl;
 pub mod portable;
 
+use base64::Engine;
+
 use crate::core::event::TraceEvent;
 use crate::core::run::Run;
 use crate::redaction::export::ExportRedactor;
@@ -47,14 +49,45 @@ pub async fn export_run(
         }
         "portable" => {
             let mut v: serde_json::Value = serde_json::from_str(&output)?;
-            // Do not wipe blob binary payloads during secret scan of keys only —
-            // redactor walks all strings including base64; skip blob data fields.
             if let Some(blobs) = v.get_mut("blobs").and_then(|b| b.as_object_mut()) {
                 // Temporarily extract blobs, redact rest, restore
                 let saved = blobs.clone();
                 redactor.redact_json(&mut v);
                 if let Some(b) = v.get_mut("blobs").and_then(|b| b.as_object_mut()) {
                     *b = saved;
+                }
+                // H-08: Scan restored blob data for secrets that survived
+                // export. Decode each base64 payload and redact if the
+                // decoded text matches known secret patterns.
+                if let Some(blobs_obj) = v.get_mut("blobs").and_then(|b| b.as_object_mut()) {
+                    for (_key, entry) in blobs_obj.iter_mut() {
+                        let data_str = if let Some(obj) = entry.as_object_mut() {
+                            obj.get("data")
+                                .and_then(|d| d.as_str())
+                                .map(|s| s.to_string())
+                        } else {
+                            entry.as_str().map(|s| s.to_string())
+                        };
+                        if let Some(data_b64) = data_str {
+                            if let Ok(decoded) =
+                                base64::engine::general_purpose::STANDARD.decode(&data_b64)
+                            {
+                                if let Ok(text) = String::from_utf8(decoded) {
+                                    let redacted_text = redactor.scanner.redact(&text);
+                                    if redacted_text != text {
+                                        let new_b64 = base64::engine::general_purpose::STANDARD
+                                            .encode(redacted_text.as_bytes());
+                                        if let Some(obj) = entry.as_object_mut() {
+                                            obj.insert(
+                                                "data".to_string(),
+                                                serde_json::Value::String(new_b64),
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             } else {
                 redactor.redact_json(&mut v);

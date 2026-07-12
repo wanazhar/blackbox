@@ -71,6 +71,13 @@ pub async fn serve(store: Arc<SqliteStore>, opts: ServeOptions) -> anyhow::Resul
     let listener = tokio::net::TcpListener::bind(opts.addr).await?;
     tracing::info!(addr = %opts.addr, auth = opts.token.is_some(), "dashboard listening");
     println!("blackbox dashboard → http://{}", opts.addr);
+    if opts.token.is_none() {
+        eprintln!(
+            "WARNING: dashboard is running WITHOUT authentication — \
+             anyone on the network can view run data and trigger sync. \
+             Set --token or BLACKBOX_SERVE_TOKEN to enable auth."
+        );
+    }
     if opts.token.is_some() {
         println!("  auth:    Bearer token required (Authorization header or ?token=)");
     }
@@ -110,20 +117,36 @@ async fn auth_middleware(
 
 fn token_ok(expected: &str, headers: &HeaderMap, query: Option<&str>) -> bool {
     if let Some(auth) = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()) {
-        if auth == expected || auth == format!("Bearer {expected}") {
+        // Constant-time comparison to avoid timing side-channels.
+        let provided = auth.strip_prefix("Bearer ").unwrap_or(auth);
+        if constant_time_eq(provided.as_bytes(), expected.as_bytes()) {
             return true;
         }
     }
     if let Some(q) = query {
         for pair in q.split('&') {
             if let Some(v) = pair.strip_prefix("token=") {
-                if v == expected {
+                if constant_time_eq(v.as_bytes(), expected.as_bytes()) {
                     return true;
                 }
             }
         }
     }
     false
+}
+
+/// Byte-wise equality comparison that runs in constant time regardless of
+/// where the first difference occurs, preventing timing side-channel attacks
+/// on bearer-token validation.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
 }
 
 // ── Pages ─────────────────────────────────────────────────────────
@@ -565,6 +588,11 @@ async fn api_events(
 }
 
 /// Server-Sent Events stream of run events (historical first, then live tail).
+    // NOTE: This SSE endpoint polls SQLite on every tick (400ms). When many
+    // clients connect simultaneously (thundering-herd), each poll contends on
+    // the Mutex<Connection>, serializing all readers. A future improvement
+    // would be to use a tokio::sync::watch or broadcast channel so the
+    // write-path notifies all active streams, eliminating polling entirely.
 async fn api_event_stream(
     State(state): State<AppState>,
     Path(id): Path<String>,

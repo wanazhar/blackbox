@@ -99,7 +99,7 @@ pub fn export_html(
         let ev_status = ev_json["status"].as_str().unwrap_or("unknown");
         let side_effect = ev_json["side_effect"].as_str().unwrap_or("");
 
-        let detail = event_detail(event, redact);
+        let detail = event_detail(&ev_json);
 
         let ev_status_class = match ev_status {
             "Success" => "status-success",
@@ -394,17 +394,22 @@ pub fn export_html(
     Ok(html)
 }
 
-fn event_detail(event: &TraceEvent, _redact: bool) -> String {
-    // Note: redaction is applied to the event before it reaches this function.
-    // The _redact parameter is kept for API compatibility but the caller
-    // is responsible for ensuring the event is already redacted.
-    if let Some(p) = event.metadata.get("preview").and_then(|v| v.as_str()) {
+fn event_detail(ev_json: &serde_json::Value) -> String {
+    // Read from the serialized+redacted JSON value, not the raw event,
+    // so secrets removed by redaction are never surfaced.
+    let meta = ev_json.get("metadata");
+    if let Some(p) = meta
+        .and_then(|m| m.get("preview"))
+        .and_then(|v| v.as_str())
+    {
         return p.replace('\n', "⏎");
     }
-    if let Some(n) = event.metadata.get("tool_name").and_then(|v| v.as_str()) {
-        let input = event
-            .metadata
-            .get("input")
+    if let Some(n) = meta
+        .and_then(|m| m.get("tool_name"))
+        .and_then(|v| v.as_str())
+    {
+        let input = meta
+            .and_then(|m| m.get("input"))
             .map(|v| {
                 let s = v.to_string();
                 if s.len() > 80 {
@@ -417,10 +422,13 @@ fn event_detail(event: &TraceEvent, _redact: bool) -> String {
             .unwrap_or_default();
         return format!("{n} {input}");
     }
-    if let Some(p) = event.metadata.get("path").and_then(|v| v.as_str()) {
+    if let Some(p) = meta
+        .and_then(|m| m.get("path"))
+        .and_then(|v| v.as_str())
+    {
         return p.to_string();
     }
-    if let Some(c) = event.metadata.get("exit_code") {
+    if let Some(c) = meta.and_then(|m| m.get("exit_code")) {
         return format!("exit={c}");
     }
     String::new()

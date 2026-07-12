@@ -129,7 +129,7 @@ impl GitCapture {
     /// Get the working tree diff (unstaged changes).
     fn get_diff(cwd: &str) -> Option<String> {
         Command::new("git")
-            .args(["diff"])
+            .args(["diff", "--submodule=short"])
             .current_dir(cwd)
             .output()
             .ok()
@@ -146,7 +146,7 @@ impl GitCapture {
     /// Get the staged diff.
     fn get_diff_cached(cwd: &str) -> Option<String> {
         Command::new("git")
-            .args(["diff", "--cached"])
+            .args(["diff", "--cached", "--submodule=short"])
             .current_dir(cwd)
             .output()
             .ok()

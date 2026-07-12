@@ -48,9 +48,13 @@ impl EventCorrelator {
             // backwards, so the first hit is the nearest predecessor).
             let confidence = if prev.source == event.source && gap > 0 && gap < 500 {
                 Confidence::Confirmed
-            } else if gap < 1000 {
+            } else if prev.source == event.source && gap < 1000 {
+                // Same source within 1s but timestamps identical or gap=0
+                // → rely on sequence order, not timing alone.
                 Confidence::StronglyCorrelated
             } else if gap < 5000 {
+                // Different sources within 5s: temporally close but no
+                // process ancestry — downgrade to avoid false positives.
                 Confidence::WeaklyCorrelated
             } else {
                 Confidence::Unknown

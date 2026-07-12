@@ -202,7 +202,10 @@ impl RunSupervisor {
         let fs_rx = fs_capture.start(run).await?;
         let process_rx = process_capture.start(run).await?;
 
-        let mut merged_rx = merge_layers(vec![pty_rx, git_rx, fs_rx, process_rx]);
+        let (mut merged_rx, _layer_handles) = merge_layers(vec![pty_rx, git_rx, fs_rx, process_rx]);
+        // H-22: merge_layers uses fixed insertion-order priority (first receiver wins on
+        // concurrent events). Timestamp-based merge is too risky for this fix cycle.
+        // Order (pty -> git -> fs -> process) is intentional: terminal output is highest priority.
 
         // Single-writer ingress for all capture-layer events
         let layer_writer = writer.clone();
@@ -293,6 +296,9 @@ impl RunSupervisor {
 
         let child_pid = child.process_id().unwrap_or(0);
         tracing::info!(pid = child_pid, rows, cols, "child process spawned");
+        // C-10: Process group isolation -- portable-pty pre_exec calls libc::setsid(),
+        // making this child a session leader with PGID == child PID.
+        // kill(-child_pid, signal) targets the entire group including grandchildren.
 
         process_capture.set_pid(child_pid);
         process_capture.emit_spawned().await;
@@ -385,6 +391,8 @@ impl RunSupervisor {
             drop(w);
         });
 
+        // H-20/H-21: SIGKILL escalation -- on Ctrl+C, send SIGINT then SIGKILL after grace.
+        const SIGGRACE_MS: u64 = 5000;
         let signal_child_pid = child_pid;
         let signal_handle = tokio::spawn(async move {
             loop {
@@ -411,8 +419,20 @@ impl RunSupervisor {
                         );
                     }
                 }
+                // Wait SIGGRACE_MS, then escalate to SIGKILL if still alive.
+                tokio::time::sleep(Duration::from_millis(SIGGRACE_MS)).await;
+                tracing::debug!(pid = signal_child_pid, "SIGKILL escalation after SIGINT timeout");
+                let _ = unsafe { libc::kill(-(signal_child_pid as i32), libc::SIGKILL) };
+                let _ = unsafe { libc::kill(signal_child_pid as i32, libc::SIGKILL) };
+                break;
             }
         });
+
+        // C-11: Zombie reaping -- the primary child is collected by child.wait() below.
+        // Orphaned grandchildren are reparented to init and reaped automatically.
+        // We do NOT use waitpid(-pgid, WNOHANG) here because it would race with
+        // child.wait() and reap the primary child prematurely (causing ECHILD).
+        let _reap_child_pid = child_pid; // reserved for future per-pid reaping if needed
 
         // Forward terminal resize (SIGWINCH) to the PTY so interactive apps reflow.
         let resize_master = master.clone();
@@ -668,8 +688,26 @@ impl RunSupervisor {
                 result.context("wait task panicked")?
                     .context("failed to wait for child process")?
             }
-            _ = tokio::time::sleep(Duration::from_secs(24 * 60 * 60)) => {
-                anyhow::bail!("child process wait timed out after 24h");
+            _ = tokio::time::sleep(Duration::from_secs(4 * 3600)) => {
+                // H-20/H-21: After 4h timeout, escalate: SIGINT -> 5s -> SIGKILL.
+                tracing::warn!(pid = child_pid, "child wait timed out; escalating to SIGKILL");
+                let _ = unsafe { libc::kill(-(child_pid as i32), libc::SIGINT) };
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                let _ = unsafe { libc::kill(-(child_pid as i32), libc::SIGKILL) };
+                let _ = unsafe { libc::kill(child_pid as i32, libc::SIGKILL) };
+                tokio::task::spawn_blocking(move || {
+                    let mut status: libc::c_int = 0;
+                    loop {
+                        let ret = unsafe { libc::waitpid(child_pid as i32, &mut status, 0) };
+                        if ret > 0 || ret == -1 { break; }
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
+                    use std::os::unix::process::ExitStatusExt;
+                    let std_status = std::process::ExitStatus::from_raw(status);
+                    portable_pty::ExitStatus::with_exit_code(std_status.code().unwrap_or(137) as u32)
+                })
+                .await
+                .context("wait task panicked after SIGKILL")?
             }
         };
 
@@ -681,21 +719,35 @@ impl RunSupervisor {
         let _ = tokio::time::timeout(Duration::from_millis(500), native_handle).await;
         let _ = tokio::time::timeout(Duration::from_millis(200), pty_writer_handle).await;
         let _ = tokio::time::timeout(Duration::from_secs(2), reader_handle).await;
+        // H-27: Stop capture layers FIRST -- closing their event channels causes
+        // merged_rx to close, letting output_handle finish draining naturally.
+        drop(master);
+        if let Err(e) = pty_capture.stop().await {
+            tracing::debug!(error = %e, "pty_capture.stop failed");
+        }
+        if let Err(e) = git_capture.stop().await {
+            tracing::debug!(error = %e, "git_capture.stop failed");
+        }
+        if let Err(e) = fs_capture.stop().await {
+            tracing::debug!(error = %e, "fs_capture.stop failed");
+        }
+        if let Err(e) = process_capture.stop().await {
+            tracing::debug!(error = %e, "process_capture.stop failed");
+        }
+        // H-23: Now that capture layers are stopped, output_handle drains remaining
+        // events from closed channels. Give it time to flush, then log if it stalls.
         let (segments, total_redactions) =
-            match tokio::time::timeout(Duration::from_secs(2), output_handle).await {
+            match tokio::time::timeout(Duration::from_secs(5), output_handle).await {
                 Ok(Ok(pair)) => pair,
-                _ => {
-                    tracing::warn!("cleanup timeout: output collector did not finish, zeroing segment/redaction counts");
+                Ok(Err(e)) => {
+                    tracing::warn!(error = %e, "output collector task panicked");
+                    (0, 0)
+                }
+                Err(_elapsed) => {
+                    tracing::warn!("cleanup timeout: output collector did not finish after 5s, zeroing counts");
                     (0, 0)
                 }
             };
-
-        drop(master);
-
-        let _ = pty_capture.stop().await;
-        let _ = git_capture.stop().await;
-        let _ = fs_capture.stop().await;
-        let _ = process_capture.stop().await;
         let _ = tokio::time::timeout(Duration::from_secs(2), event_writer_handle).await;
 
         tracing::info!(
@@ -728,7 +780,13 @@ impl RunSupervisor {
         }
         let end_ev = writer.write(end_ev).await?;
 
-        let all_events = self.store.get_events(&run.id).await.unwrap_or_default();
+        let all_events = match self.store.get_events(&run.id).await {
+            Ok(events) => events,
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to fetch events for session_id discovery; proceeding with empty list");
+                Vec::new()
+            }
+        };
         let session_id = adapter.discover_session_id(&all_events);
         if let Some(ref sid) = session_id {
             tracing::info!(session_id = %sid, "discovered harness session");

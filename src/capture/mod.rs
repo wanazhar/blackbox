@@ -25,21 +25,30 @@ pub trait CaptureLayer: Send + 'static {
 }
 
 /// Merge multiple capture layer receivers into a single event stream.
+///
+/// Returns the merged receiver **and** a `Vec<JoinHandle>` for every
+/// forwarding task so the caller can detect panics rather than silently
+/// losing them.
 pub fn merge_layers(
     receivers: Vec<tokio::sync::mpsc::Receiver<TraceEvent>>,
-) -> tokio::sync::mpsc::Receiver<TraceEvent> {
+) -> (
+    tokio::sync::mpsc::Receiver<TraceEvent>,
+    Vec<tokio::task::JoinHandle<()>>,
+) {
     let (merged_tx, merged_rx) = tokio::sync::mpsc::channel(1024);
+    let mut handles = Vec::with_capacity(receivers.len());
 
     for mut rx in receivers {
         let tx = merged_tx.clone();
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             while let Some(ev) = rx.recv().await {
                 if tx.send(ev).await.is_err() {
                     break;
                 }
             }
         });
+        handles.push(handle);
     }
 
-    merged_rx
+    (merged_rx, handles)
 }

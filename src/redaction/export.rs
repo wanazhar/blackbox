@@ -7,7 +7,7 @@ use crate::redaction::RedactionConfig;
 /// an export file. This is an additional layer beyond the
 /// capture-time redaction, catching anything that was missed.
 pub struct ExportRedactor {
-    scanner: SecretScanner,
+    pub(crate) scanner: SecretScanner,
 }
 
 impl ExportRedactor {

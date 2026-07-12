@@ -1441,6 +1441,9 @@ async fn cmd_replay(cli: &Cli, args: &ReplayArgs) -> anyhow::Result<()> {
     tracing::info!(engine = engine.name(), "starting replay");
     let outcome = engine.start(&run, &events, from_id.as_deref()).await?;
     println!("Replay finished: {}", outcome);
+    if !outcome.success() {
+        std::process::exit(1);
+    }
     Ok(())
 }
 
@@ -1609,7 +1612,9 @@ async fn cmd_analyze(cli: &Cli, args: &AnalyzeArgs) -> anyhow::Result<()> {
         // Keep run.next_sequence coherent
         if let Ok(Some(mut run)) = store.get_run(&run_id).await {
             run.next_sequence = writer.next_sequence();
-            let _ = store.update_run(&run).await;
+            if let Err(e) = store.update_run(&run).await {
+                eprintln!("warning: failed to update run sequence: {e}");
+            }
         }
         println!("Persisted {} analysis events.", n);
     } else if !derived.is_empty() {

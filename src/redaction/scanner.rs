@@ -86,6 +86,24 @@ impl SecretScanner {
             RedactionReason::ConnectionString,
             r#"(?i)(postgres|mysql|mongodb|redis)://[^\s:]+:[^\s@]+@[^\s]+"#,
         );
+        // Google API keys
+        add(
+            &mut patterns,
+            RedactionReason::ApiKey,
+            r"\bAIza[0-9A-Za-z\-_]{35}\b",
+        );
+        // Stripe keys
+        add(
+            &mut patterns,
+            RedactionReason::ApiKey,
+            r"\b(?:sk_live|pk_live|sk_test|pk_test)_[0-9a-zA-Z]{24,}\b",
+        );
+        // npm tokens
+        add(
+            &mut patterns,
+            RedactionReason::ApiKey,
+            r"\bnpm_[A-Za-z0-9]{36}\b",
+        );
 
         // Custom patterns from config
         for pat in &config.custom_patterns {
@@ -116,13 +134,58 @@ impl SecretScanner {
     }
 
     /// Redact sensitive patterns from text, replacing with `[REDACTED]`.
+    ///
+    /// Uses a span-merging approach: all patterns are applied to the
+    /// original text, non-overlapping match spans are collected, and
+    /// replacement happens in a single pass. This prevents corruption
+    /// where a previous `[REDACTED]` replacement would be re-matched
+    /// by subsequent patterns.
     pub fn redact(&self, text: &str) -> String {
         if !self.config.enabled {
             return text.to_string();
         }
-        let mut result = text.to_string();
+
+        // Collect all match spans from every pattern against the *original* text.
+        let mut spans: Vec<(usize, usize)> = Vec::new();
         for (_, re) in &self.patterns {
-            result = re.replace_all(&result, "[REDACTED]").to_string();
+            for m in re.find_iter(text) {
+                spans.push((m.start(), m.end()));
+            }
+        }
+
+        // Sort by start position, then by end (longest first) for stable merging.
+        spans.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| b.1.cmp(&a.1)));
+
+        // Merge overlapping spans.
+        let mut merged: Vec<(usize, usize)> = Vec::new();
+        for span in &spans {
+            if let Some(last) = merged.last_mut() {
+                if span.0 <= last.1 {
+                    // Overlapping — extend if this span is wider.
+                    last.1 = last.1.max(span.1);
+                    continue;
+                }
+            }
+            merged.push(*span);
+        }
+
+        // If nothing matched, return as-is.
+        if merged.is_empty() {
+            return text.to_string();
+        }
+
+        // Build the redacted string in a single pass.
+        let mut result = String::with_capacity(text.len());
+        let mut cursor = 0;
+        for (start, end) in &merged {
+            if cursor < *start {
+                result.push_str(&text[cursor..*start]);
+            }
+            result.push_str("[REDACTED]");
+            cursor = *end;
+        }
+        if cursor < text.len() {
+            result.push_str(&text[cursor..]);
         }
         result
     }

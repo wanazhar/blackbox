@@ -13,40 +13,36 @@ This tool is worth running on a machine that holds secrets when **all** of the f
 7. **Semantic signal is first-class** — harness adapters parse tool calls; analysis is wired into the CLI.
 8. **Export / sync are safe by default** — redacted unless `--no-redact` is passed.
 9. **Docs match the binary** — README + AGENTS.md describe real behavior.
-10. **Agent-native inspect** — global `--json` envelope for the inspect loop; resume packs for retry.
+10. **Agent-native inspect** — global `--json` envelope; resume packs; MCP; handoff.
 
-Design notes (optional deep dive): [`docs/plan/daily-driver-0.2.md`](plan/daily-driver-0.2.md), [`docs/agent-api.md`](agent-api.md).
+## Current product (1.0.0)
 
-## Current product (0.4.0)
-
-One ship unit — capture through agent handoff — leave it on:
+Leave it on for Linux/macOS agent work:
 
 | Area | Status |
 |---|---|
 | PTY capture, redact-before-write, blobs, monotonic seq, checkpoints | **shipped** |
 | Claude/Codex adapters + native logs; generic + stream protocol v1 | **shipped** |
+| Expanded wrap list (aider/cursor/gemini/opencode/grok + claude/codex) | **shipped** |
 | Analysis, search (FTS5), tags, stats, scrub/gc, export/import, sync, serve | **shipped** |
-| Safe export (structure preserved; secrets redacted) | **shipped** |
-| Project `enable` / `maybe-run`, ancestor store discovery, config.toml | **shipped** |
-| Real `--install-shell` / `--uninstall-shell` managed wrappers | **shipped** |
-| `--json` inspect, postmortem/summary, retention `gc` + **auto_apply** | **shipped** |
-| Schema v6 metrics, trajectory diff, `context --for-resume` | **shipped** |
-| Sticky state + `status` / `handoff` + `.blackbox/AGENT.md` | **shipped** |
+| Project enable / maybe-run / install-shell / uninstall-shell | **shipped** |
+| status / handoff / sticky state / AGENT.md | **shipped** |
+| Auto-resume on next launch | **shipped** |
+| MCP stdio tools | **shipped** |
+| Dashboard `/status` `/handoff` + API | **shipped** |
+| Binary install script + release workflow | **shipped** |
+| Retention auto_apply + opportunistic GC | **shipped** |
 | Replay sandbox / fork | **mostly shipped** (restore still best-effort) |
 
-## Backlog (no version theater)
-
-Ship when it hurts not to have it — fold into the next release when ready:
+## Backlog (post-1.0)
 
 | Theme | Notes |
 |---|---|
-| Binary releases / install scripts | GitHub Actions assets; `cargo install` stays primary |
-| Broader harness coverage | Cursor / other adapters; more Claude/Codex layouts |
-| Sandbox workspace restore | Spike: git checkout of checkpoint; not full FS guarantee |
-| Dashboard polish | Summary/context routes after CLI is the source of truth |
-| Optional MCP | Thin wrapper over `status`/`handoff`/Views — only if demand |
-| Windows PTY/signal parity | Non-blocking; Linux/macOS first |
+| Deeper harness adapters | First-class Cursor/Aider/Gemini parsers beyond wrap + generic |
+| Sandbox workspace restore | git checkout of checkpoint; not full FS guarantee |
+| Windows PTY/signal parity | Non-blocking |
 | Pricing table for `estimated_cost_usd` | Off by default (never invent prices) |
+| CI/eval mode polish | exit codes + artifact export conventions |
 
 ## Non-goals
 
@@ -66,6 +62,4 @@ Ship when it hurts not to have it — fold into the next release when ready:
 | Export / sync default | Redacted | Sharing traces is the common case for agents |
 | Package name | `blackbox-recorder` on crates.io | `blackbox` is taken; binary/lib stay `blackbox` |
 | Ambient capture | Project-scoped enable + maybe-run | No silent global recording |
-| Versioning | One product release at a time | Intermediate “0.2 floor / 0.3 loop” trains confuse ship truth |
-
-When the quality-bar invariants hold, backlog items are trustworthy additive work instead of theater.
+| Versioning | One product release at a time | Intermediate version trains confuse ship truth |

@@ -155,31 +155,39 @@ This project has **blackbox** ambient capture enabled (local flight recorder for
 
 ## At session start
 
+Prefer MCP tools if available: `blackbox_handoff` then work.
+Otherwise:
+
 ```bash
-blackbox status --json
-# or the handoff alias (embeds resume pack when attention is needed):
 blackbox handoff --json
+# lightweight: blackbox status --json
 ```
 
-If `attention.needed` is true, load the resume pack before retrying work:
+If `attention.needed` is true, use the embedded `resume_pack` (or run):
 
 ```bash
 blackbox context <run_id> --for-resume --json --max-tokens 4000
-# handoff already embeds this when attention is needed
 ```
 
 ## While working
 
-- Prefer launching harnesses that are in the project wrap list (`claude`, `codex`, …) so runs are recorded automatically via shell wrappers → `blackbox maybe-run`.
-- Explicit capture: `blackbox run --name "…" -- <command>`.
-- Opt out for one shell: `export BLACKBOX_OFF=1`.
+- Prefer harnesses in the project wrap list (`claude`, `codex`, `aider`, `cursor-agent`, `gemini`, `opencode`, `grok`, …) so shell wrappers record via `blackbox maybe-run`.
+- Explicit: `blackbox run --name "…" -- <command>`.
+- Auto-resume is on by default: a new run after a failure injects prior context (`BLACKBOX_RESUME_FILE`, `.blackbox/RESUME.md`). Disable with `BLACKBOX_AUTO_RESUME=0` or `--no-auto-resume`.
+- Opt out of capture for one shell: `export BLACKBOX_OFF=1`.
 
 ## After a failure
 
 ```bash
 blackbox postmortem latest --json
-blackbox context latest --for-resume --json
-blackbox search "error" --json   # optional
+blackbox handoff --json
+blackbox search "error" --json
+```
+
+## MCP
+
+```bash
+blackbox mcp   # stdio JSON-RPC tools: status, handoff, postmortem, context, runs, search, doctor
 ```
 
 ## Rules
@@ -190,7 +198,7 @@ blackbox search "error" --json   # optional
 
 ## Machine contract
 
-See `docs/agent-api.md` in the blackbox repo for the `blackbox.cli/v1` JSON envelope and resume pack schema.
+See `docs/agent-api.md` for the `blackbox.cli/v1` JSON envelope, MCP tools, and resume pack schema.
 "#
 }
 

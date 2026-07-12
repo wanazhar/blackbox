@@ -59,12 +59,16 @@ pub async fn serve(store: Arc<SqliteStore>, opts: ServeOptions) -> anyhow::Resul
         .route("/runs/{id}/live", get(run_live_page))
         .route("/runs/{id}/export.html", get(run_export_html))
         .route("/watch", get(watch_latest_page))
+        .route("/status", get(status_page))
+        .route("/handoff", get(handoff_page))
         .route("/api/runs", get(api_runs))
         .route("/api/runs/stream", get(api_runs_stream))
         .route("/api/runs/{id}", get(api_run))
         .route("/api/runs/{id}/events", get(api_events))
         .route("/api/runs/{id}/events/stream", get(api_event_stream))
         .route("/api/search", get(api_search))
+        .route("/api/status", get(api_status))
+        .route("/api/handoff", get(api_handoff))
         .route("/api/sync/manifest", get(api_sync_manifest))
         .route(
             "/api/sync/runs/{id}",
@@ -89,7 +93,12 @@ pub async fn serve(store: Arc<SqliteStore>, opts: ServeOptions) -> anyhow::Resul
         println!("  auth:    Bearer token required (Authorization header or ?token=)");
     }
     println!("  live:    http://{}/watch", opts.addr);
-    println!("  api:     http://{}/api/runs", opts.addr);
+    println!("  status:  http://{}/status", opts.addr);
+    println!("  handoff: http://{}/handoff", opts.addr);
+    println!(
+        "  api:     http://{}/api/runs  ·  /api/status  ·  /api/handoff",
+        opts.addr
+    );
     println!("  sync:    http://{}/api/sync/manifest", opts.addr);
     println!("  Press Ctrl+C to stop.");
     axum::serve(listener, app).await?;
@@ -197,6 +206,8 @@ async fn index(State(state): State<AppState>) -> Result<Html<String>, AppError> 
     <button type="submit">Search</button>
   </form>
   <a class="btn" href="/watch">Live watch</a>
+  <a class="btn" href="/handoff">Handoff</a>
+  <a class="btn secondary" href="/status">Status</a>
   <a class="btn secondary" href="/api/runs">JSON API</a>
   <span class="muted" id="stream">live list: connecting…</span>
 </div>
@@ -460,6 +471,109 @@ async fn watch_latest_page(State(state): State<AppState>) -> Result<Response, Ap
         axum::response::Redirect::temporary(&format!("/runs/{}/live", urlencoding(&run.id)))
             .into_response(),
     )
+}
+
+fn discovery_from_store(store: &SqliteStore) -> crate::config::ProjectDiscovery {
+    use crate::config::{BlackboxConfig, BlackboxPaths, ProjectDiscovery};
+    let paths = BlackboxPaths::from_db_path(store.db_path().to_path_buf());
+    let project_root = paths
+        .root
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| paths.root.clone());
+    let config = BlackboxConfig::load_from_path(&paths.root.join("config.toml"))
+        .ok()
+        .flatten();
+    ProjectDiscovery {
+        project_root,
+        paths,
+        config,
+    }
+}
+
+async fn build_serve_status(
+    state: &AppState,
+    include_resume: bool,
+    force_resume: bool,
+) -> anyhow::Result<crate::status::StatusView> {
+    use crate::status::{build_status, StatusOptions};
+    use crate::storage::TraceStore;
+    let discovery = discovery_from_store(&state.store);
+    let store: &dyn TraceStore = state.store.as_ref();
+    build_status(
+        &discovery,
+        Some(store),
+        StatusOptions {
+            include_resume,
+            max_tokens: 4000,
+            force_resume,
+        },
+    )
+    .await
+}
+
+async fn api_status(State(state): State<AppState>) -> Result<Json<serde_json::Value>, AppError> {
+    let view = build_serve_status(&state, false, false).await?;
+    Ok(Json(serde_json::to_value(view)?))
+}
+
+async fn api_handoff(State(state): State<AppState>) -> Result<Json<serde_json::Value>, AppError> {
+    let view = build_serve_status(&state, true, false).await?;
+    Ok(Json(serde_json::to_value(view)?))
+}
+
+async fn status_page(State(state): State<AppState>) -> Result<Html<String>, AppError> {
+    let view = build_serve_status(&state, false, false).await?;
+    let text = crate::status::format_status_text(&view);
+    let json = serde_json::to_string_pretty(&view).unwrap_or_default();
+    Ok(Html(shell(
+        "Status",
+        &format!(
+            r#"<div class="bar">
+  <a class="btn" href="/handoff">Handoff</a>
+  <a class="btn secondary" href="/api/status">JSON</a>
+  <a class="btn secondary" href="/">Runs</a>
+</div>
+<pre class="mono status-pre">{}</pre>
+<details><summary>JSON</summary><pre class="mono">{}</pre></details>"#,
+            html_escape(&text),
+            html_escape(&json)
+        ),
+    )))
+}
+
+async fn handoff_page(State(state): State<AppState>) -> Result<Html<String>, AppError> {
+    let view = build_serve_status(&state, true, false).await?;
+    let text = crate::status::format_status_text(&view);
+    let json = serde_json::to_string_pretty(&view).unwrap_or_default();
+    let attn = if view.attention.needed {
+        format!(
+            r#"<p class="badge" style="background:#7f1d1d">ATTENTION: {}</p>"#,
+            html_escape(
+                view.attention
+                    .reason
+                    .as_deref()
+                    .unwrap_or("check last failure")
+            )
+        )
+    } else {
+        r#"<p class="muted">No attention needed.</p>"#.to_string()
+    };
+    Ok(Html(shell(
+        "Handoff",
+        &format!(
+            r#"<div class="bar">
+  <a class="btn" href="/status">Status</a>
+  <a class="btn secondary" href="/api/handoff">JSON</a>
+  <a class="btn secondary" href="/">Runs</a>
+</div>
+{attn}
+<pre class="mono status-pre">{}</pre>
+<details open><summary>JSON (resume pack when attention)</summary><pre class="mono">{}</pre></details>"#,
+            html_escape(&text),
+            html_escape(&json)
+        ),
+    )))
 }
 
 async fn run_export_html(

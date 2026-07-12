@@ -7,7 +7,7 @@ use crate::core::run::Run;
 use crate::storage::TraceStore;
 use crate::summary::{build_summary, SummaryOptions, SummaryView};
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ContextPackView {
     pub run_id: String,
     pub short_id: String,
@@ -22,7 +22,7 @@ pub struct ContextPackView {
     pub truncated: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct FailedTool {
     pub sequence: u64,
     pub name: String,

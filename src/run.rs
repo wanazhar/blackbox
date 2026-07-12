@@ -132,6 +132,22 @@ impl RunSupervisor {
             spawn_cmd = prepared.command;
             tracing::debug!(adapter = adapter_id, "applied adapter launch preparation");
         }
+
+        // Auto-resume: inject prior failure context when configured.
+        let mut resume_env: HashMap<String, String> = HashMap::new();
+        if let Some(ref inj) = args.resume_injection {
+            spawn_cmd = crate::resume_inject::apply_to_launch(&spawn_cmd, &mut resume_env, inj);
+            tracing::info!(
+                prior_run = %inj.short_id,
+                "auto-resume: injected prior failure context into launch"
+            );
+            let note = run.notes.take().unwrap_or_default();
+            run.notes = Some(if note.is_empty() {
+                format!("auto_resume:{}", inj.short_id)
+            } else {
+                format!("{}; auto_resume:{}", note, inj.short_id)
+            });
+        }
         run.notes = Some(format!(
             "adapter:{}{}",
             adapter_id,
@@ -301,6 +317,9 @@ impl RunSupervisor {
             cmd.arg(arg);
         }
         cmd.cwd(&run.cwd);
+        for (k, v) in &resume_env {
+            cmd.env(k, v);
+        }
 
         let mut child = pair
             .slave

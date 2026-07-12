@@ -12,7 +12,7 @@ use crate::views::{ResumeView, StructuredErrorView};
 const DEFAULT_LIMIT: usize = 10_000;
 const SHORT_LIMIT: usize = 500;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SummaryView {
     pub run_id: String,
     pub short_id: String,
@@ -32,21 +32,21 @@ pub struct SummaryView {
     pub hints: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ToolsSummary {
     pub total: usize,
     pub failed: usize,
     pub names: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SideEffectSample {
     pub sequence: u64,
     pub kind: String,
     pub detail: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct GitSummary {
     pub start: Option<String>,
     pub end: Option<String>,

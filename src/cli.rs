@@ -37,6 +37,7 @@ impl Cli {
 }
 
 #[derive(Subcommand)]
+#[allow(clippy::large_enum_variant)] // RunArgs carries optional resume injection
 pub enum Command {
     /// Run a command under observation
     Run(RunArgs),
@@ -102,6 +103,8 @@ pub enum Command {
     Status(StatusArgs),
     /// Agent handoff: status + resume pack when attention is needed
     Handoff(HandoffArgs),
+    /// MCP stdio server (tools for status/handoff/postmortem/search/…)
+    Mcp,
 }
 
 #[derive(Args, Default)]
@@ -286,7 +289,7 @@ pub struct WatchArgs {
     pub idle_exit: u64,
 }
 
-#[derive(Args)]
+#[derive(Args, Clone)]
 pub struct RunArgs {
     /// Label for this run
     #[arg(long)]
@@ -308,9 +311,21 @@ pub struct RunArgs {
     #[arg(long)]
     pub no_redact: bool,
 
+    /// Disable auto-resume injection for this run (overrides config)
+    #[arg(long)]
+    pub no_auto_resume: bool,
+
+    /// Force auto-resume injection even if config disables it
+    #[arg(long)]
+    pub auto_resume: bool,
+
     /// The command to observe (everything after `--`)
     #[arg(last = true, required = true)]
     pub command: Vec<String>,
+
+    /// Prepared resume injection (filled by CLI, not a user flag).
+    #[arg(skip)]
+    pub resume_injection: Option<crate::resume_inject::ResumeInjection>,
 }
 
 #[derive(Args)]
@@ -602,6 +617,7 @@ impl Cli {
             Command::Context(args) => cmd_context(self, args).await,
             Command::Status(args) => cmd_status(self, args).await,
             Command::Handoff(args) => cmd_handoff(self, args).await,
+            Command::Mcp => cmd_mcp(self).await,
         }
     }
 }
@@ -756,8 +772,50 @@ async fn cmd_run(cli: &Cli, args: &RunArgs) -> anyhow::Result<()> {
         insecure_raw: args.insecure_raw,
         redact: !args.no_redact,
     };
+
+    // Prepare auto-resume injection when enabled.
+    let mut args = args.clone();
+    let want_resume = if args.no_auto_resume {
+        false
+    } else if args.auto_resume {
+        true
+    } else {
+        crate::resume_inject::auto_resume_enabled(
+            discovery.as_ref().and_then(|d| d.config.as_ref()),
+        )
+    };
+    if want_resume {
+        if let Some(ref disc) = discovery {
+            let max_tok = disc
+                .config
+                .as_ref()
+                .map(|c| c.capture.resume_max_tokens as usize)
+                .unwrap_or(4000);
+            match crate::resume_inject::prepare_resume_injection(
+                store.as_ref(),
+                &disc.paths.root,
+                max_tok,
+            )
+            .await
+            {
+                Ok(Some(inj)) => {
+                    if !cli.json {
+                        eprintln!(
+                            "auto-resume: injecting context from failed run {} ({})",
+                            inj.short_id,
+                            inj.file_path.display()
+                        );
+                    }
+                    args.resume_injection = Some(inj);
+                }
+                Ok(None) => {}
+                Err(e) => tracing::warn!(error = %e, "auto-resume prepare failed"),
+            }
+        }
+    }
+
     let supervisor = RunSupervisor::new(Arc::clone(&store)).with_policy(policy);
-    let run = supervisor.execute(args).await?;
+    let run = supervisor.execute(&args).await?;
 
     // Sticky project state for agent handoff (best-effort).
     if let Some(ref disc) = discovery {
@@ -1963,6 +2021,9 @@ async fn cmd_fork(cli: &Cli, args: &ForkArgs) -> anyhow::Result<()> {
             tag: vec!["resume".into(), "fork".into()],
             insecure_raw: false,
             no_redact: false,
+            no_auto_resume: false,
+            auto_resume: false,
+            resume_injection: None,
             command: cmd,
         };
         return cmd_run(cli, &run_args).await;
@@ -2812,6 +2873,11 @@ async fn cmd_disable(cli: &Cli) -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn cmd_mcp(cli: &Cli) -> anyhow::Result<()> {
+    // MCP is stdio JSON-RPC; never emit human chatter on stdout.
+    crate::mcp::run_mcp_stdio(cli.store.as_deref()).await
+}
+
 async fn cmd_status(cli: &Cli, args: &StatusArgs) -> anyhow::Result<()> {
     use crate::status::{build_status, format_status_text, StatusOptions};
 
@@ -3189,6 +3255,7 @@ mod tests {
             "context",
             "status",
             "handoff",
+            "mcp",
         ];
         for sub in all_subs {
             let result = Cli::command().try_get_matches_from(["blackbox", sub, "--help"]);

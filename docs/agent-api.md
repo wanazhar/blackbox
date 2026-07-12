@@ -1,4 +1,4 @@
-# blackbox agent API (0.2–0.3)
+# blackbox agent API (1.0)
 
 Machine-readable contracts for agents and custom harnesses.
 
@@ -51,15 +51,62 @@ Error:
 | `enable --install-shell` | Idempotent managed shell wrappers; `--uninstall-shell` removes them |
 | `run --json` | Includes `attention_needed` + `handoff_hint` after completion |
 
+### 1.0 additions
+
+| Surface | Notes |
+|---|---|
+| `blackbox mcp` | MCP stdio JSON-RPC tools (see below) |
+| Auto-resume | Default on; writes `.blackbox/RESUME.md` + injects into next launch |
+| `serve` `/api/status` `/api/handoff` | Dashboard JSON mirrors CLI Views |
+| Wrap defaults | claude, codex, aider, cursor, cursor-agent, gemini, opencode, grok |
+
 **Agent session start (recommended):**
 
 ```bash
 blackbox handoff --json
+# or MCP tool: blackbox_handoff
 ```
 
 If `data.attention.needed` is true, use `data.resume_pack` (or `next_commands`) before retrying work. Sticky state lives at `.blackbox/state.json`; human-readable agent notes at `.blackbox/AGENT.md`.
 
-HTTP `blackbox serve` returns **raw views** without the envelope.
+HTTP `blackbox serve` returns **raw views** without the CLI envelope (`/api/status`, `/api/handoff`, `/api/runs`, …).
+
+## MCP tools (`blackbox mcp`)
+
+JSON-RPC 2.0 over stdio. Protocol version `2024-11-05`.
+
+| Tool | Purpose |
+|---|---|
+| `blackbox_status` | Capture status + optional resume |
+| `blackbox_handoff` | Status + resume pack when attention needed |
+| `blackbox_postmortem` | Run summary |
+| `blackbox_context` | Resume pack |
+| `blackbox_runs` | List runs |
+| `blackbox_search` | FTS/search |
+| `blackbox_doctor` | Store health |
+
+Example Claude Desktop / client config:
+
+```json
+{
+  "mcpServers": {
+    "blackbox": {
+      "command": "blackbox",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+## Auto-resume
+
+When `capture.auto_resume = true` (default) or `BLACKBOX_AUTO_RESUME=1`:
+
+1. On launch, if sticky state has a failed/cancelled last run, write `.blackbox/RESUME.md` + `RESUME.json`
+2. Set env: `BLACKBOX_RESUME_FILE`, `BLACKBOX_RESUME_RUN_ID`, `BLACKBOX_RESUME_HINT`
+3. Prepend a compact resume preamble to Claude `-p` / Codex `exec` prompts when present
+
+Disable: `BLACKBOX_AUTO_RESUME=0`, config `auto_resume = false`, or `blackbox run --no-auto-resume`.
 
 ---
 

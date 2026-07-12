@@ -1,0 +1,112 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: blackbox-x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            artifact: blackbox-aarch64-unknown-linux-gnu
+          - os: macos-13
+            target: x86_64-apple-darwin
+            artifact: blackbox-x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: blackbox-aarch64-apple-darwin
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }} --bin blackbox
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN="target/${{ matrix.target }}/release/blackbox"
+          if [ ! -f "$BIN" ]; then
+            BIN="target/${{ matrix.target }}/release/blackbox.exe"
+          fi
+          STAGE="dist/${{ matrix.artifact }}"
+          mkdir -p "$STAGE"
+          cp "$BIN" "$STAGE/blackbox"
+          chmod +x "$STAGE/blackbox" || true
+          cp README.md LICENSE-MIT LICENSE-APACHE CHANGELOG.md "$STAGE/" 2>/dev/null || true
+          (
+            cd dist
+            tar -czf "${{ matrix.artifact }}.tar.gz" "${{ matrix.artifact }}"
+          )
+          echo "packed dist/${{ matrix.artifact }}.tar.gz"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/${{ matrix.artifact }}.tar.gz
+
+  release:
+    name: github release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect tarballs
+        run: |
+          mkdir -p dist
+          find artifacts -name '*.tar.gz' -exec cp {} dist/ \;
+          ls -la dist
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          body: |
+            ## Install
+
+            ```bash
+            # From crates.io
+            cargo install blackbox-recorder
+
+            # Or binary (linux x86_64 example)
+            curl -fsSL https://raw.githubusercontent.com/wanazhar/blackbox/master/install.sh | sh
+            ```
+
+            Binary: `blackbox` · crate: `blackbox-recorder`
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

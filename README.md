@@ -7,7 +7,7 @@
 | **CLI / lib name** | `blackbox` |
 | **crates.io package** | [`blackbox-recorder`](https://crates.io/crates/blackbox-recorder) |
 | **License** | MIT OR Apache-2.0 |
-| **Status** | **0.4.0** — daily driver: enable → auto-capture → fail → `handoff` / resume pack → next agent |
+| **Status** | **1.0.0** — leave it on: enable → capture → fail → handoff / MCP / auto-resume → next agent |
 
 ## Why use it
 
@@ -16,55 +16,44 @@
 - **Payloads as blobs** — large content lives under content-addressed files; events keep short previews.
 - **Project-local store** — `.blackbox/blackbox.db` + `.blackbox/blobs/` (override with `--store` / `BLACKBOX_DB`).
 - **Safe share defaults** — `export` and `sync push` redact unless you pass `--no-redact`.
+- **Agent-native** — `--json`, `handoff`, MCP tools, auto-resume after failures.
 
 ## Install
 
 ```bash
-# From crates.io (after publish)
+# Binary (Linux / macOS) — no Rust required
+curl -fsSL https://raw.githubusercontent.com/wanazhar/blackbox/master/install.sh | sh
+
+# From crates.io
 cargo install blackbox-recorder
 
 # From this repo
 cargo install --path .
-# or
-cargo build --release
-./target/release/blackbox --help
 ```
 
-Requires a recent stable Rust toolchain. Linux and macOS are the primary targets.
-
 ```bash
-blackbox doctor   # verify store path + health
+blackbox doctor
+blackbox --version
 ```
 
-## Quick start
+## 1.0 quick start (daily driver)
 
 ```bash
-# Record anything
-blackbox run -- echo "hello"
+# Once per project
+cd your-project
+blackbox enable --install-shell   # open a new shell after this
 
-# Record an agent (Claude / Codex get stream-json injection when safe)
+# Work normally — wrap-listed harnesses are recorded
+claude -p "fix the login bug"
+
+# Next agent / session start
+blackbox handoff --json
+# or: blackbox mcp  → tool blackbox_handoff
+
+# Explicit capture still works
 blackbox run --name "fix-login" -- claude -p "fix the login bug"
-blackbox run -- codex exec "..."
-
-# Inspect
-blackbox runs
-blackbox show latest
-blackbox timeline latest --semantic
-blackbox inspect latest latest
-blackbox analyze latest
-
-# Search, live tail, TUI
-blackbox search "bash ls"
-blackbox watch latest
-blackbox show latest --tui
-
-# Export (redacted by default)
-blackbox export latest > trace.jsonl
-blackbox export latest --format html > report.html
-blackbox export latest --format portable > run.json   # v2: includes blobs
-
-# Import a portable archive
-blackbox import run.json
+blackbox postmortem latest --json
+blackbox context latest --for-resume --json
 ```
 
 ## Workflows
@@ -90,7 +79,9 @@ blackbox sync pull --s3 s3://my-bucket/blackbox/
 ```bash
 blackbox serve
 # → http://127.0.0.1:7788
-# → http://127.0.0.1:7788/watch          (latest run, live SSE)
+# → http://127.0.0.1:7788/watch
+# → http://127.0.0.1:7788/status  ·  /handoff
+# → http://127.0.0.1:7788/api/status  ·  /api/handoff
 # Optional: --token / BLACKBOX_SERVE_TOKEN
 ```
 
@@ -122,32 +113,23 @@ blackbox run -- codex exec "..."
 blackbox fork latest --launch
 ```
 
-### Daily-driver loop (leave it on)
+### MCP + auto-resume
 
 ```bash
-# Once per project — writes config + agent instructions; installs shell wrappers
-blackbox enable --install-shell
+# MCP stdio server for Claude Desktop / Cursor / etc.
+blackbox mcp
 
-# Agents at session start (machine-readable; embeds resume pack on failure)
-blackbox status --json
-blackbox handoff --json
+# Auto-resume is on by default after enable.
+# Next launch after a failure injects .blackbox/RESUME.md into the prompt/env.
+BLACKBOX_AUTO_RESUME=0 blackbox run -- claude -p "..."   # opt out
+blackbox run --no-auto-resume -- ...
 
-# After a failure — one-command postmortem / resume pack
-blackbox postmortem latest --json
-blackbox context latest --for-resume --json --max-tokens 4000
+# Retention (auto_apply=true by default)
+blackbox gc
+blackbox gc --apply --yes
 
-# Explicit capture still works
-blackbox run --name "fix-login" -- claude -p "fix the login bug"
-
-# Opt out for one shell session
-export BLACKBOX_OFF=1
-
-# Retention (auto_apply=true by default after enable; manual still available)
-blackbox gc                  # dry-run
-blackbox gc --apply --yes    # destructive
-
-# Trajectory compare
 blackbox diff runA runB --trajectory
+export BLACKBOX_OFF=1   # disable ambient capture for this shell
 ```
 
 ### Shell completions
@@ -165,9 +147,11 @@ blackbox completions zsh  > "${fpath[1]}/_blackbox"
   .blackbox/
     blackbox.db      # runs, events, checkpoints, FTS
     blobs/           # sha256 content-addressed payloads
-    config.toml      # enabled, wrap list, retention
+    config.toml      # enabled, wrap list, retention, auto_resume
     state.json       # sticky last-run / attention (agent handoff)
     AGENT.md         # instructions for coding agents
+    RESUME.md        # last auto-resume pack (when attention)
+    RESUME.json
 ```
 
 | Priority | Path |
@@ -208,6 +192,7 @@ Export and sync push are **redacted by default**. Pass `--no-redact` only for pr
 | `enable` / `disable` | Opt-in project capture; `--install-shell` manages rc wrappers |
 | `status` | Project status: enabled, last run, attention, next commands |
 | `handoff` | Agent handoff: status + resume pack when attention is needed |
+| `mcp` | MCP stdio server (status/handoff/postmortem/context/runs/search/doctor) |
 | `postmortem` / `summary` | One-command failure/success postmortem |
 | `context` | Bounded resume pack (`--for-resume`) |
 | `gc` | Retention dry-run / apply from config (auto_apply after runs by default) |

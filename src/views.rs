@@ -77,7 +77,7 @@ pub struct ToolCallSummary {
     pub tool_name: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ResumeView {
     pub available: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -160,7 +160,7 @@ pub struct AnalyzeView {
     pub persisted: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct StructuredErrorView {
     pub sequence: u64,
     pub error_type: String,

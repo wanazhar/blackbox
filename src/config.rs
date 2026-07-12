@@ -179,14 +179,34 @@ pub struct CaptureConfig {
     /// Tags applied to ambient (maybe-run) captures.
     #[serde(default = "default_auto_tags")]
     pub default_tags: Vec<String>,
+    /// When true (or BLACKBOX_AUTO_RESUME=1), inject prior failure resume pack
+    /// into the next harness launch (prompt + env).
+    #[serde(default = "default_true")]
+    pub auto_resume: bool,
+    /// Max tokens for auto-resume packs written under `.blackbox/RESUME.*`.
+    #[serde(default = "default_resume_tokens")]
+    pub resume_max_tokens: u32,
 }
 
 fn default_wrap() -> Vec<String> {
-    vec!["claude".into(), "codex".into()]
+    vec![
+        "claude".into(),
+        "codex".into(),
+        "aider".into(),
+        "cursor".into(),
+        "cursor-agent".into(),
+        "gemini".into(),
+        "opencode".into(),
+        "grok".into(),
+    ]
 }
 
 fn default_auto_tags() -> Vec<String> {
     vec!["auto".into()]
+}
+
+fn default_resume_tokens() -> u32 {
+    4000
 }
 
 impl Default for CaptureConfig {
@@ -194,6 +214,8 @@ impl Default for CaptureConfig {
         Self {
             wrap: default_wrap(),
             default_tags: default_auto_tags(),
+            auto_resume: true,
+            resume_max_tokens: default_resume_tokens(),
         }
     }
 }

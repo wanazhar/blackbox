@@ -60,6 +60,9 @@ async fn records_tool_events_from_fake_claude() {
         tag: vec!["integration".into()],
         insecure_raw: false,
         no_redact: false,
+        no_auto_resume: false,
+        auto_resume: false,
+        resume_injection: None,
         command: vec![claude.to_string_lossy().into(), "-p".into(), "hi".into()],
     };
 
@@ -140,6 +143,9 @@ async fn redacts_secret_in_command_argv() {
         tag: vec![],
         insecure_raw: false,
         no_redact: false,
+        no_auto_resume: false,
+        auto_resume: false,
+        resume_injection: None,
         command: vec![
             "sh".into(),
             "-c".into(),
@@ -181,6 +187,9 @@ async fn tags_persist_on_run() {
         tag: vec!["alpha".into(), "beta".into()],
         insecure_raw: false,
         no_redact: false,
+        no_auto_resume: false,
+        auto_resume: false,
+        resume_injection: None,
         command: vec!["true".into()],
     };
     let run = supervisor.execute(&args).await.unwrap();
@@ -218,6 +227,9 @@ async fn portable_export_import_round_trip() {
         tag: vec!["orig".into()],
         insecure_raw: false,
         no_redact: false,
+        no_auto_resume: false,
+        auto_resume: false,
+        resume_injection: None,
         command: vec!["sh".into(), "-c".into(), "echo portable-payload".into()],
     };
     let run = supervisor.execute(&args).await.unwrap();
@@ -258,6 +270,9 @@ async fn export_jsonl_transcript_and_delete_run() {
         tag: vec![],
         insecure_raw: false,
         no_redact: false,
+        no_auto_resume: false,
+        auto_resume: false,
+        resume_injection: None,
         command: vec!["sh".into(), "-c".into(), "echo export-ok".into()],
     };
     let run = supervisor.execute(&args).await.unwrap();

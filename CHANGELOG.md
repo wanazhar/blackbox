@@ -4,6 +4,27 @@ All notable changes to **blackbox** are documented here.
 
 ## [Unreleased]
 
+## [1.0.0] — 2026-07-12
+
+First major release: leave-on daily driver for Linux/macOS agent workflows.
+
+### Agent surface
+- **MCP stdio server**: `blackbox mcp` — tools for status, handoff, postmortem, context, runs, search, doctor
+- **Auto-resume** (default on): inject prior failure context into the next harness launch (`BLACKBOX_RESUME_*`, `.blackbox/RESUME.md`); `--no-auto-resume` / `BLACKBOX_AUTO_RESUME=0` to disable
+- Expanded default wrap list: claude, codex, aider, cursor, cursor-agent, gemini, opencode, grok
+
+### Dashboard
+- `GET /status`, `/handoff` HTML pages
+- `GET /api/status`, `/api/handoff` JSON (same Views as CLI)
+
+### Install
+- `install.sh` one-liner for GitHub Release binaries
+- `.github/workflows/release.yml` multi-target builds (linux/mac, x86_64/aarch64)
+
+### Docs
+- 1.0 quickstart in README
+- Agent skill snippet: `docs/skills/blackbox.md`
+
 ## [0.4.0] — 2026-07-12
 
 Close the daily-driver loop: install once, fail once, next agent resumes without human paste.

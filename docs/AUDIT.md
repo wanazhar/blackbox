@@ -23,7 +23,7 @@
 
 **Verified against actual source code at commit `c795244`.** All CRITICAL and HIGH items from both rounds are confirmed fixed. Remaining items are MEDIUM performance/cleanup and test coverage gaps.
 
-**Current test count:** 207 unit tests + 5 integration tests + 11 critical-path tests, all passing.
+**Current test count:** 240 unit tests + 5 integration tests + 11 critical-path tests, all passing.
 
 **Architecture assessment:** Well-designed with clean module boundaries, consistent `anyhow::Result` error handling, and solid redaction-by-default posture. WAL + busy_timeout SQLite setup is correct. Bounded channels provide natural backpressure. Content-addressed blobs enable deduplication.
 
@@ -136,18 +136,19 @@ All 10 performance items (P-01..P-10) are acceptable at current scale.
 |--------|-------|--------|
 | core/event.rs | 10 | ✅ |
 | core/blob.rs | 9 | ✅ |
-| core/checkpoint.rs | 3 | **✅ Added this session** |
-| core/run.rs | 7 | **✅ Added this session** |
+| core/checkpoint.rs | 3 | ✅ |
+| core/run.rs | 7 | ✅ |
 | terminal/ansi.rs | 16 | ✅ |
-| terminal/recorder.rs | 0 | ❌ Still needs tests |
-| capture/git.rs | 0 | ❌ Still needs tests |
-| capture/process.rs | 0 | ❌ Still needs tests |
-| capture/pty.rs | 0 | ❌ Still needs tests |
+| terminal/coalesce.rs | 5 | ✅ |
+| terminal/recorder.rs | 9 | **✅ Fixed this session** |
+| capture/git.rs | 9 | **✅ Fixed this session** |
+| capture/process.rs | 8 | **✅ Fixed this session** |
+| capture/pty.rs | 7 | **✅ Fixed this session** |
 | redaction/scanner.rs | 12 | ✅ |
 | redaction/environment.rs | 16 | ✅ |
 | redaction/export.rs | 8 | ✅ |
-| cli.rs | 5 | ⏳ Minimal |
-| ui/ | 0 | ⏳ TUI hard to test |
+| cli.rs | 5 | ⏳ Minimal (2009 lines, 22 subcommands) |
+| ui/ | 0 | ⏳ TUI hard to unit test |
 
 ---
 
@@ -156,7 +157,7 @@ All 10 performance items (P-01..P-10) are acceptable at current scale.
 | Priority | Area | Items |
 |----------|------|-------|
 | Low | R2-M5 | Vec<char> allocation in ansi.rs (performance) |
-| Low | Test coverage | recorder.rs, git.rs, process.rs, pty.rs — 0 tests each |
+| Low | Test coverage | cli.rs, ui/ — TUI hard to unit test |
 | Low | Performance | P-01..P-10 (acceptable at current scale) |
 | Low | Concurrency | CONC-01,02,03,05,06 (unlikely to manifest) |
 
@@ -179,3 +180,4 @@ All 10 performance items (P-01..P-10) are acceptable at current scale.
 | `b0c9176` | R2-M19 spawn_blocking git | **This session** |
 | `0c4c5de` | R2-M3 indexes + CONC-07 | **This session** |
 | `c795244` | core::checkpoint + run tests | **This session** |
+| `40c026a` | ProcessCapture + PtyCapture tests (8 + 7) | **This session** |

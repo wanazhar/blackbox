@@ -33,9 +33,11 @@ impl AnsiNormalizer {
         let text = String::from_utf8_lossy(raw);
         let mut result = String::with_capacity(text.len());
         // Collect into Vec<char> for O(1) random access during ANSI sequence
-        // parsing. This allocates O(n) heap per PTY chunk. If this becomes a
-        // bottleneck, refactor the loop to track byte offsets directly and
-        // decode chars on demand — see R2-M5 for context.
+        // parsing. Each PTY chunk is typically a few KB, so the allocation is
+        // bounded and acceptable for a single-user CLI tool. If profiling shows
+        // this to be a bottleneck, refactor to a byte-level state machine
+        // that tracks ANSI state instead of using indexed char access — see
+        // R2-M5 for context.
         let chars: Vec<char> = text.chars().collect();
         let len = chars.len();
         let mut i = 0;

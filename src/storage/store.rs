@@ -8,11 +8,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-/// In-memory trace store for development and testing.
+/// In-memory [`TraceStore`] for unit tests and ephemeral experiments.
 ///
-/// The MVP will replace this with SQLite + content-addressed blob storage.
-/// This scaffold allows experimentation with the event model before
-/// committing to the storage backend.
+/// Production paths use [`crate::storage::sqlite::SqliteStore`] with
+/// on-disk content-addressed blobs under `.blackbox/blobs/`.
 pub struct InMemoryStore {
     runs: Arc<RwLock<HashMap<String, Run>>>,
     events: Arc<RwLock<HashMap<String, Vec<TraceEvent>>>>,

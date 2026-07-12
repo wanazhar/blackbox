@@ -1,14 +1,33 @@
+# Build
 /target
+**/*.rs.bk
+
+# Editor / OS
 *.swp
 *.swo
 *~
 .DS_Store
+.idea/
+.vscode/
+
+# blackbox runtime store (project-local + legacy)
+.blackbox/
+blackbox.db
 *.db
 *.db-journal
 *.db-wal
 *.db-shm
-blackbox.db
-.blackbox/
 runs/
 blobs/
+
+# Logs / temp
 *.log
+*.tmp
+/tmp/
+
+# Local agent / tool config (not part of the product)
+.devin/
+
+# Cargo package scratch
+/package/
+*.crate

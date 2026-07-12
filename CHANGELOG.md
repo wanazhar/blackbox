@@ -45,7 +45,14 @@ First solid release candidate: a flight recorder you’d actually run on a machi
 
 ### Packaging
 - crates.io package name: **`blackbox-recorder`** (binary/lib still `blackbox`)
-- See `docs/PUBLISH.md`
+- Dual license files: `LICENSE-MIT`, `LICENSE-APACHE`
+- Publish checklist: `docs/PUBLISH.md`
+- Runtime artifacts (`.blackbox/`, `*.db*`) gitignored and excluded from the crate package
+
+### Docs
+- Release-oriented README (install-first, workflows, accurate 0.1.0 status)
+- Contributor map in `AGENTS.md`; quality bar + next work in `docs/ROADMAP.md`
+- Historical Phase 1–3 plan archived under `docs/history/`
 
 ### Quality
 - Integration tests (fake Claude, secrets, export, tags, portable, sync)

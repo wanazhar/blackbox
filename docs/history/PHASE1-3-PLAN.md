@@ -1,3 +1,16 @@
+# Historical: Phase 1–3 implementation plan
+
+> **Archived.** This document records the original scaffold → working-product attack plan.
+> It is **not** the current roadmap. Product status lives in:
+>
+> - [`README.md`](../../README.md) — user-facing overview
+> - [`docs/ROADMAP.md`](../ROADMAP.md) — quality bar and remaining work
+> - [`CHANGELOG.md`](../../CHANGELOG.md) — what shipped
+>
+> Kept for archaeology only. Do not treat task lists below as open work.
+
+---
+
 # Phase 1 — Black-box Recorder
 
 Goal: make `blackbox run -- codex` (or any command) actually work — launch it, capture

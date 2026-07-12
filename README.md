@@ -1,229 +1,220 @@
 # blackbox
 
-**Flight recorder for AI-agent runs.** Launch any command under PTY supervision, capture terminal + git + filesystem events into SQLite, inspect timelines, export safe traces.
+**Flight recorder for AI-agent runs.** Supervise any command under a PTY, capture terminal output plus git/filesystem/process context into SQLite, then inspect, search, export, and sync traces — with secrets redacted by default.
 
-## Quality bar
+| | |
+|---|---|
+| **CLI / lib name** | `blackbox` |
+| **crates.io package** | [`blackbox-recorder`](https://crates.io/crates/blackbox-recorder) |
+| **License** | MIT OR Apache-2.0 |
+| **Status** | **0.1.0** — usable end-to-end recorder (capture → inspect → export → sync) |
 
-- **Secrets never at rest by default** — argv, env, and terminal output are redacted before write. Use `--insecure-raw` only when you deliberately want raw bytes.
-- **True timelines** — one event writer owns monotonic sequence numbers.
-- **Payloads as blobs** — terminal content lives in content-addressed files; metadata holds previews only.
+## Why use it
+
+- **Secrets stay out of the store** — argv, env, and terminal output are redacted before write. Opt into raw capture only with `--insecure-raw`.
+- **Honest timelines** — a single `EventWriter` owns monotonic sequence numbers.
+- **Payloads as blobs** — large content lives under content-addressed files; events keep short previews.
 - **Project-local store** — `.blackbox/blackbox.db` + `.blackbox/blobs/` (override with `--store` / `BLACKBOX_DB`).
-- **Safe export default** — `export` redacts unless you pass `--no-redact`.
+- **Safe share defaults** — `export` and `sync push` redact unless you pass `--no-redact`.
 
-See [docs/ROADMAP.md](docs/ROADMAP.md) for the full attack plan.
-
-## Install / build
+## Install
 
 ```bash
+# From crates.io (after publish)
+cargo install blackbox-recorder
+
 # From this repo
+cargo install --path .
+# or
 cargo build --release
 ./target/release/blackbox --help
-
-# Install onto PATH
-cargo install --path .
-
-# Publish-ready package name: blackbox-recorder (binary still `blackbox`)
-cargo package
-cargo publish --dry-run
-# real publish: see docs/PUBLISH.md (needs CARGO_REGISTRY_TOKEN)
-
-# Optional: shell completions via clap help
-blackbox --help
-blackbox doctor   # verify store path + health
 ```
 
-> **crates.io:** The package is published as **`blackbox-recorder`** while the
-> CLI binary and Rust library path remain `blackbox` (`use blackbox::…`).
+Requires a recent stable Rust toolchain. Linux and macOS are the primary targets.
+
+```bash
+blackbox doctor   # verify store path + health
+```
 
 ## Quick start
 
 ```bash
-# Record a command
+# Record anything
 blackbox run -- echo "hello"
 
-# List runs
+# Record an agent (Claude / Codex get stream-json injection when safe)
+blackbox run --name "fix-login" -- claude -p "fix the login bug"
+blackbox run -- codex exec "..."
+
+# Inspect
 blackbox runs
-
-# Text summary + tool/error overview
 blackbox show latest
-
-# Semantic timeline (hide bookkeeping noise)
 blackbox timeline latest --semantic
-
-# Inspect an event (by id, sequence, or "latest")
 blackbox inspect latest latest
-blackbox inspect latest 3
-
-# Analysis passes
 blackbox analyze latest
 
-# Re-redact historical traces that still hold secrets
-blackbox scrub --dry-run
-blackbox scrub
-blackbox scrub --gc          # also delete orphaned blob files
-
-# Fork + resume harness under observation
-blackbox fork latest --launch
+# Search, live tail, TUI
+blackbox search "bash ls"
+blackbox watch latest
+blackbox show latest --tui
 
 # Export (redacted by default)
 blackbox export latest > trace.jsonl
-blackbox export latest --no-redact   # dangerous
-
-# Interactive TUI
-blackbox show latest --tui
-
-# Reconstructed transcripts
-blackbox show latest --transcript
-blackbox show latest --tools
-
-# Filter timeline
-blackbox timeline latest --kind tool
-blackbox timeline latest --source Tool --semantic
-
-# Delete / purge
-blackbox rm latest
-blackbox purge --pending --yes          # drop unused fork stubs
-blackbox purge --keep 20 --yes --gc     # keep 20 newest; reclaim blobs
-
-# Search across runs
-blackbox search "bash ls"
-blackbox search tool.call --limit 20
-
-# Live-tail a run (great while an agent is still going)
-blackbox watch latest
-blackbox watch latest --idle-exit 30
-
-# HTML report (client-side filter + dark mode)
 blackbox export latest --format html > report.html
+blackbox export latest --format portable > run.json   # v2: includes blobs
 
-# Portable share (v2 JSON + embedded blobs) + import
-blackbox export latest --format portable > run.json
-blackbox import run.json                 # new ids + tag "imported"
-blackbox import run.json --keep-ids      # fail if id exists
+# Import a portable archive
+blackbox import run.json
+```
 
-# Multi-machine sync
-# 1) Shared folder (NFS / rsync / Dropbox)
+## Workflows
+
+### Share and multi-machine sync
+
+```bash
+# Shared folder (NFS / rsync / Dropbox)
 blackbox sync push --dir /shared/bb-sync
 blackbox sync pull --dir /shared/bb-sync
 
-# 2) HTTP to another blackbox serve
-# machine A: blackbox serve --token secret --bind 0.0.0.0:7788
+# HTTP: machine A runs `blackbox serve --token secret --bind 0.0.0.0:7788`
 blackbox sync push --remote http://host-a:7788 --token secret
 blackbox sync pull --remote http://host-a:7788 --token secret
 
-# 3) S3 (uses AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_REGION)
+# S3 (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_REGION)
 blackbox sync push --s3 s3://my-bucket/blackbox/
 blackbox sync pull --s3 s3://my-bucket/blackbox/
-
-# Tags
-blackbox run --tag ci --tag smoke -- echo hi
-blackbox tag latest --add important
-blackbox runs --tag important --show-tags
-blackbox tags
-
-# Stats dashboard
-blackbox stats
-
-# Shell completions (fish example)
-blackbox completions fish > ~/.config/fish/completions/blackbox.fish
-# bash:  blackbox completions bash > /etc/bash_completion.d/blackbox
-# zsh:   blackbox completions zsh > "${fpath[1]}/_blackbox"
-
-# Local web dashboard (FTS-backed search + live SSE)
-blackbox serve
-# → http://127.0.0.1:7788
-# → http://127.0.0.1:7788/watch          (latest run, live)
-# → http://127.0.0.1:7788/runs/<id>/live
-
-# Optional shared secret (also BLACKBOX_SERVE_TOKEN)
-blackbox serve --token "s3cret"
-# clients: Authorization: Bearer s3cret   or  ?token=s3cret
-
-blackbox serve --bind 127.0.0.1:9000 --reindex
-
-# Rebuild full-text index
-blackbox doctor --reindex
 ```
 
-### Record an agent
+### Local web dashboard
 
 ```bash
-blackbox run --name "fix" -- claude -p "fix the login bug"
-# or
-blackbox run -- codex ...
+blackbox serve
+# → http://127.0.0.1:7788
+# → http://127.0.0.1:7788/watch          (latest run, live SSE)
+# Optional: --token / BLACKBOX_SERVE_TOKEN
 ```
 
-If the harness prints stream-json / NDJSON tool calls, blackbox parses them into `tool.call` events.
+### Housekeeping
+
+```bash
+blackbox scrub --dry-run          # re-redact historical residue
+blackbox scrub --gc               # scrub + drop orphan blobs
+blackbox rm latest
+blackbox purge --keep 20 --yes --gc
+blackbox stats
+blackbox tag latest --add important
+blackbox runs --tag important --show-tags
+```
+
+### Agent capture tips
+
+```bash
+# Claude print mode → injects --output-format stream-json --verbose
+blackbox run -- claude -p "fix the login bug"
+
+# Force machine JSON for interactive launches
+BLACKBOX_FORCE_JSON=1 blackbox run -- claude
+
+# Codex exec → injects --json
+blackbox run -- codex exec "..."
+
+# Fork + re-launch harness under observation
+blackbox fork latest --launch
+```
+
+### Shell completions
+
+```bash
+blackbox completions fish > ~/.config/fish/completions/blackbox.fish
+blackbox completions bash > /etc/bash_completion.d/blackbox
+blackbox completions zsh  > "${fpath[1]}/_blackbox"
+```
 
 ## Storage layout
 
 ```
-.project/
+<project>/
   .blackbox/
-    blackbox.db      # runs, events, checkpoints
+    blackbox.db      # runs, events, checkpoints, FTS
     blobs/           # sha256 content-addressed payloads
 ```
 
-Legacy: if `./blackbox.db` already exists, it is used (migration path).
+| Priority | Path |
+|---|---|
+| 1 | `--store` / `BLACKBOX_DB` |
+| 2 | Legacy `./blackbox.db` **if that file already exists** |
+| 3 | Default: `.blackbox/blackbox.db` + `.blackbox/blobs/` |
+
+> **Tip:** Prefer the default `.blackbox/` layout. A leftover `./blackbox.db` in the project root steals resolution (legacy migration). Delete it (or move it under `.blackbox/`) if you want the modern layout.
+
+Add to your project `.gitignore`:
+
+```
+.blackbox/
+blackbox.db
+*.db-wal
+*.db-shm
+```
 
 ## Security
 
 | Mode | Behavior |
 |---|---|
-| default | Redact secrets in terminal/env/argv before persist |
-| `--insecure-raw` | Also store raw PTY bytes as blobs |
-| `--no-redact` | Disable all redaction (do not use with secrets) |
+| **default** | Redact secrets in terminal / env / argv before persist |
+| `--insecure-raw` | Also store raw PTY bytes as blobs (dangerous) |
+| `--no-redact` | Disable redaction on capture/export/sync (do not use with secrets) |
 
-Export is **redacted by default**. Pass `--no-redact` only for private offline analysis.
+Export and sync push are **redacted by default**. Pass `--no-redact` only for private offline analysis.
+
+`blackbox serve` binds to `127.0.0.1` by default. Use `--token` (or `BLACKBOX_SERVE_TOKEN`) before exposing it on a network interface.
 
 ## Commands
 
 | Command | Purpose |
 |---|---|
-| `run` | Supervise a command, capture events |
-| `runs` | List runs |
-| `show` | Text summary (or `--tui`) |
-| `timeline` | Event list (`--semantic` filters noise) |
+| `run` | Supervise a command; capture events |
+| `runs` | List runs (`--tag`, `--status`, `--limit`) |
+| `show` | Run summary (`--tui`, `--transcript`, `--tools`) |
+| `timeline` | Event list (`--semantic`, `--kind`, `--source`) |
 | `inspect` | Event detail + blob content |
-| `diff` | Compare two runs (status, tools, kinds) |
+| `diff` | Compare two runs |
 | `analyze` | Error / side-effect / correlation passes |
-| `scrub` | Re-redact secrets already stored at rest |
-| `doctor` | Diagnose store path, blob dir, secret residue |
-| `rm` | Delete runs (`--gc` reclaims blobs) |
-| `purge` | Bulk delete by policy (`--keep`, `--pending`, `--failed`) |
-| `search` | Search runs/events by free text |
+| `search` | Full-text search (FTS5) across runs |
 | `watch` | Live-tail events for a run |
-| `tags` / `tag` | List tags; add/remove tags on a run |
-| `stats` | Aggregate store dashboard |
-| `completions` | Generate bash/zsh/fish completions |
-| `serve` | Local web dashboard (browse, search, **live SSE**, optional token) |
-| `export` | JSONL / HTML / portable |
+| `export` | JSONL / HTML / portable (redacted by default) |
 | `import` | Import portable JSON archive (v1/v2 + blobs) |
-| `sync` | Push/pull runs to a shared directory |
-| `replay` | Timeline, mock tools, sandbox (seeded workspace) |
-| `fork` | Branch a new run record from a checkpoint |
-
-### Agent capture tips
-
-```bash
-# Claude print mode → blackbox injects --output-format stream-json --verbose
-blackbox run -- claude -p "fix the login bug"
-
-# Force machine JSON even for interactive launches
-BLACKBOX_FORCE_JSON=1 blackbox run -- claude
-
-# Codex exec → injects --json
-blackbox run -- codex exec "..."
-```
+| `sync` | Push/pull via `--dir`, `--remote`, or `--s3` |
+| `serve` | Local web dashboard + JSON/SSE API |
+| `replay` | Timeline, mock tools, sandbox |
+| `fork` | Branch a run record; optional `--launch` |
+| `scrub` | Re-redact at-rest secrets (`--gc` for blobs) |
+| `doctor` | Store path, health, optional `--reindex` |
+| `rm` / `purge` | Delete runs; reclaim blobs |
+| `tags` / `tag` | List tags; add/remove on a run |
+| `stats` | Aggregate store dashboard |
+| `completions` | bash / zsh / fish completions |
 
 ## Development
 
 ```bash
 cargo test
-cargo clippy
+cargo clippy --all-targets -- -D warnings
 cargo fmt
+cargo build --release
 ```
 
-## Status
+CI runs clippy (`-D warnings`) and the full test suite on `master` / `main`. See [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
-Working recorder with P0 trust fixes. Replay/sandbox and full harness fidelity are still maturing — see the roadmap.
+Contributor-oriented architecture notes: [`AGENTS.md`](AGENTS.md).  
+Quality bar and remaining work: [`docs/ROADMAP.md`](docs/ROADMAP.md).  
+Release checklist: [`docs/PUBLISH.md`](docs/PUBLISH.md).  
+Changelog: [`CHANGELOG.md`](CHANGELOG.md).
+
+## License
+
+Licensed under either of:
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT license ([LICENSE-MIT](LICENSE-MIT))
+
+at your option.

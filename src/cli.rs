@@ -203,7 +203,7 @@ async fn cmd_runs() -> anyhow::Result<()> {
 
 async fn cmd_show(args: &ShowArgs) -> anyhow::Result<()> {
     tracing::info!(run_id = %args.run_id, "show run");
-    anyhow::bail!("run display not yet implemented")
+    crate::ui::tui::run_tui(Some(&args.run_id)).await
 }
 
 async fn cmd_timeline(args: &TimelineArgs) -> anyhow::Result<()> {

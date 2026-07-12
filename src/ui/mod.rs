@@ -3,6 +3,7 @@ pub mod timeline_v;
 pub mod event;
 pub mod diff;
 pub mod process_tree;
+pub mod tui;
 
 use ratatui::layout::Rect;
 use ratatui::Frame;

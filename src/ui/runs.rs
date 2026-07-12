@@ -8,7 +8,7 @@ use ratatui::Frame;
 
 /// Runs list panel — shows all recorded runs.
 pub struct RunsView {
-    runs: Vec<Run>,
+    pub runs: Vec<Run>,
     state: ListState,
 }
 

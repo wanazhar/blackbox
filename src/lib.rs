@@ -1,0 +1,11 @@
+pub mod cli;
+pub mod core;
+pub mod capture;
+pub mod storage;
+pub mod terminal;
+pub mod analysis;
+pub mod adapters;
+pub mod replay;
+pub mod redaction;
+pub mod ui;
+pub mod run;

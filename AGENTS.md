@@ -4,7 +4,7 @@
 
 **blackbox** is a Rust flight recorder and debugger for AI-agent runs. It launches agent commands (Claude, Codex, or generic), captures terminal output and structured events via PTY supervision, stores traces in SQLite + content-addressed blobs, and provides CLI, TUI, and a local web dashboard for inspection.
 
-**Quality bar:** secrets never at rest by default; monotonic event sequencing; payloads as blobs; project-local `.blackbox/` store; safe export/sync defaults. See `docs/ROADMAP.md` and `README.md`.
+**Quality bar:** secrets never at rest by default; monotonic event sequencing; payloads as blobs; project-local `.blackbox/` store; safe export/sync defaults; agent handoff via `status`/`handoff` after failures. See `docs/ROADMAP.md` and `README.md`.
 
 **Package naming:** crates.io package is `blackbox-recorder`; the binary and library crate path remain `blackbox`.
 

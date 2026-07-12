@@ -7,7 +7,7 @@
 | **CLI / lib name** | `blackbox` |
 | **crates.io package** | [`blackbox-recorder`](https://crates.io/crates/blackbox-recorder) |
 | **License** | MIT OR Apache-2.0 |
-| **Status** | **0.3.0** — local flight recorder: enable → capture → postmortem → `--json` → trajectory / resume packs |
+| **Status** | **0.4.0** — daily driver: enable → auto-capture → fail → `handoff` / resume pack → next agent |
 
 ## Why use it
 
@@ -122,29 +122,32 @@ blackbox run -- codex exec "..."
 blackbox fork latest --launch
 ```
 
-### Daily-driver ambient capture (0.2)
+### Daily-driver loop (leave it on)
 
 ```bash
-# Once per project
-blackbox enable
-# Paste the printed fish/bash functions into your shell rc
+# Once per project — writes config + agent instructions; installs shell wrappers
+blackbox enable --install-shell
 
-# After a failure — one-command postmortem (also --json)
-blackbox postmortem latest
+# Agents at session start (machine-readable; embeds resume pack on failure)
+blackbox status --json
+blackbox handoff --json
+
+# After a failure — one-command postmortem / resume pack
 blackbox postmortem latest --json
-
-# Machine-readable inspect for agents
-blackbox runs --json
-blackbox show latest --json
-blackbox doctor --json
-
-# Retention dry-run from .blackbox/config.toml
-blackbox gc
-blackbox gc --apply --yes   # destructive
-
-# Agent feedback (0.3)
-blackbox diff runA runB --trajectory
 blackbox context latest --for-resume --json --max-tokens 4000
+
+# Explicit capture still works
+blackbox run --name "fix-login" -- claude -p "fix the login bug"
+
+# Opt out for one shell session
+export BLACKBOX_OFF=1
+
+# Retention (auto_apply=true by default after enable; manual still available)
+blackbox gc                  # dry-run
+blackbox gc --apply --yes    # destructive
+
+# Trajectory compare
+blackbox diff runA runB --trajectory
 ```
 
 ### Shell completions
@@ -162,6 +165,9 @@ blackbox completions zsh  > "${fpath[1]}/_blackbox"
   .blackbox/
     blackbox.db      # runs, events, checkpoints, FTS
     blobs/           # sha256 content-addressed payloads
+    config.toml      # enabled, wrap list, retention
+    state.json       # sticky last-run / attention (agent handoff)
+    AGENT.md         # instructions for coding agents
 ```
 
 | Priority | Path |
@@ -199,9 +205,12 @@ Export and sync push are **redacted by default**. Pass `--no-redact` only for pr
 |---|---|
 | `run` | Supervise a command; capture events |
 | `maybe-run` | Project-gated ambient capture (shell wrappers) |
-| `enable` / `disable` | Opt-in project ambient capture + shell snippets |
+| `enable` / `disable` | Opt-in project capture; `--install-shell` manages rc wrappers |
+| `status` | Project status: enabled, last run, attention, next commands |
+| `handoff` | Agent handoff: status + resume pack when attention is needed |
 | `postmortem` / `summary` | One-command failure/success postmortem |
-| `gc` | Retention dry-run / apply from config |
+| `context` | Bounded resume pack (`--for-resume`) |
+| `gc` | Retention dry-run / apply from config (auto_apply after runs by default) |
 | `runs` | List runs (`--tag`, `--status`, `--limit`) |
 | `show` | Run summary (`--tui`, `--transcript`, `--tools`) |
 | `timeline` | Event list (`--semantic`, `--kind`, `--source`) |

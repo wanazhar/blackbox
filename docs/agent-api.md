@@ -42,6 +42,23 @@ Error:
 | `diff A B --trajectory` | Human trajectory report |
 | `context <run> --for-resume --json` | Bounded resume pack (`--max-tokens`) |
 
+### 0.4 additions
+
+| Command | Notes |
+|---|---|
+| `status --json` | Project capture status, sticky last run, `attention`, `next_commands` |
+| `handoff --json` | Same as status with `resume_pack` attached when attention is needed (`--always` forces) |
+| `enable --install-shell` | Idempotent managed shell wrappers; `--uninstall-shell` removes them |
+| `run --json` | Includes `attention_needed` + `handoff_hint` after completion |
+
+**Agent session start (recommended):**
+
+```bash
+blackbox handoff --json
+```
+
+If `data.attention.needed` is true, use `data.resume_pack` (or `next_commands`) before retrying work. Sticky state lives at `.blackbox/state.json`; human-readable agent notes at `.blackbox/AGENT.md`.
+
 HTTP `blackbox serve` returns **raw views** without the envelope.
 
 ---

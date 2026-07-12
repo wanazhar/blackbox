@@ -98,6 +98,32 @@ pub enum Command {
     Gc(GcArgs),
     /// Bounded resume context pack for agents
     Context(ContextArgs),
+    /// Project status: capture, last run, attention (agent-friendly)
+    Status(StatusArgs),
+    /// Agent handoff: status + resume pack when attention is needed
+    Handoff(HandoffArgs),
+}
+
+#[derive(Args, Default)]
+pub struct StatusArgs {
+    /// Attach a resume pack when attention is needed
+    #[arg(long)]
+    pub resume: bool,
+
+    /// Approximate max tokens for an attached resume pack
+    #[arg(long, default_value_t = 4000)]
+    pub max_tokens: usize,
+}
+
+#[derive(Args, Default)]
+pub struct HandoffArgs {
+    /// Approximate max tokens for the resume pack
+    #[arg(long, default_value_t = 4000)]
+    pub max_tokens: usize,
+
+    /// Always attach resume pack for last run (even if succeeded)
+    #[arg(long)]
+    pub always: bool,
 }
 
 #[derive(Args)]
@@ -376,11 +402,15 @@ pub struct MaybeRunArgs {
 
 #[derive(Args, Default)]
 pub struct EnableArgs {
-    /// Also print shell functions to install (default always prints snippets)
+    /// Install managed shell wrappers into rc / fish conf.d (idempotent)
     #[arg(long)]
     pub install_shell: bool,
 
-    /// Shell for snippets: fish, bash, zsh (default: detect / bash)
+    /// Remove managed shell wrappers from rc / fish conf.d
+    #[arg(long)]
+    pub uninstall_shell: bool,
+
+    /// Shell for snippets/install: fish, bash, zsh (default: detect)
     #[arg(long)]
     pub shell: Option<String>,
 }
@@ -570,6 +600,8 @@ impl Cli {
             Command::Postmortem(args) | Command::Summary(args) => cmd_summary(self, args).await,
             Command::Gc(args) => cmd_gc(self, args).await,
             Command::Context(args) => cmd_context(self, args).await,
+            Command::Status(args) => cmd_status(self, args).await,
+            Command::Handoff(args) => cmd_handoff(self, args).await,
         }
     }
 }
@@ -717,14 +749,72 @@ async fn cmd_run(cli: &Cli, args: &RunArgs) -> anyhow::Result<()> {
         "run command"
     );
 
+    let discovery = discover(cli).ok();
     let store = open_store(cli)?;
     let store: Arc<dyn TraceStore> = Arc::new(store);
     let policy = CapturePolicy {
         insecure_raw: args.insecure_raw,
         redact: !args.no_redact,
     };
-    let supervisor = RunSupervisor::new(store).with_policy(policy);
+    let supervisor = RunSupervisor::new(Arc::clone(&store)).with_policy(policy);
     let run = supervisor.execute(args).await?;
+
+    // Sticky project state for agent handoff (best-effort).
+    if let Some(ref disc) = discovery {
+        let mut state = crate::state::ProjectState::load(&disc.paths.root)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        state.record_run(&run);
+        if let Err(e) = state.save(&disc.paths.root) {
+            tracing::warn!(error = %e, "failed to write .blackbox/state.json");
+        }
+        // Opportunistic retention when configured.
+        if let Some(ref cfg) = disc.config {
+            if cfg.retention.auto_apply {
+                if let Err(e) =
+                    apply_retention_quiet(store.as_ref(), &cfg.retention, &disc.paths.blob_dir)
+                        .await
+                {
+                    tracing::warn!(error = %e, "auto retention failed");
+                }
+            }
+        }
+    }
+
+    if cli.json {
+        #[derive(serde::Serialize)]
+        struct RunDone {
+            run_id: String,
+            short_id: String,
+            exit_code: Option<i32>,
+            status: String,
+            attention_needed: bool,
+            handoff_hint: String,
+        }
+        let attention = matches!(
+            run.status,
+            crate::core::run::RunStatus::Failed | crate::core::run::RunStatus::Cancelled
+        );
+        return output::emit_ok(
+            "run",
+            &RunDone {
+                run_id: run.id.clone(),
+                short_id: short_id(&run.id).to_string(),
+                exit_code: run.exit_code,
+                status: format!("{:?}", run.status).to_lowercase(),
+                attention_needed: attention,
+                handoff_hint: if attention {
+                    format!(
+                        "blackbox handoff --json  # or: blackbox context {} --for-resume --json",
+                        short_id(&run.id)
+                    )
+                } else {
+                    "blackbox status --json".into()
+                },
+            },
+        );
+    }
 
     println!(
         "Run {} completed with exit code {:?}",
@@ -735,6 +825,35 @@ async fn cmd_run(cli: &Cli, args: &RunArgs) -> anyhow::Result<()> {
         if notes.contains("session:") {
             println!("  {}", notes);
         }
+    }
+    if matches!(
+        run.status,
+        crate::core::run::RunStatus::Failed | crate::core::run::RunStatus::Cancelled
+    ) {
+        println!(
+            "  handoff: blackbox handoff --json  (or: blackbox context {} --for-resume --json)",
+            short_id(&run.id)
+        );
+    }
+    Ok(())
+}
+
+/// Best-effort retention apply used after runs (no stdout noise).
+async fn apply_retention_quiet(
+    store: &dyn TraceStore,
+    cfg: &crate::config::RetentionConfig,
+    blob_dir: &std::path::Path,
+) -> anyhow::Result<()> {
+    use crate::retention::plan_deletions;
+    use crate::scrub::gc_unreferenced_blobs;
+
+    let runs = store.list_runs().await?;
+    let candidates = plan_deletions(&runs, cfg);
+    for c in &candidates {
+        let _ = store.delete_run(&c.id).await?;
+    }
+    if cfg.auto_gc_blobs && !candidates.is_empty() {
+        let _ = gc_unreferenced_blobs(store, blob_dir, false).await?;
     }
     Ok(())
 }
@@ -2511,6 +2630,8 @@ async fn cmd_maybe_run(cli: &Cli, args: &MaybeRunArgs) -> anyhow::Result<()> {
 async fn cmd_enable(cli: &Cli, args: &EnableArgs) -> anyhow::Result<()> {
     use crate::config::BlackboxConfig;
     use crate::maybe_run::{default_enable_config, shell_snippet_bash, shell_snippet_fish};
+    use crate::shell_install::{self, ShellKind};
+    use crate::state::write_agent_instructions;
 
     let cwd = std::env::current_dir()?;
     // Prefer existing project root if any; else cwd
@@ -2536,6 +2657,10 @@ async fn cmd_enable(cli: &Cli, args: &EnableArgs) -> anyhow::Result<()> {
         default_enable_config()
     };
     cfg.enabled = true;
+    // Daily-driver defaults for new / re-enabled projects
+    if cfg.retention.keep_runs == 0 {
+        cfg.retention.keep_runs = 50;
+    }
     cfg.write_to_path(&config_path)?;
     // Ensure dirs for store
     discovery.paths.ensure_dirs().ok();
@@ -2546,14 +2671,30 @@ async fn cmd_enable(cli: &Cli, args: &EnableArgs) -> anyhow::Result<()> {
     };
     paths.ensure_dirs()?;
 
+    let agent_md = write_agent_instructions(&bb)?;
+
     let wrap = cfg.capture.wrap.clone();
-    let shell = if let Some(ref s) = args.shell {
-        s.as_str()
-    } else if std::env::var("SHELL").unwrap_or_default().contains("fish") {
-        "fish"
+    let shell_kind = if let Some(ref s) = args.shell {
+        ShellKind::parse(s)
+            .ok_or_else(|| anyhow::anyhow!("unknown --shell {s:?}; expected fish, bash, or zsh"))?
     } else {
-        "bash"
+        ShellKind::detect()
     };
+
+    let mut shell_install_result: Option<shell_install::InstallResult> = None;
+    let mut shell_uninstall_path: Option<std::path::PathBuf> = None;
+
+    if args.uninstall_shell {
+        let home = std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .ok_or_else(|| anyhow::anyhow!("HOME not set; cannot uninstall shell wrappers"))?;
+        shell_uninstall_path = shell_install::uninstall_shell(shell_kind, &home)?;
+    } else if args.install_shell {
+        let home = std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .ok_or_else(|| anyhow::anyhow!("HOME not set; cannot install shell wrappers"))?;
+        shell_install_result = Some(shell_install::install_shell(shell_kind, &wrap, &home)?);
+    }
 
     if cli.json {
         #[derive(serde::Serialize)]
@@ -2562,7 +2703,20 @@ async fn cmd_enable(cli: &Cli, args: &EnableArgs) -> anyhow::Result<()> {
             project_root: String,
             config_path: String,
             wrap: Vec<String>,
+            agent_instructions: String,
+            shell: String,
+            shell_install: Option<String>,
+            shell_install_path: Option<String>,
+            shell_uninstall_path: Option<String>,
+            next: Vec<String>,
         }
+        let (shell_install, shell_install_path) = match &shell_install_result {
+            Some(r) => (
+                Some(r.action.to_string()),
+                Some(r.path.display().to_string()),
+            ),
+            None => (None, None),
+        };
         return output::emit_ok(
             "enable",
             &En {
@@ -2570,6 +2724,22 @@ async fn cmd_enable(cli: &Cli, args: &EnableArgs) -> anyhow::Result<()> {
                 project_root: project_root.display().to_string(),
                 config_path: config_path.display().to_string(),
                 wrap: wrap.clone(),
+                agent_instructions: agent_md.display().to_string(),
+                shell: shell_kind.as_str().into(),
+                shell_install,
+                shell_install_path,
+                shell_uninstall_path: shell_uninstall_path
+                    .as_ref()
+                    .map(|p| p.display().to_string()),
+                next: vec![
+                    "blackbox status --json".into(),
+                    "blackbox handoff --json".into(),
+                    if shell_install_result.is_some() {
+                        "open a new shell (or source your rc)".into()
+                    } else {
+                        "blackbox enable --install-shell".into()
+                    },
+                ],
             },
         );
     }
@@ -2577,16 +2747,32 @@ async fn cmd_enable(cli: &Cli, args: &EnableArgs) -> anyhow::Result<()> {
     println!("Enabled blackbox for {}", project_root.display());
     println!("  config: {}", config_path.display());
     println!("  wrap:   {}", wrap.join(", "));
+    println!("  agent:  {}", agent_md.display());
+    println!("  tip:    blackbox status --json   ·   blackbox handoff --json");
     println!();
-    println!("Add shell wrappers (paste into your rc file):");
-    println!();
-    if shell == "fish" {
-        print!("{}", shell_snippet_fish(&wrap));
+
+    if args.uninstall_shell {
+        match shell_uninstall_path {
+            Some(p) => println!("Removed managed shell wrappers from {}", p.display()),
+            None => println!("No managed shell wrappers found to remove."),
+        }
+    } else if let Some(r) = shell_install_result {
+        println!(
+            "Shell wrappers {} for {} → {}",
+            r.action,
+            r.shell.as_str(),
+            r.path.display()
+        );
+        println!("  open a new shell (or source that file) so wrappers take effect");
     } else {
-        print!("{}", shell_snippet_bash(&wrap));
-    }
-    if args.install_shell {
-        println!("# --install-shell: auto-edit of shell rc is not performed in 0.2; paste above.");
+        println!("Shell wrappers (paste into rc, or re-run with --install-shell):");
+        println!();
+        if shell_kind == ShellKind::Fish {
+            print!("{}", shell_snippet_fish(&wrap));
+        } else {
+            print!("{}", shell_snippet_bash(&wrap));
+        }
+        println!("Install automatically: blackbox enable --install-shell");
     }
     println!("Disable with: blackbox disable");
     println!("Record only when enabled + basename in wrap list.");
@@ -2623,6 +2809,66 @@ async fn cmd_disable(cli: &Cli) -> anyhow::Result<()> {
     }
     println!("Disabled ambient capture ({})", config_path.display());
     println!("Shell functions may remain; maybe-run will passthrough.");
+    Ok(())
+}
+
+async fn cmd_status(cli: &Cli, args: &StatusArgs) -> anyhow::Result<()> {
+    use crate::status::{build_status, format_status_text, StatusOptions};
+
+    let discovery = discover(cli)?;
+    // Open store when it exists; status still works without runs.
+    let store = if discovery.paths.db_path.exists() {
+        Some(open_store(cli)?)
+    } else {
+        None
+    };
+    let store_ref = store.as_ref().map(|s| s as &dyn TraceStore);
+    let view = build_status(
+        &discovery,
+        store_ref,
+        StatusOptions {
+            include_resume: args.resume,
+            max_tokens: args.max_tokens,
+            force_resume: false,
+        },
+    )
+    .await?;
+
+    if cli.json {
+        return output::emit_ok("status", &view);
+    }
+    print!("{}", format_status_text(&view));
+    Ok(())
+}
+
+async fn cmd_handoff(cli: &Cli, args: &HandoffArgs) -> anyhow::Result<()> {
+    use crate::status::{build_status, format_status_text, StatusOptions};
+
+    let discovery = discover(cli)?;
+    let store = if discovery.paths.db_path.exists() {
+        Some(open_store(cli)?)
+    } else {
+        None
+    };
+    let store_ref = store.as_ref().map(|s| s as &dyn TraceStore);
+    let view = build_status(
+        &discovery,
+        store_ref,
+        StatusOptions {
+            include_resume: true,
+            max_tokens: args.max_tokens,
+            force_resume: args.always,
+        },
+    )
+    .await?;
+
+    if cli.json {
+        return output::emit_ok("handoff", &view);
+    }
+    print!("{}", format_status_text(&view));
+    if view.resume_pack.is_none() && !view.attention.needed {
+        println!("  (no resume pack — nothing needs attention; pass --always to force)");
+    }
     Ok(())
 }
 
@@ -2941,6 +3187,8 @@ mod tests {
             "summary",
             "gc",
             "context",
+            "status",
+            "handoff",
         ];
         for sub in all_subs {
             let result = Cli::command().try_get_matches_from(["blackbox", sub, "--help"]);

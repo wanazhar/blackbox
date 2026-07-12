@@ -4,6 +4,21 @@ All notable changes to **blackbox** are documented here.
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-07-12
+
+Close the daily-driver loop: install once, fail once, next agent resumes without human paste.
+
+### Agent handoff
+- `blackbox status` / `blackbox handoff` with `--json` (attention + next commands)
+- Sticky `.blackbox/state.json` after every run (last run / last failure / attention)
+- Failed runs print a handoff hint; `handoff` embeds `context --for-resume` pack
+- `.blackbox/AGENT.md` written on `enable` so coding agents know the contract
+
+### Zero-friction ops
+- Real `enable --install-shell` / `--uninstall-shell` (managed markers in bash/zsh rc or fish conf.d)
+- Retention `auto_apply = true` by default; opportunistic GC after runs
+- Shell integration status scans all shells (not just `$SHELL`)
+
 ## [0.3.0] — 2026-07-12
 
 Single product release: daily-driver capture **and** agent feedback loop (one version, one story).

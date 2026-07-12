@@ -205,8 +205,8 @@ pub struct RetentionConfig {
     pub max_age_days: Option<u32>,
     #[serde(default = "default_true")]
     pub auto_gc_blobs: bool,
-    /// When true, apply retention automatically after runs (0.4; off for 0.2).
-    #[serde(default)]
+    /// When true, apply retention automatically after runs (best-effort).
+    #[serde(default = "default_true")]
     pub auto_apply: bool,
 }
 
@@ -220,7 +220,7 @@ impl Default for RetentionConfig {
             keep_runs: 50,
             max_age_days: Some(30),
             auto_gc_blobs: true,
-            auto_apply: false,
+            auto_apply: true,
         }
     }
 }

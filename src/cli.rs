@@ -1711,7 +1711,7 @@ async fn cmd_scrub(cli: &Cli, args: &ScrubArgs) -> anyhow::Result<()> {
 
     if args.gc {
         let refs = collect_referenced_blobs(store.as_ref()).await?;
-        let n = gc_orphan_blobs(&blob_dir, &refs, args.dry_run)?;
+        let n = gc_orphan_blobs(&blob_dir, &refs, args.dry_run).await?;
         println!(
             "{}orphan blobs: {} ({})",
             if args.dry_run { "[dry-run] " } else { "" },
@@ -1921,7 +1921,7 @@ async fn cmd_rm(cli: &Cli, args: &RmArgs) -> anyhow::Result<()> {
 
     if args.gc {
         let refs = collect_referenced_blobs(store.as_ref()).await?;
-        let n = gc_orphan_blobs(&blob_dir, &refs, false)?;
+        let n = gc_orphan_blobs(&blob_dir, &refs, false).await?;
         println!("gc: removed {n} orphan blob file(s)");
     } else {
         println!("Tip: blackbox scrub --gc  to reclaim unreferenced blobs");
@@ -1982,7 +1982,7 @@ async fn cmd_purge(cli: &Cli, args: &PurgeArgs) -> anyhow::Result<()> {
 
     if args.gc {
         let refs = collect_referenced_blobs(store.as_ref()).await?;
-        let n = gc_orphan_blobs(&blob_dir, &refs, false)?;
+        let n = gc_orphan_blobs(&blob_dir, &refs, false).await?;
         println!("gc: removed {n} orphan blob file(s)");
     }
     Ok(())

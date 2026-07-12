@@ -2,6 +2,8 @@
 
 use std::sync::Arc;
 
+use anyhow::Context;
+
 use crate::core::blob::BlobReference;
 use crate::core::event::TraceEvent;
 use crate::redaction::scanner::SecretScanner;
@@ -221,34 +223,40 @@ pub async fn collect_referenced_blobs(
 }
 
 /// Delete blob files on disk that are not referenced. Returns count deleted.
-pub fn gc_orphan_blobs(
+pub async fn gc_orphan_blobs(
     blob_dir: &std::path::Path,
     referenced: &std::collections::HashSet<String>,
     dry_run: bool,
 ) -> anyhow::Result<usize> {
-    if !blob_dir.is_dir() {
-        return Ok(0);
-    }
-    let mut deleted = 0usize;
-    for entry in std::fs::read_dir(blob_dir)? {
-        let entry = entry?;
-        let name = entry.file_name().to_string_lossy().to_string();
-        // Content-addressed keys are 64-char hex
-        if name.len() != 64 || !name.chars().all(|c| c.is_ascii_hexdigit()) {
-            continue;
+    let blob_dir = blob_dir.to_path_buf();
+    let referenced = referenced.clone();
+    tokio::task::spawn_blocking(move || {
+        if !blob_dir.is_dir() {
+            return Ok(0usize);
         }
-        if !referenced.contains(&name) {
-            let should_count = if dry_run {
-                true
-            } else {
-                std::fs::remove_file(entry.path()).is_ok()
-            };
-            if should_count {
-                deleted += 1;
+        let mut deleted = 0usize;
+        for entry in std::fs::read_dir(&blob_dir)? {
+            let entry = entry?;
+            let name = entry.file_name().to_string_lossy().to_string();
+            // Content-addressed keys are 64-char hex
+            if name.len() != 64 || !name.chars().all(|c| c.is_ascii_hexdigit()) {
+                continue;
+            }
+            if !referenced.contains(&name) {
+                let should_count = if dry_run {
+                    true
+                } else {
+                    std::fs::remove_file(entry.path()).is_ok()
+                };
+                if should_count {
+                    deleted += 1;
+                }
             }
         }
-    }
-    Ok(deleted)
+        Ok(deleted)
+    })
+    .await
+    .context("spawn_blocking panicked for gc_orphan_blobs")?
 }
 
 #[cfg(test)]

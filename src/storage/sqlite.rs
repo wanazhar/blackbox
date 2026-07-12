@@ -17,7 +17,7 @@ use crate::core::run::Run;
 use crate::storage::TraceStore;
 
 /// Current schema version. Bump when migrations change.
-const SCHEMA_VERSION: i32 = 4;
+const SCHEMA_VERSION: i32 = 5;
 
 /// Default scanner for redacting secrets in FTS index content.
 static FTS_SCANNER: LazyLock<SecretScanner> =
@@ -233,6 +233,14 @@ impl SqliteStore {
                 .context("failed to record v4 version")?;
             tx.commit().context("failed to commit v4 migration")?;
         }
+        if current < 5 {
+            let tx = conn.unchecked_transaction()
+                .context("failed to start transaction for v5 migration")?;
+            Self::migrate_v5(&tx)?;
+            tx.execute("INSERT INTO schema_version (version) VALUES (5)", [])
+                .context("failed to record v5 version")?;
+            tx.commit().context("failed to commit v5 migration")?;
+        }
 
         // Ensure we never claim a higher version than we support
         let applied: i32 = conn
@@ -418,6 +426,17 @@ impl SqliteStore {
             offset += BATCH;
         }
         tracing::info!(count = total, "v4 FTS index rebuilt");
+        Ok(())
+    }
+
+    /// V5: Add missing indexes on events.parent_event_id and checkpoints.event_id.
+    fn migrate_v5(conn: &Connection) -> anyhow::Result<()> {
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_events_parent_event_id ON events(parent_event_id);
+             CREATE INDEX IF NOT EXISTS idx_checkpoints_event_id   ON checkpoints(event_id);",
+        )
+        .context("failed to create v5 indexes")?;
+        tracing::info!("v5: added missing indexes on events.parent_event_id and checkpoints.event_id");
         Ok(())
     }
 

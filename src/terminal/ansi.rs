@@ -32,12 +32,10 @@ impl AnsiNormalizer {
         // Convert to string first, preserving all non-ASCII content
         let text = String::from_utf8_lossy(raw);
         let mut result = String::with_capacity(text.len());
-        // NOTE: Collecting into Vec<char> allocates proportional to input length.
-        // A char-indexed iterator would avoid this, but the index arithmetic
-        // (i += 2, i += 1, etc.) makes Vec indexing the clearest correct path.
-        // TODO: Benchmark Vec<char> vs. byte-offset iterator for large inputs
-        // (>100 KB). If measurable savings exist, refactor the loop to work
-        // on byte offsets and decode chars on demand.
+        // Collect into Vec<char> for O(1) random access during ANSI sequence
+        // parsing. This allocates O(n) heap per PTY chunk. If this becomes a
+        // bottleneck, refactor the loop to track byte offsets directly and
+        // decode chars on demand — see R2-M5 for context.
         let chars: Vec<char> = text.chars().collect();
         let len = chars.len();
         let mut i = 0;

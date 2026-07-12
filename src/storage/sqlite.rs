@@ -23,6 +23,16 @@ const SCHEMA_VERSION: i32 = 4;
 static FTS_SCANNER: LazyLock<SecretScanner> =
     LazyLock::new(|| SecretScanner::new(RedactionConfig::default()));
 
+/// Pre-serialized event fields for batch inserts.
+/// Storing the serialized JSON strings avoids repeated unwrap_or_default()
+/// fallbacks inside the transaction hot path.
+struct SerializedEvent {
+    source: String,
+    status: String,
+    side_effect: String,
+    metadata: String,
+}
+
 
 /// SQLite-backed trace store with content-addressed blob storage.
 ///
@@ -692,6 +702,16 @@ impl TraceStore for SqliteStore {
 
     async fn insert_event(&self, event: &TraceEvent) -> anyhow::Result<()> {
         let event = event.clone();
+        // Serialize structured fields upfront so that serde_json errors
+        // propagate instead of silently corrupting data via unwrap_or_default().
+        let source_json = serde_json::to_string(&event.source)
+            .context("failed to serialize event.source")?;
+        let status_json = serde_json::to_string(&event.status)
+            .context("failed to serialize event.status")?;
+        let side_effect_json = serde_json::to_string(&event.side_effect)
+            .context("failed to serialize event.side_effect")?;
+        let metadata_json = serde_json::to_string(&event.metadata)
+            .context("failed to serialize event.metadata")?;
         {
             let conn = self.lock();
             // Wrap event INSERT + FTS upsert in a single transaction for atomicity.
@@ -705,17 +725,17 @@ impl TraceStore for SqliteStore {
                     event.run_id,
                     event.parent_event_id,
                     event.sequence as i64,
-                    serde_json::to_string(&event.source).unwrap_or_default(),
+                    source_json,
                     event.kind,
                     event.started_at.to_rfc3339(),
                     event.ended_at.map(|t| t.to_rfc3339()),
                     event.duration_ms.map(|d| d as i64),
-                    serde_json::to_string(&event.status).unwrap_or_default(),
-                    serde_json::to_string(&event.side_effect).unwrap_or_default(),
+                    status_json,
+                    side_effect_json,
                     event.input_blob,
                     event.output_blob,
                     event.error_blob,
-                    serde_json::to_string(&event.metadata).unwrap_or_default(),
+                    metadata_json,
                 ],
             )
             .context("failed to insert event")?;
@@ -765,6 +785,15 @@ impl TraceStore for SqliteStore {
 
     async fn update_event(&self, event: &TraceEvent) -> anyhow::Result<()> {
         let event = event.clone();
+        // Serialize structured fields upfront to propagate serde_json errors.
+        let source_json = serde_json::to_string(&event.source)
+            .context("failed to serialize event.source")?;
+        let status_json = serde_json::to_string(&event.status)
+            .context("failed to serialize event.status")?;
+        let side_effect_json = serde_json::to_string(&event.side_effect)
+            .context("failed to serialize event.side_effect")?;
+        let metadata_json = serde_json::to_string(&event.metadata)
+            .context("failed to serialize event.metadata")?;
         {
             let conn = self.lock();
             // Wrap event UPDATE + FTS upsert in a single transaction for atomicity.
@@ -780,17 +809,17 @@ impl TraceStore for SqliteStore {
                     event.run_id,
                     event.parent_event_id,
                     event.sequence as i64,
-                    serde_json::to_string(&event.source).unwrap_or_default(),
+                    source_json,
                     event.kind,
                     event.started_at.to_rfc3339(),
                     event.ended_at.map(|t| t.to_rfc3339()),
                     event.duration_ms.map(|d| d as i64),
-                    serde_json::to_string(&event.status).unwrap_or_default(),
-                    serde_json::to_string(&event.side_effect).unwrap_or_default(),
+                    status_json,
+                    side_effect_json,
                     event.input_blob,
                     event.output_blob,
                     event.error_blob,
-                    serde_json::to_string(&event.metadata).unwrap_or_default(),
+                    metadata_json,
                 ],
             )
             .context("failed to update event")?;
@@ -1007,12 +1036,29 @@ impl TraceStore for SqliteStore {
         if events.is_empty() {
             return Ok(());
         }
-        let events: Vec<TraceEvent> = events.to_vec();
+        // Pre-serialize structured fields so any serde_json errors are caught
+        // before the transaction begins, avoiding data corruption via unwrap_or_default().
+        let prepared: Vec<SerializedEvent> = events
+            .iter()
+            .map(|e| {
+                Ok(SerializedEvent {
+                    source: serde_json::to_string(&e.source)
+                        .context("failed to serialize event.source")?,
+                    status: serde_json::to_string(&e.status)
+                        .context("failed to serialize event.status")?,
+                    side_effect: serde_json::to_string(&e.side_effect)
+                        .context("failed to serialize event.side_effect")?,
+                    metadata: serde_json::to_string(&e.metadata)
+                        .context("failed to serialize event.metadata")?,
+                })
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
         {
             let conn = self.lock();
             let tx = conn.unchecked_transaction()
                 .context("failed to start transaction for insert_events_batch")?;
-            for event in &events {
+            for (i, event) in events.iter().enumerate() {
+                let s = &prepared[i];
                 tx.execute(
                     "INSERT INTO events (id, run_id, parent_event_id, sequence, source, kind, started_at, ended_at, duration_ms, status, side_effect, input_blob, output_blob, error_blob, metadata)
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
@@ -1021,17 +1067,17 @@ impl TraceStore for SqliteStore {
                         event.run_id,
                         event.parent_event_id,
                         event.sequence as i64,
-                        serde_json::to_string(&event.source).unwrap_or_default(),
+                        &s.source,
                         event.kind,
                         event.started_at.to_rfc3339(),
                         event.ended_at.map(|t| t.to_rfc3339()),
                         event.duration_ms.map(|d| d as i64),
-                        serde_json::to_string(&event.status).unwrap_or_default(),
-                        serde_json::to_string(&event.side_effect).unwrap_or_default(),
+                        &s.status,
+                        &s.side_effect,
                         event.input_blob,
                         event.output_blob,
                         event.error_blob,
-                        serde_json::to_string(&event.metadata).unwrap_or_default(),
+                        &s.metadata,
                     ],
                 )
                 .context("failed to insert event in batch")?;
@@ -1080,6 +1126,10 @@ fn event_search_body(event: &TraceEvent) -> String {
 }
 
 fn fts_upsert(conn: &Connection, event: &TraceEvent) -> anyhow::Result<()> {
+    let source_str = serde_json::to_string(&event.source)
+        .unwrap_or_else(|_| "Unknown".to_string());
+    let status_str = serde_json::to_string(&event.status)
+        .unwrap_or_else(|_| "Unknown".to_string());
     let tx = conn.unchecked_transaction()
         .context("failed to start transaction for FTS upsert")?;
     // Replace existing row for this event_id
@@ -1095,8 +1145,8 @@ fn fts_upsert(conn: &Connection, event: &TraceEvent) -> anyhow::Result<()> {
             event.id,
             event.run_id,
             event.kind,
-            serde_json::to_string(&event.source).unwrap_or_default(),
-            serde_json::to_string(&event.status).unwrap_or_default(),
+            source_str,
+            status_str,
             event_search_body(event),
         ],
     )
@@ -1107,6 +1157,10 @@ fn fts_upsert(conn: &Connection, event: &TraceEvent) -> anyhow::Result<()> {
 
 /// FTS upsert that operates within an existing transaction (no inner txn).
 fn fts_upsert_in_tx(tx: &rusqlite::Transaction, event: &TraceEvent) -> anyhow::Result<()> {
+    let source_str = serde_json::to_string(&event.source)
+        .unwrap_or_else(|_| "Unknown".to_string());
+    let status_str = serde_json::to_string(&event.status)
+        .unwrap_or_else(|_| "Unknown".to_string());
     // Replace existing row for this event_id
     tx.execute(
         "DELETE FROM events_fts WHERE event_id = ?1",
@@ -1120,8 +1174,8 @@ fn fts_upsert_in_tx(tx: &rusqlite::Transaction, event: &TraceEvent) -> anyhow::R
             event.id,
             event.run_id,
             event.kind,
-            serde_json::to_string(&event.source).unwrap_or_default(),
-            serde_json::to_string(&event.status).unwrap_or_default(),
+            source_str,
+            status_str,
             event_search_body(event),
         ],
     )

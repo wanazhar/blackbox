@@ -46,7 +46,13 @@ pub async fn export_portable(
     let keys = collect_blob_keys(events);
     let mut blobs = serde_json::Map::new();
     for key in keys {
-        let bref = BlobReference::new(key.clone(), 0);
+        let bref = match BlobReference::try_new(key.clone(), 0) {
+            Some(b) => b,
+            None => {
+                tracing::warn!(key = %key, "portable export: skipping blob with invalid key");
+                continue;
+            }
+        };
         match store.load_blob(&bref).await {
             Ok(bytes) => {
                 let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);

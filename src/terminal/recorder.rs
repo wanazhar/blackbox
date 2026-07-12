@@ -126,3 +126,98 @@ impl TerminalRecorder for RawRecorder {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn new_starts_empty() {
+        let r = RawRecorder::new();
+        assert_eq!(r.segment_count(), 0);
+        assert_eq!(r.total_bytes(), 0);
+    }
+
+    #[tokio::test]
+    async fn start_sets_run_id() {
+        let mut r = RawRecorder::new();
+        r.start("run-1").await.unwrap();
+        assert_eq!(r.run_id, Some("run-1".into()));
+        assert!(r.start.is_some());
+    }
+
+    #[tokio::test]
+    async fn record_output_adds_segment() {
+        let mut r = RawRecorder::new();
+        r.start("run-1").await.unwrap();
+        r.record_output(b"hello").await.unwrap();
+        assert_eq!(r.segment_count(), 1);
+        assert_eq!(r.total_bytes(), 5);
+        assert_eq!(r.segments[0].raw_data, b"hello");
+    }
+
+    #[tokio::test]
+    async fn write_input_adds_segment() {
+        let mut r = RawRecorder::new();
+        r.start("run-1").await.unwrap();
+        r.write_input(b"user typed this").await.unwrap();
+        assert_eq!(r.segment_count(), 1);
+        assert_eq!(r.total_bytes(), 15);
+    }
+
+    #[tokio::test]
+    async fn multiple_records_increment_counts() {
+        let mut r = RawRecorder::new();
+        r.start("run-1").await.unwrap();
+        r.record_output(b"a").await.unwrap();
+        r.record_output(b"bc").await.unwrap();
+        r.record_output(b"def").await.unwrap();
+        assert_eq!(r.segment_count(), 3);
+        assert_eq!(r.total_bytes(), 6);
+    }
+
+    #[tokio::test]
+    async fn stop_before_start_returns_empty() {
+        let mut r = RawRecorder::new();
+        let events = r.stop().await.unwrap();
+        assert!(events.is_empty());
+    }
+
+    #[tokio::test]
+    async fn stop_returns_metadata_event() {
+        let mut r = RawRecorder::new();
+        r.start("run-1").await.unwrap();
+        r.record_output(b"data").await.unwrap();
+        let events = r.stop().await.unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, "terminal.recording");
+        assert_eq!(events[0].metadata.get("segments").unwrap(), 1);
+        assert_eq!(events[0].metadata.get("bytes").unwrap(), 4);
+    }
+
+    #[tokio::test]
+    async fn eviction_removes_oldest_on_overflow() {
+        let mut r = RawRecorder::new();
+        r.start("run-1").await.unwrap();
+        // Fill up to MAX_SEGMENTS then add one more
+        for i in 0..MAX_SEGMENTS + 1 {
+            r.record_output(&[i as u8]).await.unwrap();
+        }
+        assert!(r.segment_count() <= MAX_SEGMENTS);
+        // Oldest segment should be gone; newest should remain
+        let first_remaining = r.segments.first().unwrap();
+        assert_eq!(first_remaining.raw_data[0], 1); // index 0 evicted, index 1 is now first
+    }
+
+    #[tokio::test]
+    async fn start_clears_previous_segments() {
+        let mut r = RawRecorder::new();
+        r.start("run-1").await.unwrap();
+        r.record_output(b"old data").await.unwrap();
+        assert_eq!(r.segment_count(), 1);
+        // Restart should clear
+        r.start("run-2").await.unwrap();
+        assert_eq!(r.segment_count(), 0);
+        assert_eq!(r.run_id, Some("run-2".into()));
+    }
+}
+

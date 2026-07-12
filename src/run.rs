@@ -9,6 +9,8 @@ use crate::capture::CaptureLayer;
 use crate::cli::RunArgs;
 use crate::core::event::{EventSource, EventStatus, TraceEvent};
 use crate::core::run::{Run, RunStatus};
+use crate::redaction::scanner::SecretScanner;
+use crate::redaction::RedactionConfig;
 use crate::storage::TraceStore;
 
 /// Supervises a child process in a PTY and captures trace events.
@@ -68,8 +70,6 @@ impl RunSupervisor {
         tracing::info!(pid = child_pid, "child process spawned");
 
         // Get the master's raw fd, then dup it for our reader.
-        // We dup BEFORE dropping pair so the slave fd is still valid
-        // during the dup.
         let master_fd = pair
             .master
             .as_raw_fd()
@@ -79,9 +79,7 @@ impl RunSupervisor {
             anyhow::bail!("failed to dup master fd");
         }
 
-        // Drop pair now — closes both slave and master fds in the parent.
-        // The child still has its own copies of the slave fds.
-        // Our reader_fd is an independent copy of the master.
+        // Drop pair — closes slave and master fds in parent.
         drop(pair);
 
         // ── 3. Start PtyCapture ──────────────────────────────────
@@ -93,7 +91,7 @@ impl RunSupervisor {
         // Set up a channel for PTY output bytes
         let (pty_out_tx, mut pty_out_rx) = mpsc::channel::<Vec<u8>>(256);
 
-        // Blocking task: read PTY master output using raw libc::read
+        // Blocking task: read PTY master output
         let reader_handle = tokio::task::spawn_blocking(move || {
             let mut buf = [0u8; 8192];
             loop {
@@ -101,7 +99,7 @@ impl RunSupervisor {
                     libc::read(reader_fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len())
                 };
                 if n <= 0 {
-                    break; // EOF or error
+                    break;
                 }
                 let data = buf[..n as usize].to_vec();
                 if pty_out_tx.blocking_send(data).is_err() {
@@ -110,23 +108,45 @@ impl RunSupervisor {
             }
         });
 
-        // Task: consume PTY output and persist events
+        // Task: consume PTY output, scan for secrets, and persist events
         let store_writer = self.store.clone();
         let run_id_writer = run_id.clone();
+        let scanner = SecretScanner::new(RedactionConfig::default());
         let writer_handle = tokio::spawn(async move {
             let mut segment_count: u64 = 0;
             while let Some(data) = pty_out_rx.recv().await {
                 segment_count += 1;
+                let text = String::from_utf8_lossy(&data).to_string();
+
+                // Scan for secrets in the output
+                let redactions = scanner.scan(&text, &format!("terminal:{}", segment_count), None);
+                let redacted_text = if redactions.is_empty() {
+                    text
+                } else {
+                    tracing::warn!(
+                        count = redactions.len(),
+                        segment = segment_count,
+                        "redacted secrets in terminal output"
+                    );
+                    scanner.redact(&text)
+                };
+
                 let mut ev =
                     TraceEvent::new(&run_id_writer, EventSource::Terminal, "terminal.output");
                 ev.sequence = segment_count;
                 ev.status = EventStatus::Success;
                 ev.metadata
                     .insert("bytes".to_string(), serde_json::json!(data.len()));
-                ev.metadata.insert(
-                    "raw".to_string(),
-                    serde_json::json!(String::from_utf8_lossy(&data).to_string()),
-                );
+                ev.metadata
+                    .insert("raw".to_string(), serde_json::json!(redacted_text));
+
+                if !redactions.is_empty() {
+                    ev.metadata.insert(
+                        "redactions".to_string(),
+                        serde_json::json!(redactions.len()),
+                    );
+                }
+
                 if let Err(e) = store_writer.insert_event(&ev).await {
                     tracing::error!(error = %e, "failed to persist terminal event");
                 }
@@ -140,9 +160,7 @@ impl RunSupervisor {
             .context("wait task panicked")?
             .context("failed to wait for child process")?;
 
-        // Wait for reader task to drain and finish.
-        // With pair dropped, once the child exits, all slave-side fds
-        // are closed, and the master side will get EIO → read returns 0.
+        // Wait for reader task to drain
         let _ = reader_handle.await;
 
         // Signal PtyCapture to stop

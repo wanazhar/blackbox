@@ -410,3 +410,129 @@ impl CaptureLayer for GitCapture {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper to create a temporary git repository with an initial commit.
+    fn setup_git_repo() -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().to_path_buf();
+
+    // Initialize git repo
+    std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(&root)
+        .output()
+        .expect("git init");
+
+    // Configure local user so commits work
+    std::process::Command::new("git")
+        .args(["config", "user.email", "test@blackbox"])
+        .current_dir(&root)
+        .output()
+        .expect("git config email");
+    std::process::Command::new("git")
+        .args(["config", "user.name", "Blackbox Test"])
+        .current_dir(&root)
+        .output()
+        .expect("git config name");
+
+    // Create initial commit
+    std::fs::write(root.join("README.md"), b"# Test").expect("write readme");
+    std::process::Command::new("git")
+        .args(["add", "README.md"])
+        .current_dir(&root)
+        .output()
+        .expect("git add");
+    std::process::Command::new("git")
+        .args(["commit", "-m", "initial"])
+        .current_dir(&root)
+        .output()
+        .expect("git commit");
+
+    (dir, root)
+}
+
+    #[tokio::test]
+    async fn is_git_repo_returns_true_for_git_dir() {
+        let (_dir, root) = setup_git_repo();
+        assert!(GitCapture::is_git_repo(&root).await);
+    }
+
+    #[tokio::test]
+    async fn is_git_repo_returns_false_for_plain_dir() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        assert!(!GitCapture::is_git_repo(dir.path()).await);
+    }
+
+    #[tokio::test]
+    async fn get_commit_hash_returns_hash_in_git_repo() {
+        let (_dir, root) = setup_git_repo();
+        let hash = GitCapture::get_commit_hash(root.to_str().unwrap()).await;
+        assert!(hash.is_some());
+        let hash = hash.unwrap();
+        assert_eq!(hash.len(), 40);
+        assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[tokio::test]
+    async fn get_commit_hash_returns_none_outside_git_repo() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let hash = GitCapture::get_commit_hash(dir.path().to_str().unwrap()).await;
+        assert!(hash.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_diff_returns_some_when_uncommitted_changes() {
+        let (_dir, root) = setup_git_repo();
+        std::fs::write(root.join("README.md"), b"# Modified").expect("write");
+        let diff = GitCapture::get_diff(root.to_str().unwrap()).await;
+        assert!(diff.is_some());
+    }
+
+    #[tokio::test]
+    async fn get_diff_returns_none_when_clean() {
+        let (_dir, root) = setup_git_repo();
+        let diff = GitCapture::get_diff(root.to_str().unwrap()).await;
+        assert!(diff.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_diff_cached_returns_some_when_staged() {
+        let (_dir, root) = setup_git_repo();
+        std::fs::write(root.join("new.txt"), b"new content").expect("write");
+        std::process::Command::new("git")
+            .args(["add", "new.txt"])
+            .current_dir(&root)
+            .output()
+            .expect("git add");
+        let diff = GitCapture::get_diff_cached(root.to_str().unwrap()).await;
+        assert!(diff.is_some());
+    }
+
+    #[tokio::test]
+    async fn capture_diff_returns_combined_diffs() {
+        let (_dir, root) = setup_git_repo();
+        std::fs::write(root.join("README.md"), b"# Modified").expect("write");
+        std::fs::write(root.join("new.txt"), b"staged").expect("write");
+        std::process::Command::new("git")
+            .args(["add", "new.txt"])
+            .current_dir(&root)
+            .output()
+            .expect("git add");
+        let diff = GitCapture::capture_diff(root.to_str().unwrap()).await;
+        assert!(diff.is_some());
+    }
+
+    #[tokio::test]
+    async fn new_creates_clean_state() {
+        let cap = GitCapture::new();
+        assert!(cap.cwd.is_none());
+        assert!(cap.store.is_none());
+        assert!(cap.commit_hash().is_none());
+        assert!(cap.before_diff_blob_key().is_none());
+        assert!(cap.after_diff_blob_key().is_none());
+    }
+}

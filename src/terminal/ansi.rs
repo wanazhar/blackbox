@@ -32,6 +32,9 @@ impl AnsiNormalizer {
         // Convert to string first, preserving all non-ASCII content
         let text = String::from_utf8_lossy(raw);
         let mut result = String::with_capacity(text.len());
+        // NOTE: Collecting into Vec<char> allocates proportional to input length.
+        // A char-indexed iterator would avoid this, but the index arithmetic
+        // (i += 2, i += 1, etc.) makes Vec indexing the clearest correct path.
         let chars: Vec<char> = text.chars().collect();
         let len = chars.len();
         let mut i = 0;
@@ -60,6 +63,27 @@ impl AnsiNormalizer {
                 if next == ']' {
                     i += 2;
                     // Skip until we find ST (ESC \ or BEL)
+                    while i < len {
+                        if chars[i] == '\x1B' && i + 1 < len && chars[i + 1] == '\\' {
+                            i += 2;
+                            break;
+                        }
+                        if chars[i] == '\x07' {
+                            i += 1;
+                            break;
+                        }
+                        i += 1;
+                    }
+                    continue;
+                }
+
+                // DCS (ESC P), APC (ESC _), PM (ESC ^), SOS (ESC X):
+                // These are variable-length sequences terminated by ST (ESC \).
+                // DCS can carry megabytes of sixel image data — we must not
+                // let the payload leak as visible text.
+                if next == 'P' || next == '_' || next == '^' || next == 'X' {
+                    i += 2;
+                    // Skip until ST (ESC \) or BEL — same logic as OSC
                     while i < len {
                         if chars[i] == '\x1B' && i + 1 < len && chars[i + 1] == '\\' {
                             i += 2;
@@ -126,6 +150,69 @@ mod tests {
         // OSC with ESC\ terminator
         let raw2 = b"\x1B]0;title\x1B\\hello";
         assert_eq!(normalizer.normalize(raw2), "hello");
+    }
+
+    #[test]
+    fn strips_dcs_sequences() {
+        let normalizer = AnsiNormalizer::new();
+        // DCS (ESC P) with sixel-like payload terminated by ST (ESC \)
+        let raw = b"before\x1BPsixel data here\x1B\\after";
+        assert_eq!(normalizer.normalize(raw), "beforeafter");
+        // DCS with BEL terminator
+        let raw2 = b"start\x1BPlong payload\x07end";
+        assert_eq!(normalizer.normalize(raw2), "startend");
+        // DCS with empty payload
+        let raw3 = b"a\x1BP\x1B\\b";
+        assert_eq!(normalizer.normalize(raw3), "ab");
+    }
+
+    #[test]
+    fn strips_apc_sequences() {
+        let normalizer = AnsiNormalizer::new();
+        // APC (ESC _) terminated by ST (ESC \)
+        let raw = b"before\x1B_apc payload\x1B\\after";
+        assert_eq!(normalizer.normalize(raw), "beforeafter");
+        // APC with BEL terminator
+        let raw2 = b"x\x1B_bel\x07y";
+        assert_eq!(normalizer.normalize(raw2), "xy");
+    }
+
+    #[test]
+    fn strips_pm_sequences() {
+        let normalizer = AnsiNormalizer::new();
+        // PM (ESC ^) terminated by ST (ESC \)
+        let raw = b"before\x1B^pm data\x1B\\after";
+        assert_eq!(normalizer.normalize(raw), "beforeafter");
+        // PM with BEL terminator
+        let raw2 = b"q\x1B^msg\x07r";
+        assert_eq!(normalizer.normalize(raw2), "qr");
+    }
+
+    #[test]
+    fn strips_sos_sequences() {
+        let normalizer = AnsiNormalizer::new();
+        // SOS (ESC X) terminated by ST (ESC \)
+        let raw = b"before\x1BXsos data\x1B\\after";
+        assert_eq!(normalizer.normalize(raw), "beforeafter");
+        // SOS with BEL terminator
+        let raw2 = b"m\x1BXpayload\x07n";
+        assert_eq!(normalizer.normalize(raw2), "mn");
+    }
+
+    #[test]
+    fn strips_dcs_multiline_payload() {
+        let normalizer = AnsiNormalizer::new();
+        // DCS containing newlines (sixel data can span lines)
+        let raw = b"\x1BPline1\nline2\nline3\x1B\\";
+        assert_eq!(normalizer.normalize(raw), "");
+    }
+
+    #[test]
+    fn strips_mixed_escape_sequences() {
+        let normalizer = AnsiNormalizer::new();
+        // Mix of CSI, OSC, DCS, and APC in one stream
+        let raw = b"\x1B[31mred\x1B[0m \x1B]0;title\x07normal \x1BPsixel\x1B\\ \x1B_apc\x1B\\done";
+        assert_eq!(normalizer.normalize(raw), "red normal  done");
     }
 
     #[test]

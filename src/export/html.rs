@@ -394,25 +394,19 @@ pub fn export_html(
     Ok(html)
 }
 
-fn event_detail(event: &TraceEvent, redact: bool) -> String {
-    let get_meta = |key: &str| -> Option<String> {
-        event.metadata.get(key).and_then(|v| v.as_str()).map(|s| {
-            if redact {
-                // Use the event's own metadata — redaction was already applied
-                // at capture time. For export, we rely on the caller having
-                // redacted the event before passing it here.
-                s.to_string()
-            } else {
-                s.to_string()
-            }
-        })
-    };
-    if let Some(p) = get_meta("preview") {
+fn event_detail(event: &TraceEvent, _redact: bool) -> String {
+    // Note: redaction is applied to the event before it reaches this function.
+    // The _redact parameter is kept for API compatibility but the caller
+    // is responsible for ensuring the event is already redacted.
+    if let Some(p) = event.metadata.get("preview").and_then(|v| v.as_str()) {
         return p.replace('\n', "⏎");
     }
-    if let Some(n) = get_meta("tool_name") {
-        let input = get_meta("input")
-            .map(|s| {
+    if let Some(n) = event.metadata.get("tool_name").and_then(|v| v.as_str()) {
+        let input = event
+            .metadata
+            .get("input")
+            .map(|v| {
+                let s = v.to_string();
                 if s.len() > 80 {
                     let end = s.floor_char_boundary(80);
                     format!("{}…", &s[..end])
@@ -423,8 +417,8 @@ fn event_detail(event: &TraceEvent, redact: bool) -> String {
             .unwrap_or_default();
         return format!("{n} {input}");
     }
-    if let Some(p) = get_meta("path") {
-        return p;
+    if let Some(p) = event.metadata.get("path").and_then(|v| v.as_str()) {
+        return p.to_string();
     }
     if let Some(c) = event.metadata.get("exit_code") {
         return format!("exit={c}");
@@ -449,6 +443,7 @@ fn html_escape(s: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+        .replace('\'', "&#x27;")
 }
 
 fn redact_run(val: &mut serde_json::Value) {

@@ -114,25 +114,28 @@ async fn scrub_event(
             _ => unreachable!(),
         };
         if let Some(key) = key_slot.clone() {
-            let bref = BlobReference::new(key.clone(), 0);
-            match store.load_blob(&bref).await {
-                Ok(data) => {
-                    // Prefer UTF-8 redaction; binary left alone unless it looks like text
-                    if let Ok(text) = std::str::from_utf8(&data) {
-                        let redacted = scanner.redact(text);
-                        if redacted.as_bytes() != data.as_slice() {
-                            dirty = true;
-                            report.blobs_rewritten += 1;
-                            if !dry_run {
-                                let new_ref = store.store_blob(redacted.as_bytes()).await?;
-                                *key_slot = Some(new_ref.key);
+            if let Some(bref) = BlobReference::try_new(key.clone(), 0) {
+                match store.load_blob(&bref).await {
+                    Ok(data) => {
+                        // Prefer UTF-8 redaction; binary left alone unless it looks like text
+                        if let Ok(text) = std::str::from_utf8(&data) {
+                            let redacted = scanner.redact(text);
+                            if redacted.as_bytes() != data.as_slice() {
+                                dirty = true;
+                                report.blobs_rewritten += 1;
+                                if !dry_run {
+                                    let new_ref = store.store_blob(redacted.as_bytes()).await?;
+                                    *key_slot = Some(new_ref.key);
+                                }
                             }
                         }
                     }
+                    Err(e) => {
+                        tracing::debug!(error = %e, blob = %key, "scrub: blob missing, skipping");
+                    }
                 }
-                Err(e) => {
-                    tracing::debug!(error = %e, blob = %key, "scrub: blob missing, skipping");
-                }
+            } else {
+                tracing::debug!(blob = %key, "scrub: invalid blob key, skipping");
             }
         }
     }

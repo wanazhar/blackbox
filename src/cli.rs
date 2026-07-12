@@ -1138,17 +1138,18 @@ async fn cmd_inspect(cli: &Cli, args: &InspectArgs) -> anyhow::Result<()> {
     if let Some(ref b) = event.output_blob {
         println!("  Out blob:  {}", b);
         // Try load and show preview
-        let bref = crate::core::blob::BlobReference::new(b.clone(), 0);
-        if let Ok(data) = store.load_blob(&bref).await {
-            let text = String::from_utf8_lossy(&data);
-            let show = if text.len() > 2000 {
-                let end = text.floor_char_boundary(2000);
-                format!("{}…\n  ({} bytes total)", &text[..end], data.len())
-            } else {
-                text.to_string()
-            };
-            println!("  ── blob content ──");
-            println!("{}", show);
+        if let Some(bref) = crate::core::blob::BlobReference::try_new(b.clone(), 0) {
+            if let Ok(data) = store.load_blob(&bref).await {
+                let text = String::from_utf8_lossy(&data);
+                let show = if text.len() > 2000 {
+                    let end = text.floor_char_boundary(2000);
+                    format!("{}…\n  ({} bytes total)", &text[..end], data.len())
+                } else {
+                    text.to_string()
+                };
+                println!("  ── blob content ──");
+                println!("{}", show);
+            }
         }
     }
     if let Some(ref b) = event.input_blob {

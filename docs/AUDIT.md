@@ -340,3 +340,161 @@
 1. Fix L-series findings
 2. Remove dead code (RunHandle, Panel trait, stubs)
 3. Document known limitations
+---
+
+# Round 2 Audit — Deep Verification & Edge Cases
+
+**Date:** 2026-07-12
+**Method:** 26 parallel deep-audit agents (verification, edge cases, security, performance, regressions)
+**Baseline:** 166 unit tests + 5 integration tests, all passing
+
+## Round 2 Summary
+
+| Category | New Findings | Severity |
+|----------|-------------|----------|
+| Storage (DeepStorage) | 15 | 2 CRITICAL, 5 HIGH, 5 MEDIUM, 3 LOW |
+| Terminal (DeepTerminal) | 10 | 2 HIGH, 3 MEDIUM, 5 LOW |
+| Adapters (DeepAdapters) | 10 | 2 HIGH, 3 MEDIUM, 5 LOW |
+| Capture (DeepCapture) | 10 | 1 crash, 2 resource leaks, 7 correctness |
+| Serve (DeepServe) | 8 | 2 HIGH, 4 MEDIUM, 2 LOW |
+| Export (DeepExport) | 9 | 1 HIGH, 4 MEDIUM, 4 LOW |
+| Analysis (DeepAnalysis) | 10 | 3 MEDIUM, 5 LOW, 2 INFO |
+| Replay (DeepReplay) | 12 | 1 CRITICAL, 3 HIGH, 4 MEDIUM, 4 LOW |
+| Sync (DeepSync) | 12 | 3 HIGH, 5 MEDIUM, 4 LOW |
+| Edge Cases (EdgeCaseAudit) | 16 | 3 HIGH, 10 MEDIUM, 3 LOW |
+| Security (SecurityDeepDive) | 6 | 1 HIGH, 2 MEDIUM, 2 LOW, 1 NEGLIGIBLE |
+| Performance (DeepPerformance) | 14 | All MEDIUM/LOW |
+| Config (AuditConfig) | 20+ | 3 MEDIUM, rest LOW/INFO |
+| Type Safety (AuditTypeSafety) | 12 | All LOW/INFO |
+| Dependencies (AuditDependency) | 14 | 4 HIGH, 6 MEDIUM, 4 LOW |
+| Build (AuditBuild) | 14 | 3 MEDIUM, rest LOW/INFO |
+| API (AuditAPI) | 18 | All LOW/INFO |
+| Test Quality (DeepTestQuality) | ~10 | All LOW |
+| **Round 2 Total** | **~200** | |
+
+## Round 2 CRITICAL Findings
+
+### R2-C1: Mutex Poisoning Kills Store Permanently
+- **File:** `src/storage/sqlite.rs:129-131`
+- **Impact:** A single panic anywhere under lock() poisons the mutex. Every subsequent operation fails with "sqlite lock poisoned". The SQLite connection is likely fine (WAL mode is crash-resilient). recover_stale_runs() also calls lock(), so a poisoned mutex during open() makes the database permanently unopenable.
+- **Fix:** Recover via `self.conn.lock().unwrap_or_else(|e| e.into_inner())` to get the guard even after poison.
+
+### R2-C2: Migrations Not Transactional — Partial Failure Corrupts Schema
+- **File:** `src/storage/sqlite.rs:150-163`
+- **Impact:** migrate() runs each version step as independent statements with no BEGIN/COMMIT. If migrate_v2 succeeds but the version INSERT fails, next open re-runs migrate_v2 on an already-rebuilt table. migrate_v2 does CREATE TABLE blobs_new + INSERT + DROP + ALTER — partial failure leaves blobs table missing entirely.
+- **Fix:** Wrap each migration step in BEGIN IMMEDIATE/COMMIT/ROLLBACK.
+
+### R2-C3: Sandbox Replay sh Passthrough Bypass
+- **File:** `src/replay/sandbox.rs`
+- **Impact:** is_readonly_command has an `sh -c` passthrough that allows arbitrary command execution, bypassing the sandbox policy.
+- **Fix:** Remove the sh passthrough or apply the same policy checks to the inner command.
+
+## Round 2 HIGH Findings
+
+### Storage
+| ID | File | Description |
+|----|------|-------------|
+| R2-H1 | `sqlite.rs:753-768` | FTS upsert not atomic — crash between DELETE and INSERT drops events from index |
+| R2-H2 | `sqlite.rs:158-163,213-218` | FTS backfill loads ALL events into memory — OOM on 100K+ events |
+| R2-H3 | `scrub.rs:161-206` | Blob GC reference collection heuristic misses non-"blob" keys — can delete referenced blobs |
+| R2-H4 | `sqlite.rs:467-478` | delete_run 4 separate DELETEs without transaction — partial delete on crash |
+| R2-H5 | `sqlite.rs:52-56` | WAL file grows unbounded — no checkpoint management |
+
+### Terminal
+| ID | File | Description |
+|----|------|-------------|
+| R2-H6 | `ansi.rs:43-70` | Missing DCS/APC/SOS/PM stripping — sixel image data treated as text |
+| R2-H7 | `recorder.rs:62-84` | Unbounded RawRecorder segment growth — OOM on long sessions |
+
+### Adapters
+| ID | File | Description |
+|----|------|-------------|
+| R2-H8 | `claude.rs:80-83, codex.rs:77-79` | Duplicate parse_plaintext — every non-JSON chunk produces double events |
+| R2-H9 | `parse.rs:255-280` | Codex double-parses tool calls — duplicate tool.call events |
+
+### Serve
+| ID | File | Description |
+|----|------|-------------|
+| R2-H10 | `serve.rs:176,350` | innerHTML XSS via SSE data — unsanitized run IDs, status, event kinds |
+
+### Capture
+| ID | File | Description |
+|----|------|-------------|
+| R2-H11 | `git.rs:280` | Byte-slicing panic in git diff — new location missed by first pass |
+| R2-H12 | `git.rs` | Unbounded diff string allocation — multi-MB diffs without limit |
+
+### Replay
+| ID | File | Description |
+|----|------|-------------|
+| R2-H13 | `sandbox.rs` | sh passthrough allows arbitrary command execution |
+| R2-H14 | `sandbox.rs` | Temp dir resource leak — workspace not cleaned up on panic |
+| R2-H15 | `mock.rs:136` | Byte-slicing panic in truncate() |
+
+### Sync
+| ID | File | Description |
+|----|------|-------------|
+| R2-H16 | `sync.rs` | Checksum mismatch not blocking import — data integrity bypass |
+| R2-H17 | `sync.rs` | S3 pull skips checksum verification |
+| R2-H18 | `search.rs:207` | Byte-index truncation panic in truncate() |
+
+### Edge Cases
+| ID | File | Description |
+|----|------|-------------|
+| R2-H19 | `sqlite.rs:777` | FTS5 query injection — double quotes not properly escaped |
+| R2-H20 | `redaction/scanner.rs:140` | Recursive JSON redaction with no depth limit — stack overflow |
+| R2-H21 | `core/event.rs:148` | Duration overflow — negative values wrap to u64::MAX |
+
+## Round 2 MEDIUM Findings (Selected)
+
+| ID | File | Description |
+|----|------|-------------|
+| R2-M1 | `sqlite.rs` | Foreign keys lack ON DELETE CASCADE |
+| R2-M2 | `sqlite.rs:389,393,398` | serde_json::to_string().unwrap_or_default() silently corrupts data |
+| R2-M3 | `sqlite.rs` | No index on checkpoints.event_id or events.parent_event_id |
+| R2-M4 | `sqlite.rs:740-751` | FTS body field double-indexes kind/source/status |
+| R2-M5 | `ansi.rs:35` | Vec<char> allocation per PTY chunk — O(n) heap per call in hot path |
+| R2-M6 | `run.rs:509-514` | Double normalization — same bytes normalized twice independently |
+| R2-M7 | `run.rs:558-562` | line_buf unbounded growth — no max-size cap |
+| R2-M8 | `claude.rs:38-40` | Overly-broad adapter detection — ends_with matches unrelated binaries |
+| R2-M9 | `codex.rs:93-97` | Resume flag missing -- prefix — bare "resume" vs "--resume" |
+| R2-M10 | `parse.rs:236-243` | harness.result hardcoded to Success — ignores error results |
+| R2-M11 | `serve.rs` | No body size limit on sync PUT — OOM vector |
+| R2-M12 | `serve.rs` | AppError always returns 500 — client errors not differentiated |
+| R2-M13 | `export/portable.rs:134` | Blob hash mismatch creates broken reference |
+| R2-M14 | `analysis/correlator.rs:29-95` | find_parent O(n) per event — O(n²) worst-case |
+| R2-M15 | `analysis/classifier.rs:62-65` | rm without flags classified as LocalWrite, not Destructive |
+| R2-M16 | `config.rs` | No path canonicalization — symlinks cause unexpected .blackbox location |
+| R2-M17 | `replay/sandbox.rs:194` | Workspace path injection via unsanitized run ID |
+| R2-M18 | `capture/filesystem.rs` | Bridge task detached instead of aborted — resource leak |
+| R2-M19 | `capture/git.rs` | Blocking sync git commands in async context |
+| R2-M20 | `scrub.rs` | SecretScanner always uses default config — user custom patterns ignored |
+
+## Fixes Applied in Round 2
+
+| Fix | File | Description |
+|-----|------|-------------|
+| html_escape | `export/html.rs:447` | Added single-quote escaping to match serve.rs |
+| event_detail | `export/html.rs:397` | Removed dead-code no-op — simplified to direct metadata access |
+| DCS/APC/PM/SOS | `terminal/ansi.rs` | Added stripping for all escape sequence types (pending) |
+| innerHTML XSS | `serve.rs` | Replaced innerHTML with textContent (pending) |
+| Duplicate parse_plaintext | `claude.rs`, `codex.rs` | Removed post-loop fallback (pending) |
+| Adapter detection | `claude.rs`, `codex.rs` | Exact basename match instead of ends_with (pending) |
+| BlobReference panic | `cli.rs`, `scrub.rs`, `transcript.rs` | Use try_new() for imported data (pending) |
+
+## Remaining Work
+
+The following HIGH/CRITICAL findings from Round 2 need fixing:
+
+1. **R2-C1:** Mutex poisoning recovery in sqlite.rs
+2. **R2-C2:** Transactional migrations in sqlite.rs
+3. **R2-C3:** Sandbox sh passthrough bypass
+4. **R2-H1:** Atomic FTS upsert
+5. **R2-H2:** Batch FTS backfill (avoid OOM)
+6. **R2-H3:** Blob GC reference collection fix
+7. **R2-H4:** Transactional delete_run
+8. **R2-H5:** WAL checkpoint management
+9. **R2-H16:** Checksum verification on sync import
+10. **R2-H19:** FTS5 query escaping fix
+11. **R2-H20:** Depth limit on recursive JSON redaction
+12. **R2-H21:** Duration overflow guard
+

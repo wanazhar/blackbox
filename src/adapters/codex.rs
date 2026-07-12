@@ -34,7 +34,10 @@ impl HarnessAdapter for CodexAdapter {
 
     fn detect(&self, command: &[String]) -> bool {
         command.first().is_some_and(|c| {
-            c.ends_with("codex") || c == "codex"
+            std::path::Path::new(c).file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n == "codex")
+                .unwrap_or(false)
         })
     }
 
@@ -72,10 +75,6 @@ impl HarnessAdapter for CodexAdapter {
             } else {
                 events.extend(parse_plaintext(run_id, line, "codex"));
             }
-        }
-
-        if !text.contains('\n') && !text.trim().starts_with('{') {
-            events.extend(parse_plaintext(run_id, &text, "codex"));
         }
 
         events

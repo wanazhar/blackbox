@@ -156,6 +156,7 @@ const rows = new Map();
 for (const tr of tbody.querySelectorAll('tr[data-id]')) {{
   rows.set(tr.dataset.id, tr);
 }}
+function esc(s) {{ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#x27;'); }}
 function upsert(run) {{
   const id = run.id;
   const short = id.slice(0, 8);
@@ -173,9 +174,9 @@ function upsert(run) {{
     countEl.textContent = String(rows.size);
     tr.classList.add('flash');
   }}
-  tr.innerHTML = `<td class="mono"><a href="/runs/${{id}}">${{short}}</a></td>
-<td><span class="badge">${{status}}</span> <a class="muted" href="/runs/${{id}}/live">live</a></td>
-<td>${{exit}}</td><td></td><td class="muted">${{started}}</td>`;
+  tr.innerHTML = `<td class="mono"><a href="/runs/${{encodeURIComponent(id)}}">${{esc(short)}}</a></td>
+<td><span class="badge">${{esc(status)}}</span> <a class="muted" href="/runs/${{encodeURIComponent(id)}}/live">live</a></td>
+<td>${{esc(exit)}}</td><td></td><td class="muted">${{esc(started)}}</td>`;
   tr.children[3].textContent = label + ' ';
   if (tags) {{ const span = document.createElement('span'); span.className = 'tags'; span.textContent = tags; tr.children[3].appendChild(span); }}
 }}
@@ -338,6 +339,7 @@ const bookkeeping = new Set([
   'git.commit','git.commit.after'
 ]);
 let n = 0;
+function esc(s) {{ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#x27;'); }}
 function detail(ev) {{
   const m = ev.metadata || {{}};
   return (m.preview || m.tool_name || m.path || (m.exit_code != null ? 'exit='+m.exit_code : '') || '').toString().replace(/\n/g,'⏎');
@@ -347,7 +349,7 @@ function add(ev) {{
   const tr = document.createElement('tr');
   if (ev.kind && ev.kind.startsWith('tool.')) tr.className = 'row-tool';
   if (ev.status === 'Error') tr.className = 'row-error';
-  tr.innerHTML = `<td class="num">${{ev.sequence}}</td><td>${{ev.source}}</td><td class="mono">${{ev.kind}}</td><td class="detail"></td>`;
+  tr.innerHTML = `<td class="num">${{esc(ev.sequence)}}</td><td>${{esc(ev.source)}}</td><td class="mono">${{esc(ev.kind)}}</td><td class="detail"></td>`;
   tr.querySelector('.detail').textContent = detail(ev);
   tl.appendChild(tr);
   n++;

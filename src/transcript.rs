@@ -18,18 +18,27 @@ pub async fn rebuild_terminal_transcript(
 
     for ev in term_events {
         if let Some(key) = ev.output_blob.as_deref() {
-            let bref = BlobReference::new(key.to_string(), 0);
-            match store.load_blob(&bref).await {
-                Ok(data) => {
-                    out.push_str(&String::from_utf8_lossy(&data));
-                }
-                Err(_) => {
-                    // Fall back to preview
-                    if let Some(p) = ev.metadata.get("preview").and_then(|v| v.as_str()) {
-                        out.push_str(p);
-                        if !p.ends_with('\n') {
-                            out.push('\n');
+            if let Some(bref) = BlobReference::try_new(key.to_string(), 0) {
+                match store.load_blob(&bref).await {
+                    Ok(data) => {
+                        out.push_str(&String::from_utf8_lossy(&data));
+                    }
+                    Err(_) => {
+                        // Fall back to preview
+                        if let Some(p) = ev.metadata.get("preview").and_then(|v| v.as_str()) {
+                            out.push_str(p);
+                            if !p.ends_with('\n') {
+                                out.push('\n');
+                            }
                         }
+                    }
+                }
+            } else {
+                // Invalid blob key — fall back to preview
+                if let Some(p) = ev.metadata.get("preview").and_then(|v| v.as_str()) {
+                    out.push_str(p);
+                    if !p.ends_with('\n') {
+                        out.push('\n');
                     }
                 }
             }

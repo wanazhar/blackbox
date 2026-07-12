@@ -36,7 +36,10 @@ impl HarnessAdapter for ClaudeAdapter {
 
     fn detect(&self, command: &[String]) -> bool {
         command.first().is_some_and(|c| {
-            c.ends_with("claude") || c == "claude"
+            std::path::Path::new(c).file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n == "claude")
+                .unwrap_or(false)
         })
     }
 
@@ -75,11 +78,6 @@ impl HarnessAdapter for ClaudeAdapter {
             } else {
                 events.extend(parse_plaintext(run_id, line, "claude"));
             }
-        }
-
-        // If the chunk had no newlines, still try plaintext heuristics once
-        if !text.contains('\n') && !text.trim().starts_with('{') {
-            events.extend(parse_plaintext(run_id, &text, "claude"));
         }
 
         events

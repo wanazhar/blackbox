@@ -81,6 +81,11 @@ axum = { version = "0.8", default-features = true, features = ["macros"] }
 tower = "0.5"
 futures-util = "0.3"
 
+# Remote sync clients
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+object_store = { version = "0.11", features = ["aws"] }
+bytes = "1"
+
 [profile.release]
 opt-level = 3
 lto = true

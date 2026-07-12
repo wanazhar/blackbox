@@ -37,10 +37,15 @@ First solid release candidate: a flight recorder you’d actually run on a machi
 ### Share / sync
 - Portable **v2** JSON export with **embedded blobs** (offline-complete)
 - `blackbox import` accepts v1/v2 (new ids by default, tag `imported`)
-- `blackbox sync push|pull --dir …` multi-machine sync via shared folder
+- `blackbox sync push|pull`:
+  - `--dir` shared folder
+  - `--remote http://host:7788` (talks to `blackbox serve` sync API)
+  - `--s3 s3://bucket/prefix` (AWS env credentials)
+- Serve endpoints: `/api/sync/manifest`, `/api/sync/runs/{id}`
 
 ### Packaging
 - crates.io package name: **`blackbox-recorder`** (binary/lib still `blackbox`)
+- See `docs/PUBLISH.md`
 
 ### Quality
 - Integration tests (fake Claude, secrets, export, tags, portable, sync)

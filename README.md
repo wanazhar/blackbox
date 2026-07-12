@@ -25,6 +25,7 @@ cargo install --path .
 # Publish-ready package name: blackbox-recorder (binary still `blackbox`)
 cargo package
 cargo publish --dry-run
+# real publish: see docs/PUBLISH.md (needs CARGO_REGISTRY_TOKEN)
 
 # Optional: shell completions via clap help
 blackbox --help
@@ -100,10 +101,19 @@ blackbox export latest --format portable > run.json
 blackbox import run.json                 # new ids + tag "imported"
 blackbox import run.json --keep-ids      # fail if id exists
 
-# Multi-machine sync via shared folder (NFS / rsync / Dropbox)
+# Multi-machine sync
+# 1) Shared folder (NFS / rsync / Dropbox)
 blackbox sync push --dir /shared/bb-sync
-# … on another machine with the same folder …
 blackbox sync pull --dir /shared/bb-sync
+
+# 2) HTTP to another blackbox serve
+# machine A: blackbox serve --token secret --bind 0.0.0.0:7788
+blackbox sync push --remote http://host-a:7788 --token secret
+blackbox sync pull --remote http://host-a:7788 --token secret
+
+# 3) S3 (uses AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_REGION)
+blackbox sync push --s3 s3://my-bucket/blackbox/
+blackbox sync pull --s3 s3://my-bucket/blackbox/
 
 # Tags
 blackbox run --tag ci --tag smoke -- echo hi

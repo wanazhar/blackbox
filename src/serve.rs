@@ -17,9 +17,11 @@ use futures_util::stream::{self, Stream};
 use serde::Deserialize;
 
 use crate::export::html::export_html;
+use crate::export::portable::{export_portable, import_portable};
 use crate::search::search_store;
 use crate::storage::sqlite::SqliteStore;
 use crate::storage::TraceStore;
+use crate::sync::manifest_from_store;
 use crate::transcript::{rebuild_terminal_transcript, rebuild_tool_transcript};
 
 #[derive(Clone)]
@@ -60,6 +62,8 @@ pub async fn serve(store: Arc<SqliteStore>, opts: ServeOptions) -> anyhow::Resul
         .route("/api/runs/{id}/events", get(api_events))
         .route("/api/runs/{id}/events/stream", get(api_event_stream))
         .route("/api/search", get(api_search))
+        .route("/api/sync/manifest", get(api_sync_manifest))
+        .route("/api/sync/runs/{id}", get(api_sync_get_run).put(api_sync_put_run))
         .route("/search", get(search_page))
         .layer(from_fn_with_state(state.clone(), auth_middleware))
         .with_state(state);
@@ -72,6 +76,7 @@ pub async fn serve(store: Arc<SqliteStore>, opts: ServeOptions) -> anyhow::Resul
     }
     println!("  live:    http://{}/watch", opts.addr);
     println!("  api:     http://{}/api/runs", opts.addr);
+    println!("  sync:    http://{}/api/sync/manifest", opts.addr);
     println!("  Press Ctrl+C to stop.");
     axum::serve(listener, app).await?;
     Ok(())
@@ -658,6 +663,53 @@ async fn api_search(
         })
         .collect();
     Ok(Json(serde_json::json!({ "hits": json })))
+}
+
+// ── Remote sync API ───────────────────────────────────────────────
+
+async fn api_sync_manifest(
+    State(state): State<AppState>,
+) -> Result<Json<crate::sync::SyncManifest>, AppError> {
+    let man = manifest_from_store(state.store.as_ref()).await?;
+    Ok(Json(man))
+}
+
+async fn api_sync_get_run(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Response, AppError> {
+    let run_id = resolve_prefix(state.store.as_ref(), &id).await?;
+    let Some(run) = state.store.get_run(&run_id).await? else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    };
+    let events = state.store.get_events(&run_id).await?;
+    // Full portable with blobs for offline-complete pull
+    let json = export_portable(state.store.as_ref(), &run, &events, true).await?;
+    Ok((
+        [(header::CONTENT_TYPE, "application/json")],
+        json,
+    )
+        .into_response())
+}
+
+async fn api_sync_put_run(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    body: String,
+) -> Result<Json<serde_json::Value>, AppError> {
+    // Prefer keep original ids so multi-machine ids stay stable
+    let result = match import_portable(state.store.as_ref(), &body, false).await {
+        Ok(r) => r,
+        Err(_) => import_portable(state.store.as_ref(), &body, true).await?,
+    };
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "run_id": result.run_id,
+        "events": result.events,
+        "blobs": result.blobs,
+        "requested_id": id,
+        "remapped": result.remapped,
+    })))
 }
 
 // ── Helpers ───────────────────────────────────────────────────────

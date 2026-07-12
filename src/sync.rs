@@ -1,19 +1,30 @@
-//! Multi-machine sync via a shared directory of portable archives.
+//! Multi-machine sync: shared directory, HTTP (blackbox serve), or S3.
 //!
-//! Layout:
+//! ## Directory layout
 //! ```text
 //! <dir>/
 //!   manifest.json
 //!   runs/<run_id>.json   # portable v2 (with blobs)
 //! ```
 //!
-//! Designed for rsync/NFS/Dropbox-style folders. Push exports local runs
-//! missing (or outdated) remotely; pull imports remote runs missing locally.
+//! ## HTTP remote
+//! Talks to another `blackbox serve` instance:
+//! - `GET  /api/sync/manifest`
+//! - `GET  /api/sync/runs/{id}`
+//! - `PUT  /api/sync/runs/{id}`  (body = portable JSON)
+//!
+//! ## S3 remote
+//! `s3://bucket/prefix` using credentials from the environment
+//! (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, …).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::Context;
+use bytes::Bytes;
+use object_store::path::Path as ObjPath;
+use object_store::{ObjectStore, PutPayload};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -47,6 +58,8 @@ pub struct SyncReport {
     pub errors: Vec<String>,
 }
 
+// ── Directory backend ─────────────────────────────────────────────
+
 /// Push local runs into a sync directory (export portable v2 files).
 pub async fn sync_push(
     store: &dyn TraceStore,
@@ -64,7 +77,9 @@ pub async fn sync_push(
         let json = match export_portable(store, &run, &events, redact).await {
             Ok(j) => j,
             Err(e) => {
-                report.errors.push(format!("{}: export failed: {e}", short(&run.id)));
+                report
+                    .errors
+                    .push(format!("{}: export failed: {e}", short(&run.id)));
                 continue;
             }
         };
@@ -96,7 +111,7 @@ pub async fn sync_push(
             },
         );
         report.pushed += 1;
-        tracing::info!(run_id = %run.id, "sync push");
+        tracing::info!(run_id = %run.id, "sync push (dir)");
     }
 
     save_manifest(dir, &manifest)?;
@@ -104,8 +119,6 @@ pub async fn sync_push(
 }
 
 /// Pull remote runs from a sync directory into the local store.
-///
-/// Skips runs whose id already exists locally (idempotent).
 pub async fn sync_pull(store: &dyn TraceStore, dir: &Path) -> anyhow::Result<SyncReport> {
     let manifest = load_manifest(dir)?;
     let mut report = SyncReport::default();
@@ -125,7 +138,6 @@ pub async fn sync_pull(store: &dyn TraceStore, dir: &Path) -> anyhow::Result<Syn
                 continue;
             }
         };
-        // Verify checksum when present
         let hash = sha256_hex(json.as_bytes());
         if hash != entry.sha256 {
             report.errors.push(format!(
@@ -134,37 +146,363 @@ pub async fn sync_pull(store: &dyn TraceStore, dir: &Path) -> anyhow::Result<Syn
                 &entry.sha256[..12.min(entry.sha256.len())],
                 &hash[..12.min(hash.len())]
             ));
-            // still attempt import
         }
 
-        // keep_ids=true path: new_ids=false so shared ids match across machines
-        match import_portable(store, &json, false).await {
-            Ok(_) => {
+        match import_with_fallback(store, &json).await {
+            Ok(()) => {
                 report.pulled += 1;
-                tracing::info!(run_id = %run_id, "sync pull");
+                tracing::info!(run_id = %run_id, "sync pull (dir)");
             }
-            Err(e) => {
-                // If id conflict somehow, try remapped import as fallback
-                match import_portable(store, &json, true).await {
-                    Ok(r) => {
-                        report.pulled += 1;
-                        report.errors.push(format!(
-                            "{}: kept-id import failed ({e}); imported as {}",
-                            short(run_id),
-                            short(&r.run_id)
-                        ));
-                    }
-                    Err(e2) => {
-                        report
-                            .errors
-                            .push(format!("{}: import failed: {e2}", short(run_id)));
-                    }
-                }
-            }
+            Err(e) => report
+                .errors
+                .push(format!("{}: import failed: {e}", short(run_id))),
         }
     }
 
     Ok(report)
+}
+
+// ── HTTP remote (blackbox serve) ──────────────────────────────────
+
+/// Push local runs to a remote `blackbox serve` instance.
+pub async fn sync_push_http(
+    store: &dyn TraceStore,
+    base_url: &str,
+    token: Option<&str>,
+    redact: bool,
+) -> anyhow::Result<SyncReport> {
+    let client = http_client()?;
+    let base = base_url.trim_end_matches('/');
+    let remote = http_get_manifest(&client, base, token).await?;
+    let local = store.list_runs().await?;
+    let mut report = SyncReport::default();
+
+    for run in local {
+        if remote.runs.contains_key(&run.id) {
+            report.skipped += 1;
+            continue;
+        }
+        let events = store.get_events(&run.id).await?;
+        let json = match export_portable(store, &run, &events, redact).await {
+            Ok(j) => j,
+            Err(e) => {
+                report
+                    .errors
+                    .push(format!("{}: export failed: {e}", short(&run.id)));
+                continue;
+            }
+        };
+        match http_put_run(&client, base, token, &run.id, &json).await {
+            Ok(()) => {
+                report.pushed += 1;
+                tracing::info!(run_id = %run.id, "sync push (http)");
+            }
+            Err(e) => report
+                .errors
+                .push(format!("{}: put failed: {e}", short(&run.id))),
+        }
+    }
+    Ok(report)
+}
+
+/// Pull missing runs from a remote `blackbox serve` instance.
+pub async fn sync_pull_http(
+    store: &dyn TraceStore,
+    base_url: &str,
+    token: Option<&str>,
+) -> anyhow::Result<SyncReport> {
+    let client = http_client()?;
+    let base = base_url.trim_end_matches('/');
+    let remote = http_get_manifest(&client, base, token).await?;
+    let mut report = SyncReport::default();
+
+    for run_id in remote.runs.keys() {
+        if store.get_run(run_id).await?.is_some() {
+            report.skipped += 1;
+            continue;
+        }
+        let json = match http_get_run(&client, base, token, run_id).await {
+            Ok(j) => j,
+            Err(e) => {
+                report
+                    .errors
+                    .push(format!("{}: get failed: {e}", short(run_id)));
+                continue;
+            }
+        };
+        match import_with_fallback(store, &json).await {
+            Ok(()) => {
+                report.pulled += 1;
+                tracing::info!(run_id = %run_id, "sync pull (http)");
+            }
+            Err(e) => report
+                .errors
+                .push(format!("{}: import failed: {e}", short(run_id))),
+        }
+    }
+    Ok(report)
+}
+
+fn http_client() -> anyhow::Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .context("build http client")
+}
+
+fn auth_headers(token: Option<&str>) -> reqwest::header::HeaderMap {
+    let mut h = reqwest::header::HeaderMap::new();
+    if let Some(t) = token {
+        if let Ok(v) = reqwest::header::HeaderValue::from_str(&format!("Bearer {t}")) {
+            h.insert(reqwest::header::AUTHORIZATION, v);
+        }
+    }
+    h
+}
+
+async fn http_get_manifest(
+    client: &reqwest::Client,
+    base: &str,
+    token: Option<&str>,
+) -> anyhow::Result<SyncManifest> {
+    let url = format!("{base}/api/sync/manifest");
+    let resp = client
+        .get(&url)
+        .headers(auth_headers(token))
+        .send()
+        .await
+        .with_context(|| format!("GET {url}"))?;
+    if !resp.status().is_success() {
+        anyhow::bail!("GET {url} → {}", resp.status());
+    }
+    resp.json().await.context("parse remote manifest")
+}
+
+async fn http_get_run(
+    client: &reqwest::Client,
+    base: &str,
+    token: Option<&str>,
+    run_id: &str,
+) -> anyhow::Result<String> {
+    let url = format!("{base}/api/sync/runs/{run_id}");
+    let resp = client
+        .get(&url)
+        .headers(auth_headers(token))
+        .send()
+        .await
+        .with_context(|| format!("GET {url}"))?;
+    if !resp.status().is_success() {
+        anyhow::bail!("GET {url} → {}", resp.status());
+    }
+    resp.text().await.context("read portable body")
+}
+
+async fn http_put_run(
+    client: &reqwest::Client,
+    base: &str,
+    token: Option<&str>,
+    run_id: &str,
+    json: &str,
+) -> anyhow::Result<()> {
+    let url = format!("{base}/api/sync/runs/{run_id}");
+    let resp = client
+        .put(&url)
+        .headers(auth_headers(token))
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(json.to_string())
+        .send()
+        .await
+        .with_context(|| format!("PUT {url}"))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("PUT {url} → {status}: {body}");
+    }
+    Ok(())
+}
+
+// ── S3 remote ─────────────────────────────────────────────────────
+
+/// Push local runs to `s3://bucket/prefix`.
+pub async fn sync_push_s3(
+    store: &dyn TraceStore,
+    bucket: &str,
+    prefix: &str,
+    redact: bool,
+) -> anyhow::Result<SyncReport> {
+    let (s3, root) = s3_client(bucket, prefix)?;
+    let mut manifest = s3_load_manifest(&s3, &root).await?;
+    let local = store.list_runs().await?;
+    let mut report = SyncReport::default();
+
+    for run in local {
+        let events = store.get_events(&run.id).await?;
+        let json = match export_portable(store, &run, &events, redact).await {
+            Ok(j) => j,
+            Err(e) => {
+                report
+                    .errors
+                    .push(format!("{}: export failed: {e}", short(&run.id)));
+                continue;
+            }
+        };
+        let hash = sha256_hex(json.as_bytes());
+        let file = format!("runs/{}.json", run.id);
+        let needs = match manifest.runs.get(&run.id) {
+            Some(e) => e.sha256 != hash,
+            None => true,
+        };
+        if !needs {
+            report.skipped += 1;
+            continue;
+        }
+        let key = obj_path(&root, &file);
+        s3.put(&key, PutPayload::from(Bytes::from(json)))
+            .await
+            .with_context(|| format!("s3 put {file}"))?;
+        manifest.runs.insert(
+            run.id.clone(),
+            SyncRunEntry {
+                file,
+                sha256: hash,
+                exported_at: chrono::Utc::now().to_rfc3339(),
+                name: run.name.clone(),
+                command: run.command.clone(),
+                status: format!("{:?}", run.status),
+            },
+        );
+        report.pushed += 1;
+        tracing::info!(run_id = %run.id, "sync push (s3)");
+    }
+    s3_save_manifest(&s3, &root, &manifest).await?;
+    Ok(report)
+}
+
+/// Pull missing runs from `s3://bucket/prefix`.
+pub async fn sync_pull_s3(
+    store: &dyn TraceStore,
+    bucket: &str,
+    prefix: &str,
+) -> anyhow::Result<SyncReport> {
+    let (s3, root) = s3_client(bucket, prefix)?;
+    let manifest = s3_load_manifest(&s3, &root).await?;
+    let mut report = SyncReport::default();
+
+    for (run_id, entry) in &manifest.runs {
+        if store.get_run(run_id).await?.is_some() {
+            report.skipped += 1;
+            continue;
+        }
+        let key = obj_path(&root, &entry.file);
+        let result = s3.get(&key).await;
+        let data = match result {
+            Ok(r) => r.bytes().await.context("s3 read body")?,
+            Err(e) => {
+                report
+                    .errors
+                    .push(format!("{}: s3 get {}: {e}", short(run_id), entry.file));
+                continue;
+            }
+        };
+        let json = String::from_utf8_lossy(&data).to_string();
+        match import_with_fallback(store, &json).await {
+            Ok(()) => {
+                report.pulled += 1;
+                tracing::info!(run_id = %run_id, "sync pull (s3)");
+            }
+            Err(e) => report
+                .errors
+                .push(format!("{}: import failed: {e}", short(run_id))),
+        }
+    }
+    Ok(report)
+}
+
+fn s3_client(bucket: &str, prefix: &str) -> anyhow::Result<(Arc<dyn ObjectStore>, String)> {
+    use object_store::aws::AmazonS3Builder;
+    let s3 = AmazonS3Builder::from_env()
+        .with_bucket_name(bucket)
+        .build()
+        .context(
+            "build S3 client (set AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION)",
+        )?;
+    let root = prefix.trim_matches('/').to_string();
+    Ok((Arc::new(s3), root))
+}
+
+fn obj_path(root: &str, rel: &str) -> ObjPath {
+    let full = if root.is_empty() {
+        rel.to_string()
+    } else {
+        format!("{root}/{rel}")
+    };
+    ObjPath::from(full)
+}
+
+async fn s3_load_manifest(
+    s3: &dyn ObjectStore,
+    root: &str,
+) -> anyhow::Result<SyncManifest> {
+    let key = obj_path(root, "manifest.json");
+    match s3.get(&key).await {
+        Ok(r) => {
+            let bytes = r.bytes().await?;
+            let text = String::from_utf8_lossy(&bytes);
+            let mut man: SyncManifest = serde_json::from_str(&text).context("parse s3 manifest")?;
+            if man.version == 0 {
+                man.version = MANIFEST_VERSION;
+            }
+            Ok(man)
+        }
+        Err(_) => Ok(SyncManifest {
+            version: MANIFEST_VERSION,
+            runs: HashMap::new(),
+        }),
+    }
+}
+
+async fn s3_save_manifest(
+    s3: &dyn ObjectStore,
+    root: &str,
+    man: &SyncManifest,
+) -> anyhow::Result<()> {
+    let mut out = man.clone();
+    out.version = MANIFEST_VERSION;
+    let text = serde_json::to_string_pretty(&out)?;
+    let key = obj_path(root, "manifest.json");
+    s3.put(&key, PutPayload::from(Bytes::from(text)))
+        .await
+        .context("s3 put manifest")?;
+    Ok(())
+}
+
+/// Parse `s3://bucket/optional/prefix` into (bucket, prefix).
+pub fn parse_s3_url(url: &str) -> anyhow::Result<(String, String)> {
+    let rest = url
+        .strip_prefix("s3://")
+        .ok_or_else(|| anyhow::anyhow!("S3 URL must start with s3://"))?;
+    let (bucket, prefix) = match rest.split_once('/') {
+        Some((b, p)) => (b.to_string(), p.trim_matches('/').to_string()),
+        None => (rest.to_string(), String::new()),
+    };
+    if bucket.is_empty() {
+        anyhow::bail!("empty S3 bucket");
+    }
+    Ok((bucket, prefix))
+}
+
+// ── Shared helpers ────────────────────────────────────────────────
+
+async fn import_with_fallback(store: &dyn TraceStore, json: &str) -> anyhow::Result<()> {
+    match import_portable(store, json, false).await {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            import_portable(store, json, true)
+                .await
+                .map(|_| ())
+                .with_context(|| format!("keep-id import failed ({e}); remapped also failed"))
+        }
+    }
 }
 
 fn ensure_layout(dir: &Path) -> anyhow::Result<()> {
@@ -191,10 +529,9 @@ fn load_manifest(dir: &Path) -> anyhow::Result<SyncManifest> {
             runs: HashMap::new(),
         });
     }
-    let text = std::fs::read_to_string(&path)
-        .with_context(|| format!("read {}", path.display()))?;
-    let mut man: SyncManifest =
-        serde_json::from_str(&text).context("parse manifest.json")?;
+    let text =
+        std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    let mut man: SyncManifest = serde_json::from_str(&text).context("parse manifest.json")?;
     if man.version == 0 {
         man.version = MANIFEST_VERSION;
     }
@@ -230,13 +567,38 @@ pub fn resolve_sync_dir(path: &str) -> PathBuf {
     }
 }
 
+/// Build a directory-style manifest from the live store (for HTTP API).
+pub async fn manifest_from_store(store: &dyn TraceStore) -> anyhow::Result<SyncManifest> {
+    let runs = store.list_runs().await?;
+    let mut man = SyncManifest {
+        version: MANIFEST_VERSION,
+        runs: HashMap::new(),
+    };
+    for run in runs {
+        man.runs.insert(
+            run.id.clone(),
+            SyncRunEntry {
+                file: format!("runs/{}.json", run.id),
+                sha256: String::new(),
+                exported_at: run
+                    .ended_at
+                    .unwrap_or(run.started_at)
+                    .to_rfc3339(),
+                name: run.name.clone(),
+                command: run.command.clone(),
+                status: format!("{:?}", run.status),
+            },
+        );
+    }
+    Ok(man)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::event::{EventSource, EventStatus, TraceEvent};
     use crate::core::run::Run;
     use crate::storage::sqlite::SqliteStore;
-    use std::sync::Arc;
 
     #[tokio::test]
     async fn push_pull_across_stores() {
@@ -270,11 +632,20 @@ mod tests {
             .unwrap();
         assert_eq!(data, b"sync-blob");
 
-        // Second pull is idempotent
         let pull2 = sync_pull(b.as_ref(), &dir).await.unwrap();
         assert_eq!(pull2.skipped, 1);
         assert_eq!(pull2.pulled, 0);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parse_s3_url_ok() {
+        let (b, p) = parse_s3_url("s3://my-bucket/path/to").unwrap();
+        assert_eq!(b, "my-bucket");
+        assert_eq!(p, "path/to");
+        let (b2, p2) = parse_s3_url("s3://bucket-only").unwrap();
+        assert_eq!(b2, "bucket-only");
+        assert!(p2.is_empty());
     }
 }

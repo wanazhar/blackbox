@@ -91,6 +91,18 @@ pub struct SyncDirArgs {
     #[arg(long, default_value = ".blackbox/sync")]
     pub dir: String,
 
+    /// Remote HTTP base URL of another `blackbox serve` (e.g. http://host:7788)
+    #[arg(long)]
+    pub remote: Option<String>,
+
+    /// S3 URL (s3://bucket/prefix) — uses AWS_* env credentials
+    #[arg(long)]
+    pub s3: Option<String>,
+
+    /// Auth token for --remote (or BLACKBOX_SERVE_TOKEN)
+    #[arg(long, env = "BLACKBOX_SERVE_TOKEN")]
+    pub token: Option<String>,
+
     /// Redact secrets when pushing (default: true)
     #[arg(long, default_value_t = true)]
     pub redact: bool,
@@ -1318,37 +1330,60 @@ async fn cmd_import(cli: &Cli, args: &ImportArgs) -> anyhow::Result<()> {
 }
 
 async fn cmd_sync(cli: &Cli, args: &SyncArgs) -> anyhow::Result<()> {
-    use crate::sync::{resolve_sync_dir, sync_pull, sync_push};
+    use crate::sync::{
+        parse_s3_url, resolve_sync_dir, sync_pull, sync_pull_http, sync_pull_s3, sync_push,
+        sync_push_http, sync_push_s3, SyncReport,
+    };
 
     let store = open_store(cli)?;
+    let print_report = |label: &str, report: SyncReport| {
+        println!(
+            "{label}: pushed={} pulled={} skipped={} errors={}",
+            report.pushed,
+            report.pulled,
+            report.skipped,
+            report.errors.len()
+        );
+        for e in report.errors {
+            eprintln!("  ! {e}");
+        }
+    };
+
     match &args.action {
         SyncAction::Push(d) => {
-            let dir = resolve_sync_dir(&d.dir);
             let redact = d.redact && !d.no_redact;
-            println!("Sync push → {}", dir.display());
-            let report = sync_push(&store, &dir, redact).await?;
-            println!(
-                "pushed={} skipped={} errors={}",
-                report.pushed,
-                report.skipped,
-                report.errors.len()
-            );
-            for e in report.errors {
-                eprintln!("  ! {e}");
+            if let Some(ref remote) = d.remote {
+                println!("Sync push → {remote}");
+                let report =
+                    sync_push_http(&store, remote, d.token.as_deref(), redact).await?;
+                print_report("http", report);
+            } else if let Some(ref s3) = d.s3 {
+                let (bucket, prefix) = parse_s3_url(s3)?;
+                println!("Sync push → s3://{bucket}/{prefix}");
+                let report = sync_push_s3(&store, &bucket, &prefix, redact).await?;
+                print_report("s3", report);
+            } else {
+                let dir = resolve_sync_dir(&d.dir);
+                println!("Sync push → {}", dir.display());
+                let report = sync_push(&store, &dir, redact).await?;
+                print_report("dir", report);
             }
         }
         SyncAction::Pull(d) => {
-            let dir = resolve_sync_dir(&d.dir);
-            println!("Sync pull ← {}", dir.display());
-            let report = sync_pull(&store, &dir).await?;
-            println!(
-                "pulled={} skipped={} errors={}",
-                report.pulled,
-                report.skipped,
-                report.errors.len()
-            );
-            for e in report.errors {
-                eprintln!("  ! {e}");
+            if let Some(ref remote) = d.remote {
+                println!("Sync pull ← {remote}");
+                let report = sync_pull_http(&store, remote, d.token.as_deref()).await?;
+                print_report("http", report);
+            } else if let Some(ref s3) = d.s3 {
+                let (bucket, prefix) = parse_s3_url(s3)?;
+                println!("Sync pull ← s3://{bucket}/{prefix}");
+                let report = sync_pull_s3(&store, &bucket, &prefix).await?;
+                print_report("s3", report);
+            } else {
+                let dir = resolve_sync_dir(&d.dir);
+                println!("Sync pull ← {}", dir.display());
+                let report = sync_pull(&store, &dir).await?;
+                print_report("dir", report);
             }
         }
     }

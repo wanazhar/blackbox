@@ -2151,4 +2151,46 @@ mod tests {
     fn test_cli_parse_store_global_flag() {
         assert!(Cli::command().try_get_matches_from(["blackbox", "--store", "/tmp/test.db", "runs"]).is_ok(), "--store global flag should parse");
     }
+
+    #[test]
+    fn test_cli_parse_export_with_format() {
+        let result = Cli::command().try_get_matches_from(["blackbox", "export", "run-123", "--format", "html"]);
+        assert!(result.is_ok() || matches!(&result, Err(e) if e.kind() == clap::error::ErrorKind::DisplayHelp));
+    }
+
+    #[test]
+    fn test_cli_parse_scrub_flags() {
+        let result = Cli::command().try_get_matches_from(["blackbox", "scrub", "--dry-run", "--gc", "--no-redact"]);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_cli_parse_watch_interval() {
+        let result = Cli::command().try_get_matches_from(["blackbox", "watch", "run-id", "--interval-ms", "500"]);
+        assert!(result.is_ok(), "watch with interval should parse: {result:?}");
+    }
+
+    #[test]
+    fn test_cli_parse_purge_flags() {
+        let result = Cli::command().try_get_matches_from(["blackbox", "purge", "--keep", "5", "--yes"]);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_cli_parse_rm_single() {
+        let result = Cli::command().try_get_matches_from(["blackbox", "rm", "run-123"]);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_short_id_truncates() {
+        assert_eq!(short_id("abc"), "abc");
+        assert_eq!(short_id("abcdefgh"), "abcdefgh");
+        assert_eq!(short_id("abcdefghijklmnop"), "abcdefgh");
+    }
+
+    #[test]
+    fn test_short_id_empty() {
+        assert_eq!(short_id(""), "");
+    }
 }

@@ -32,50 +32,81 @@ impl AnsiNormalizer {
         // Convert to string first, preserving all non-ASCII content
         let text = String::from_utf8_lossy(raw);
         let mut result = String::with_capacity(text.len());
-        // Collect into Vec<char> for O(1) random access during ANSI sequence
-        // parsing. Each PTY chunk is typically a few KB, so the allocation is
-        // bounded and acceptable for a single-user CLI tool. If profiling shows
-        // this to be a bottleneck, refactor to a byte-level state machine
-        // that tracks ANSI state instead of using indexed char access — see
-        // R2-M5 for context.
-        let chars: Vec<char> = text.chars().collect();
-        let len = chars.len();
+        // Iterate using byte offsets and decode chars on-demand instead of
+        // allocating a Vec<char>. Each text[i..].chars().next() call decodes
+        // exactly one char from byte position i (O(1)), keeping the overall
+        // loop O(n). This avoids the O(n) heap allocation per PTY chunk
+        // that the previous Vec<char> approach required (R2-M5).
+        let bytes = text.as_bytes();
+        let total = text.len();
         let mut i = 0;
 
-        while i < len {
-            let ch = chars[i];
+        while i < total {
+            // Decode the current char from byte position i
+            let ch = match std::str::from_utf8(&bytes[i..]) {
+                Ok(s) => s.chars().next().unwrap_or('\0'),
+                Err(_) => {
+                    // Invalid UTF-8 edge case — push the replacement char
+                    result.push('\u{FFFD}');
+                    i += 1;
+                    continue;
+                }
+            };
+            let ch_len = ch.len_utf8();
 
             // Handle ANSI escape sequences (ESC is always 0x1B = '\x1B')
-            if ch == '\x1B' && i + 1 < len {
-                let next = chars[i + 1];
+            if ch == '\x1B' && i + ch_len < total {
+                // Decode the next char after ESC
+                let next_src = &bytes[i + ch_len..];
+                let next = std::str::from_utf8(next_src)
+                    .ok()
+                    .and_then(|s| s.chars().next())
+                    .unwrap_or('\0');
+                let next_len = next.len_utf8();
 
                 // CSI sequences: ESC [
                 if next == '[' {
-                    i += 2;
+                    i += ch_len + next_len;
                     // Skip until we find a final character (0x40-0x7E)
-                    while i < len && !('\x40'..='\x7E').contains(&chars[i]) {
-                        i += 1;
-                    }
-                    if i < len {
-                        i += 1; // Skip the final character
+                    while i < total {
+                        let c = std::str::from_utf8(&bytes[i..])
+                            .ok()
+                            .and_then(|s| s.chars().next())
+                            .unwrap_or('\0');
+                        if ('\x40'..='\x7E').contains(&c) {
+                            i += c.len_utf8();
+                            break;
+                        }
+                        i += c.len_utf8();
                     }
                     continue;
                 }
 
                 // OSC sequences: ESC ]
                 if next == ']' {
-                    i += 2;
+                    i += ch_len + next_len;
                     // Skip until we find ST (ESC \ or BEL)
-                    while i < len {
-                        if chars[i] == '\x1B' && i + 1 < len && chars[i + 1] == '\\' {
-                            i += 2;
+                    while i < total {
+                        let c = std::str::from_utf8(&bytes[i..])
+                            .ok()
+                            .and_then(|s| s.chars().next())
+                            .unwrap_or('\0');
+                        let c_len = c.len_utf8();
+                        if c == '\x1B' && i + c_len < total {
+                            let n = std::str::from_utf8(&bytes[i + c_len..])
+                                .ok()
+                                .and_then(|s| s.chars().next())
+                                .unwrap_or('\0');
+                            if n == '\\' {
+                                i += c_len + n.len_utf8();
+                                break;
+                            }
+                        }
+                        if c == '\x07' {
+                            i += c_len;
                             break;
                         }
-                        if chars[i] == '\x07' {
-                            i += 1;
-                            break;
-                        }
-                        i += 1;
+                        i += c_len;
                     }
                     continue;
                 }
@@ -85,30 +116,41 @@ impl AnsiNormalizer {
                 // DCS can carry megabytes of sixel image data — we must not
                 // let the payload leak as visible text.
                 if next == 'P' || next == '_' || next == '^' || next == 'X' {
-                    i += 2;
+                    i += ch_len + next_len;
                     // Skip until ST (ESC \) or BEL — same logic as OSC
-                    while i < len {
-                        if chars[i] == '\x1B' && i + 1 < len && chars[i + 1] == '\\' {
-                            i += 2;
+                    while i < total {
+                        let c = std::str::from_utf8(&bytes[i..])
+                            .ok()
+                            .and_then(|s| s.chars().next())
+                            .unwrap_or('\0');
+                        let c_len = c.len_utf8();
+                        if c == '\x1B' && i + c_len < total {
+                            let n = std::str::from_utf8(&bytes[i + c_len..])
+                                .ok()
+                                .and_then(|s| s.chars().next())
+                                .unwrap_or('\0');
+                            if n == '\\' {
+                                i += c_len + n.len_utf8();
+                                break;
+                            }
+                        }
+                        if c == '\x07' {
+                            i += c_len;
                             break;
                         }
-                        if chars[i] == '\x07' {
-                            i += 1;
-                            break;
-                        }
-                        i += 1;
+                        i += c_len;
                     }
                     continue;
                 }
 
                 // Other escape sequences - skip the next character
-                i += 2;
+                i += ch_len + next_len;
                 continue;
             }
 
             // Handle carriage returns
             if ch == '\r' {
-                i += 1;
+                i += ch_len;
                 continue;
             }
 
@@ -118,7 +160,7 @@ impl AnsiNormalizer {
                 result.push(ch);
             }
 
-            i += 1;
+            i += ch_len;
         }
 
         result

@@ -50,6 +50,43 @@ pub enum Command {
     Rm(RmArgs),
     /// Purge runs by policy (keep N, pending forks, failed, …)
     Purge(PurgeArgs),
+    /// Search runs and events
+    Search(SearchArgs),
+    /// Live-tail events for a run as they appear
+    Watch(WatchArgs),
+}
+
+#[derive(Args)]
+pub struct SearchArgs {
+    /// Search query (all terms must match)
+    pub query: String,
+
+    /// Max runs to scan (most recent first)
+    #[arg(long, default_value = "50")]
+    pub max_runs: usize,
+
+    /// Max hits to print
+    #[arg(long, default_value = "40")]
+    pub limit: usize,
+}
+
+#[derive(Args)]
+pub struct WatchArgs {
+    /// Run ID, prefix, or "latest" (default: latest)
+    #[arg(default_value = "latest")]
+    pub run_id: String,
+
+    /// Poll interval in milliseconds
+    #[arg(long, default_value = "500")]
+    pub interval_ms: u64,
+
+    /// Hide bookkeeping noise
+    #[arg(long, default_value_t = true)]
+    pub semantic: bool,
+
+    /// Exit after this many idle seconds with no new events (0 = never)
+    #[arg(long, default_value = "0")]
+    pub idle_exit: u64,
 }
 
 #[derive(Args)]
@@ -274,6 +311,8 @@ impl Cli {
             Command::Doctor => cmd_doctor(self).await,
             Command::Rm(args) => cmd_rm(self, args).await,
             Command::Purge(args) => cmd_purge(self, args).await,
+            Command::Search(args) => cmd_search(self, args).await,
+            Command::Watch(args) => cmd_watch(self, args).await,
         }
     }
 }
@@ -1178,6 +1217,141 @@ async fn cmd_scrub(cli: &Cli, args: &ScrubArgs) -> anyhow::Result<()> {
         println!("Done. Use `blackbox scrub --gc` to delete unreferenced blobs.");
     } else {
         println!("Done.");
+    }
+    Ok(())
+}
+
+async fn cmd_search(cli: &Cli, args: &SearchArgs) -> anyhow::Result<()> {
+    use crate::search::search_store;
+
+    let store = open_store(cli)?;
+    let hits = search_store(&store, &args.query, args.max_runs, args.limit).await?;
+    if hits.is_empty() {
+        println!("No hits for {:?}.", args.query);
+        return Ok(());
+    }
+    println!(
+        "Search {:?} — {} hit(s) (scanned up to {} runs)",
+        args.query,
+        hits.len(),
+        args.max_runs
+    );
+    println!(
+        "{:<10} {:<8} {:<22} {:<6} SNIPPET",
+        "RUN", "SCORE", "KIND", "SEQ"
+    );
+    println!("{}", "-".repeat(90));
+    for h in hits {
+        let seq = h
+            .sequence
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "-".into());
+        println!(
+            "{:<10} {:<8} {:<22} {:<6} {}",
+            short_id(&h.run_id),
+            h.score,
+            h.kind,
+            seq,
+            h.snippet
+        );
+        if let Some(ref eid) = h.event_id {
+            println!(
+                "           inspect: blackbox inspect {} {}",
+                short_id(&h.run_id),
+                short_id(eid)
+            );
+        } else {
+            println!(
+                "           show:    blackbox show {}",
+                short_id(&h.run_id)
+            );
+        }
+    }
+    Ok(())
+}
+
+async fn cmd_watch(cli: &Cli, args: &WatchArgs) -> anyhow::Result<()> {
+    use std::collections::HashSet;
+    use std::time::{Duration, Instant};
+
+    let store = open_store(cli)?;
+    let run_id = resolve_run_id(&store, &args.run_id).await?;
+    let run = store
+        .get_run(&run_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("run not found"))?;
+
+    println!(
+        "Watching run {} ({}) — Ctrl+C to stop",
+        short_id(&run_id),
+        run.name
+            .as_deref()
+            .unwrap_or(&run.command.join(" "))
+    );
+    println!("{:<6} {:<12} {:<28} DETAIL", "SEQ", "SRC", "KIND");
+    println!("{}", "-".repeat(72));
+
+    let mut seen: HashSet<String> = HashSet::new();
+    // Seed with existing so we only print new if already completed; for live
+    // runs print everything once then tail.
+    let initial = store.get_events(&run_id).await?;
+    for ev in &initial {
+        if args.semantic && is_bookkeeping(&ev.kind) {
+            seen.insert(ev.id.clone());
+            continue;
+        }
+        if seen.insert(ev.id.clone()) {
+            println!(
+                "{:<6} {:<12} {:<28} {}",
+                ev.sequence,
+                format!("{:?}", ev.source),
+                ev.kind,
+                event_detail_line(ev)
+            );
+        }
+    }
+
+    let mut last_new = Instant::now();
+    let interval = Duration::from_millis(args.interval_ms.max(100));
+    loop {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                println!("\nStopped.");
+                break;
+            }
+            _ = tokio::time::sleep(interval) => {
+                let events = store.get_events(&run_id).await?;
+                let mut any = false;
+                for ev in events {
+                    if args.semantic && is_bookkeeping(&ev.kind) {
+                        continue;
+                    }
+                    if seen.insert(ev.id.clone()) {
+                        println!(
+                            "{:<6} {:<12} {:<28} {}",
+                            ev.sequence,
+                            format!("{:?}", ev.source),
+                            ev.kind,
+                            event_detail_line(&ev)
+                        );
+                        any = true;
+                    }
+                }
+                if any {
+                    last_new = Instant::now();
+                } else if args.idle_exit > 0
+                    && last_new.elapsed() > Duration::from_secs(args.idle_exit)
+                {
+                    // Also stop if run finished and idle
+                    if let Ok(Some(r)) = store.get_run(&run_id).await {
+                        if !matches!(r.status, crate::core::run::RunStatus::Running | crate::core::run::RunStatus::Pending) {
+                            println!("Run finished ({:?}); idle exit.", r.status);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
     }
     Ok(())
 }

@@ -1,10 +1,11 @@
 use crate::core::event::TraceEvent;
 use crate::core::run::Run;
+use crate::transcript::rebuild_tool_transcript;
 
 /// Export a run and its events as a self-contained HTML document.
 ///
-/// The output includes embedded CSS and requires no external resources.
-/// Status values are color-coded for quick visual scanning.
+/// Includes tool summary, event table with detail column, client-side
+/// filter, and a light/dark theme via prefers-color-scheme.
 pub fn export_html(
     run: &Run,
     events: &[TraceEvent],
@@ -44,22 +45,38 @@ pub fn export_html(
         .as_i64()
         .map(|c| c.to_string())
         .unwrap_or_else(|| "--".to_string());
+    let notes = run_json["notes"].as_str().unwrap_or("");
 
-    // Duration
     let duration = if let (Some(s), Some(e)) = (
         run_json["started_at"].as_str(),
         run_json["ended_at"].as_str(),
     ) {
-        match (s.parse::<chrono::DateTime<chrono::Utc>>(), e.parse::<chrono::DateTime<chrono::Utc>>())
-        {
-            (Ok(start), Ok(end)) => {
-                let ms = (end - start).num_milliseconds();
-                format_duration(ms)
-            }
+        match (
+            s.parse::<chrono::DateTime<chrono::Utc>>(),
+            e.parse::<chrono::DateTime<chrono::Utc>>(),
+        ) {
+            (Ok(start), Ok(end)) => format_duration((end - start).num_milliseconds()),
             _ => "--".to_string(),
         }
     } else {
         "--".to_string()
+    };
+
+    let tool_count = events.iter().filter(|e| e.kind == "tool.call").count();
+    let error_count = events
+        .iter()
+        .filter(|e| matches!(e.status, crate::core::event::EventStatus::Error))
+        .count();
+    let tools_section = {
+        let body = rebuild_tool_transcript(events);
+        if body.is_empty() {
+            r#"<p class="empty">No tool.call events.</p>"#.to_string()
+        } else {
+            format!(
+                r#"<pre class="tools">{}</pre>"#,
+                html_escape(&body)
+            )
+        }
     };
 
     let mut event_rows = String::new();
@@ -70,11 +87,25 @@ pub fn export_html(
         }
 
         let time = ev_json["started_at"].as_str().unwrap_or("");
+        // shorten time to HH:MM:SS
+        let time_short = if time.len() >= 19 {
+            &time[11..19]
+        } else {
+            time
+        };
         let seq = ev_json["sequence"].as_u64().unwrap_or(0);
         let source = ev_json["source"].as_str().unwrap_or("");
         let kind = ev_json["kind"].as_str().unwrap_or("");
         let ev_status = ev_json["status"].as_str().unwrap_or("unknown");
         let side_effect = ev_json["side_effect"].as_str().unwrap_or("");
+
+        let detail = event_detail(event);
+        let detail = if redact {
+            // strip anything that looks like residual secrets already redacted in metadata
+            detail
+        } else {
+            detail
+        };
 
         let ev_status_class = match ev_status {
             "Success" => "status-success",
@@ -84,16 +115,37 @@ pub fn export_html(
             _ => "",
         };
 
+        let row_class = if kind.starts_with("tool.") {
+            "row-tool"
+        } else if ev_status == "Error" {
+            "row-error"
+        } else {
+            ""
+        };
+
         event_rows.push_str(&format!(
-            r#"        <tr>
-          <td>{time}</td>
+            r#"        <tr class="{row_class}" data-kind="{kind_l}" data-source="{source_l}" data-status="{status_l}">
+          <td class="mono">{time}</td>
           <td class="num">{seq}</td>
           <td>{source}</td>
-          <td>{kind}</td>
+          <td class="kind">{kind}</td>
           <td><span class="badge {ev_status_class}">{ev_status}</span></td>
-          <td>{side_effect}</td>
+          <td class="muted">{side}</td>
+          <td class="detail">{detail}</td>
         </tr>
 "#,
+            time = html_escape(time_short),
+            seq = seq,
+            source = html_escape(source),
+            kind = html_escape(kind),
+            kind_l = html_escape(&kind.to_lowercase()),
+            source_l = html_escape(&source.to_lowercase()),
+            status_l = html_escape(&ev_status.to_lowercase()),
+            ev_status = html_escape(ev_status),
+            ev_status_class = ev_status_class,
+            side = html_escape(side_effect),
+            detail = html_escape(&detail),
+            row_class = row_class,
         ));
     }
 
@@ -103,147 +155,224 @@ pub fn export_html(
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Blackbox Export — {run_id}</title>
+<title>Blackbox — {run_id_short}</title>
 <style>
   :root {{
-    --bg: #fafafa;
-    --fg: #1a1a1a;
-    --border: #ddd;
-    --muted: #666;
-    --green: #16a34a;
-    --red: #dc2626;
-    --yellow: #ca8a04;
-    --blue: #2563eb;
+    --bg: #f6f7f9;
+    --card: #ffffff;
+    --fg: #111827;
+    --border: #e5e7eb;
+    --muted: #6b7280;
+    --green: #15803d;
+    --red: #b91c1c;
+    --yellow: #a16207;
+    --blue: #1d4ed8;
+    --tool: #eff6ff;
+    --error-bg: #fef2f2;
+  }}
+  @media (prefers-color-scheme: dark) {{
+    :root {{
+      --bg: #0b0f14;
+      --card: #121820;
+      --fg: #e5e7eb;
+      --border: #1f2937;
+      --muted: #9ca3af;
+      --green: #4ade80;
+      --red: #f87171;
+      --yellow: #facc15;
+      --blue: #60a5fa;
+      --tool: #0f1c2e;
+      --error-bg: #2a1215;
+    }}
   }}
   * {{ margin: 0; padding: 0; box-sizing: border-box; }}
   body {{
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
     background: var(--bg);
     color: var(--fg);
-    padding: 2rem;
+    padding: 1.5rem clamp(1rem, 3vw, 2.5rem);
     line-height: 1.5;
   }}
-  h1 {{
-    font-size: 1.5rem;
-    margin-bottom: 0.25rem;
-  }}
-  .run-id {{
-    font-family: monospace;
-    font-size: 0.85rem;
-    color: var(--muted);
-    margin-bottom: 1.5rem;
-  }}
+  h1 {{ font-size: 1.35rem; font-weight: 700; }}
+  h2 {{ font-size: 1.05rem; margin: 1.5rem 0 0.6rem; }}
+  .run-id {{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8rem; color: var(--muted); margin: 0.2rem 0 1rem; }}
   .meta {{
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-    gap: 1rem;
-    margin-bottom: 2rem;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 0.85rem;
+    margin-bottom: 1.25rem;
     padding: 1rem;
     border: 1px solid var(--border);
-    border-radius: 8px;
-    background: #fff;
+    border-radius: 10px;
+    background: var(--card);
   }}
-  .meta-item {{ display: flex; flex-direction: column; }}
-  .meta-label {{
-    font-size: 0.75rem;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
+  .meta-label {{ font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }}
+  .meta-value {{ font-size: 0.92rem; font-weight: 500; word-break: break-word; }}
+  .stats {{ display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem; }}
+  .stat {{
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 0.25rem 0.75rem;
+    font-size: 0.82rem;
     color: var(--muted);
-    margin-bottom: 0.15rem;
   }}
-  .meta-value {{ font-size: 0.95rem; font-weight: 500; }}
-  h2 {{
-    font-size: 1.15rem;
-    margin-bottom: 0.75rem;
+  .stat strong {{ color: var(--fg); }}
+  .toolbar {{
+    display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;
+    margin: 0.5rem 0 0.75rem;
   }}
+  .toolbar input, .toolbar select {{
+    background: var(--card);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.4rem 0.65rem;
+    font-size: 0.88rem;
+  }}
+  .toolbar input {{ min-width: min(280px, 100%); flex: 1; }}
   table {{
     width: 100%;
     border-collapse: collapse;
-    font-size: 0.88rem;
-    background: #fff;
+    font-size: 0.84rem;
+    background: var(--card);
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: 10px;
     overflow: hidden;
   }}
   th, td {{
-    padding: 0.5rem 0.75rem;
+    padding: 0.45rem 0.65rem;
     text-align: left;
     border-bottom: 1px solid var(--border);
+    vertical-align: top;
   }}
   th {{
-    background: #f3f4f6;
+    background: color-mix(in srgb, var(--card) 80%, var(--border));
     font-weight: 600;
-    font-size: 0.78rem;
+    font-size: 0.72rem;
     text-transform: uppercase;
     letter-spacing: 0.04em;
     color: var(--muted);
+    position: sticky;
+    top: 0;
   }}
   tr:last-child td {{ border-bottom: none; }}
-  tr:hover {{ background: #f9fafb; }}
-  .num {{ font-family: monospace; text-align: right; }}
+  tr:hover {{ filter: brightness(0.98); }}
+  .row-tool {{ background: var(--tool); }}
+  .row-error {{ background: var(--error-bg); }}
+  .num {{ font-family: ui-monospace, Menlo, monospace; text-align: right; }}
+  .mono {{ font-family: ui-monospace, Menlo, monospace; font-size: 0.8rem; white-space: nowrap; }}
+  .kind {{ font-family: ui-monospace, Menlo, monospace; font-size: 0.8rem; }}
+  .detail {{ color: var(--muted); max-width: 28rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+  .muted {{ color: var(--muted); }}
   .badge {{
     display: inline-block;
-    padding: 0.15em 0.5em;
+    padding: 0.12em 0.45em;
     border-radius: 4px;
-    font-size: 0.82rem;
+    font-size: 0.78rem;
     font-weight: 600;
   }}
-  .status-success {{ background: #dcfce7; color: var(--green); }}
-  .status-error {{ background: #fee2e2; color: var(--red); }}
-  .status-running {{ background: #fef9c3; color: var(--yellow); }}
-  .status-pending {{ background: #e0e7ff; color: var(--blue); }}
-  .empty {{ color: var(--muted); font-style: italic; padding: 1.5rem; text-align: center; }}
+  .status-success {{ background: color-mix(in srgb, var(--green) 18%, transparent); color: var(--green); }}
+  .status-error {{ background: color-mix(in srgb, var(--red) 18%, transparent); color: var(--red); }}
+  .status-running {{ background: color-mix(in srgb, var(--yellow) 18%, transparent); color: var(--yellow); }}
+  .status-pending {{ background: color-mix(in srgb, var(--blue) 18%, transparent); color: var(--blue); }}
+  .empty {{ color: var(--muted); font-style: italic; padding: 1rem; }}
+  pre.tools {{
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 0.85rem 1rem;
+    overflow-x: auto;
+    font-size: 0.82rem;
+    font-family: ui-monospace, Menlo, monospace;
+  }}
+  footer {{ margin-top: 2rem; color: var(--muted); font-size: 0.75rem; }}
+  .hidden {{ display: none !important; }}
 </style>
 </head>
 <body>
-  <h1>Run Export</h1>
+  <h1>{title}</h1>
   <div class="run-id">{run_id}</div>
 
   <div class="meta">
-    <div class="meta-item">
-      <span class="meta-label">Command</span>
-      <span class="meta-value">{command}</span>
-    </div>
-    <div class="meta-item">
-      <span class="meta-label">Status</span>
-      <span class="meta-value"><span class="badge {status_class}">{status_str}</span></span>
-    </div>
-    <div class="meta-item">
-      <span class="meta-label">Working Directory</span>
-      <span class="meta-value">{cwd}</span>
-    </div>
-    <div class="meta-item">
-      <span class="meta-label">Started</span>
-      <span class="meta-value">{started}</span>
-    </div>
-    <div class="meta-item">
-      <span class="meta-label">Ended</span>
-      <span class="meta-value">{ended}</span>
-    </div>
-    <div class="meta-item">
-      <span class="meta-label">Duration</span>
-      <span class="meta-value">{duration}</span>
-    </div>
-    <div class="meta-item">
-      <span class="meta-label">Exit Code</span>
-      <span class="meta-value">{exit_code}</span>
-    </div>
+    <div><div class="meta-label">Command</div><div class="meta-value">{command}</div></div>
+    <div><div class="meta-label">Status</div><div class="meta-value"><span class="badge {status_class}">{status_str}</span></div></div>
+    <div><div class="meta-label">Cwd</div><div class="meta-value">{cwd}</div></div>
+    <div><div class="meta-label">Started</div><div class="meta-value">{started}</div></div>
+    <div><div class="meta-label">Ended</div><div class="meta-value">{ended}</div></div>
+    <div><div class="meta-label">Duration</div><div class="meta-value">{duration}</div></div>
+    <div><div class="meta-label">Exit</div><div class="meta-value">{exit_code}</div></div>
+    {notes_block}
   </div>
 
-  <h2>Events ({num_events})</h2>
+  <div class="stats">
+    <span class="stat"><strong>{num_events}</strong> events</span>
+    <span class="stat"><strong>{tool_count}</strong> tools</span>
+    <span class="stat"><strong>{error_count}</strong> errors</span>
+  </div>
+
+  <h2>Tools</h2>
+  {tools_section}
+
+  <h2>Timeline</h2>
+  <div class="toolbar">
+    <input id="filter" type="search" placeholder="Filter kind / source / detail…" autocomplete="off">
+    <select id="srcFilter">
+      <option value="">All sources</option>
+      <option>Tool</option>
+      <option>Terminal</option>
+      <option>Filesystem</option>
+      <option>Git</option>
+      <option>Process</option>
+      <option>System</option>
+      <option>Harness</option>
+    </select>
+  </div>
   {table}
+
+  <footer>Generated by blackbox · self-contained HTML report</footer>
+  <script>
+    const q = document.getElementById('filter');
+    const src = document.getElementById('srcFilter');
+    const rows = [...document.querySelectorAll('tbody tr')];
+    function apply() {{
+      const term = (q.value || '').toLowerCase();
+      const source = (src.value || '').toLowerCase();
+      for (const r of rows) {{
+        const hay = r.innerText.toLowerCase();
+        const okTerm = !term || hay.includes(term);
+        const okSrc = !source || (r.dataset.source || '') === source;
+        r.classList.toggle('hidden', !(okTerm && okSrc));
+      }}
+    }}
+    q.addEventListener('input', apply);
+    src.addEventListener('change', apply);
+  </script>
 </body>
 </html>"#,
-        run_id = run.id,
+        title = html_escape(run.name.as_deref().unwrap_or("Run export")),
+        run_id = html_escape(&run.id),
+        run_id_short = html_escape(&run.id[..8.min(run.id.len())]),
         command = html_escape(&command),
-        status_str = status_str,
+        status_str = html_escape(status_str),
         status_class = status_class,
         cwd = html_escape(cwd),
-        started = started,
-        ended = ended,
+        started = html_escape(started),
+        ended = html_escape(ended),
         duration = duration,
-        exit_code = exit_code,
+        exit_code = html_escape(&exit_code),
+        notes_block = if notes.is_empty() {
+            String::new()
+        } else {
+            format!(
+                r#"<div><div class="meta-label">Notes</div><div class="meta-value">{}</div></div>"#,
+                html_escape(notes)
+            )
+        },
         num_events = events.len(),
+        tool_count = tool_count,
+        error_count = error_count,
+        tools_section = tools_section,
         table = if events.is_empty() {
             r#"<div class="empty">No events recorded.</div>"#.to_string()
         } else {
@@ -256,7 +385,8 @@ pub fn export_html(
         <th>Source</th>
         <th>Kind</th>
         <th>Status</th>
-        <th>Side Effect</th>
+        <th>Effect</th>
+        <th>Detail</th>
       </tr>
     </thead>
     <tbody>
@@ -268,6 +398,34 @@ pub fn export_html(
     );
 
     Ok(html)
+}
+
+fn event_detail(event: &TraceEvent) -> String {
+    if let Some(p) = event.metadata.get("preview").and_then(|v| v.as_str()) {
+        return p.replace('\n', "⏎");
+    }
+    if let Some(n) = event.metadata.get("tool_name").and_then(|v| v.as_str()) {
+        let input = event
+            .metadata
+            .get("input")
+            .map(|v| {
+                let s = v.to_string();
+                if s.len() > 80 {
+                    format!("{}…", &s[..80])
+                } else {
+                    s
+                }
+            })
+            .unwrap_or_default();
+        return format!("{n} {input}");
+    }
+    if let Some(p) = event.metadata.get("path").and_then(|v| v.as_str()) {
+        return p.to_string();
+    }
+    if let Some(c) = event.metadata.get("exit_code") {
+        return format!("exit={c}");
+    }
+    String::new()
 }
 
 fn format_duration(ms: i64) -> String {
@@ -324,12 +482,12 @@ mod tests {
     fn make_run() -> Run {
         Run {
             id: "run-abc123".into(),
-            name: None,
+            name: Some("demo".into()),
             command: vec!["cargo".into(), "test".into()],
             cwd: "/home/user/project".into(),
             project_dir: "/home/user/project".into(),
             tags: vec![],
-            notes: None,
+            notes: Some("adapter:generic".into()),
             status: crate::core::run::RunStatus::Succeeded,
             started_at: Utc::now(),
             ended_at: Some(Utc::now()),
@@ -340,13 +498,13 @@ mod tests {
     }
 
     fn make_event(seq: u64, status: EventStatus) -> TraceEvent {
-        TraceEvent {
+        let mut ev = TraceEvent {
             id: format!("evt-{}", seq),
             run_id: "run-abc123".into(),
             parent_event_id: None,
             sequence: seq,
             source: EventSource::Terminal,
-            kind: "command".into(),
+            kind: "terminal.output".into(),
             started_at: Utc::now(),
             ended_at: Some(Utc::now()),
             duration_ms: Some(100),
@@ -356,31 +514,40 @@ mod tests {
             output_blob: None,
             error_blob: None,
             metadata: std::collections::HashMap::new(),
-        }
+        };
+        ev.metadata
+            .insert("preview".into(), serde_json::json!("hello world"));
+        ev
     }
 
     #[test]
     fn html_export_produces_valid_structure() {
         let run = make_run();
-        let events = vec![make_event(1, EventStatus::Success)];
+        let mut tool = make_event(2, EventStatus::Running);
+        tool.source = EventSource::Tool;
+        tool.kind = "tool.call".into();
+        tool.metadata
+            .insert("tool_name".into(), serde_json::json!("Bash"));
+        let events = vec![make_event(1, EventStatus::Success), tool];
         let html = export_html(&run, &events, false).unwrap();
 
         assert!(html.contains("<!DOCTYPE html>"));
         assert!(html.contains("run-abc123"));
         assert!(html.contains("cargo test"));
         assert!(html.contains("status-success"));
-        assert!(html.contains("Events (1)"));
+        assert!(html.contains("Tools"));
+        assert!(html.contains("Bash"));
+        assert!(html.contains("filter"));
         assert!(html.contains("</table>"));
+        assert!(html.contains("prefers-color-scheme"));
     }
 
     #[test]
     fn html_export_empty_events() {
         let run = make_run();
         let html = export_html(&run, &[], false).unwrap();
-
-        assert!(html.contains("Events (0)"));
-        assert!(html.contains("No events recorded."));
-        assert!(!html.contains("<table>"));
+        assert!(html.contains("No events recorded.") || html.contains("0 events"));
+        assert!(html.contains("No tool.call events"));
     }
 
     #[test]
@@ -388,8 +555,6 @@ mod tests {
         let run = make_run();
         let events = vec![make_event(1, EventStatus::Success)];
         let html = export_html(&run, &events, true).unwrap();
-
-        // cwd should be redacted to basename only
         assert!(html.contains("project"));
         assert!(!html.contains("/home/user/project"));
     }

@@ -76,6 +76,17 @@ blackbox timeline latest --source Tool --semantic
 blackbox rm latest
 blackbox purge --pending --yes          # drop unused fork stubs
 blackbox purge --keep 20 --yes --gc     # keep 20 newest; reclaim blobs
+
+# Search across runs
+blackbox search "bash ls"
+blackbox search tool.call --limit 20
+
+# Live-tail a run (great while an agent is still going)
+blackbox watch latest
+blackbox watch latest --idle-exit 30
+
+# HTML report (client-side filter + dark mode)
+blackbox export latest --format html > report.html
 ```
 
 ### Record an agent
@@ -124,6 +135,8 @@ Export is **redacted by default**. Pass `--no-redact` only for private offline a
 | `doctor` | Diagnose store path, blob dir, secret residue |
 | `rm` | Delete runs (`--gc` reclaims blobs) |
 | `purge` | Bulk delete by policy (`--keep`, `--pending`, `--failed`) |
+| `search` | Search runs/events by free text |
+| `watch` | Live-tail events for a run |
 | `export` | JSONL / HTML / portable |
 | `replay` | Timeline, mock tools, sandbox (seeded workspace) |
 | `fork` | Branch a new run record from a checkpoint |

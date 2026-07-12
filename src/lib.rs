@@ -11,6 +11,7 @@ pub mod replay;
 pub mod resume;
 pub mod run;
 pub mod scrub;
+pub mod search;
 pub mod storage;
 pub mod terminal;
 pub mod transcript;

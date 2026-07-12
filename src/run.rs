@@ -1,8 +1,8 @@
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::{Read, Write};
-use std::os::unix::io::FromRawFd;
+use std::io::{IsTerminal, Read, Write};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Context;
 use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
@@ -42,7 +42,7 @@ impl RunSupervisor {
 
     /// Run a command under observation.
     pub async fn execute(&self, args: &RunArgs) -> anyhow::Result<Run> {
-        // ── 1. Build the Run record ──────────────────────────────
+        // Build the Run record early so we can mark it failed on error.
         let cwd = args
             .project
             .clone()
@@ -58,6 +58,30 @@ impl RunSupervisor {
         run.tags = args.tag.clone();
         run.status = RunStatus::Running;
 
+        match self.execute_inner(args, &mut run).await {
+            Ok(()) => Ok(run),
+            Err(e) => {
+                // Ensure we never leave a run stuck in Running after a failure.
+                if run.status == RunStatus::Running {
+                    run.status = RunStatus::Failed;
+                    run.ended_at = Some(chrono::Utc::now());
+                    run.notes = Some(match run.notes.take() {
+                        Some(n) => format!("{}; error: {}", n, e),
+                        None => format!("error: {}", e),
+                    });
+                    if let Err(update_err) = self.store.update_run(&run).await {
+                        tracing::error!(
+                            error = %update_err,
+                            "failed to mark run as Failed after error"
+                        );
+                    }
+                }
+                Err(e)
+            }
+        }
+    }
+
+    async fn execute_inner(&self, args: &RunArgs, run: &mut Run) -> anyhow::Result<()> {
         // ── Detect harness adapter ────────────────────────────────
         let adapter: Arc<dyn HarnessAdapter> = if ClaudeAdapter::new().detect(&run.command) {
             Arc::new(ClaudeAdapter::new())
@@ -69,7 +93,6 @@ impl RunSupervisor {
         let adapter_id = adapter.id();
         tracing::info!(adapter = adapter_id, "detected harness adapter");
 
-        // Apply adapter-specific launch preparation
         let launch_context = LaunchContext {
             project_dir: run.cwd.clone(),
             environment: std::env::vars().collect(),
@@ -79,12 +102,10 @@ impl RunSupervisor {
             run.command = prepared.command;
             tracing::debug!(adapter = adapter_id, "applied adapter launch preparation");
         }
-
-        // Store adapter metadata in the run
         run.notes = Some(format!("adapter:{}", adapter_id));
 
         self.store
-            .insert_run(&run)
+            .insert_run(run)
             .await
             .context("failed to persist run record")?;
 
@@ -101,17 +122,18 @@ impl RunSupervisor {
             );
         }
 
-        // Store redacted environment as a content-addressed blob
-        let env_json = serde_json::to_vec(&redacted_env)
-            .context("failed to serialize environment")?;
+        let env_json =
+            serde_json::to_vec(&redacted_env).context("failed to serialize environment")?;
         let env_blob = self
             .store
             .store_blob(&env_json)
             .await
             .context("failed to store environment blob")?;
 
-        // Store environment as event metadata
+        let seq = Arc::new(AtomicU64::new(1));
+
         let mut env_event = TraceEvent::new(&run.id, EventSource::System, "environment.captured");
+        env_event.sequence = seq.fetch_add(1, Ordering::Relaxed);
         env_event.status = EventStatus::Success;
         env_event.metadata.insert(
             "environment_blob".to_string(),
@@ -132,33 +154,34 @@ impl RunSupervisor {
             .await
             .context("failed to persist environment event")?;
 
-        // ── 2. Start Capture Layers ───────────────────────────────
+        // ── Start Capture Layers ──────────────────────────────────
         let mut pty_capture = PtyCapture::new();
         let mut git_capture = GitCapture::new().with_store(self.store.clone());
         let mut fs_capture = FilesystemCapture::new();
         let mut process_capture = ProcessCapture::new();
 
-        let pty_rx = pty_capture.start(&run).await?;
-        let git_rx = git_capture.start(&run).await?;
-        let fs_rx = fs_capture.start(&run).await?;
-        let process_rx = process_capture.start(&run).await?;
+        let pty_rx = pty_capture.start(run).await?;
+        let git_rx = git_capture.start(run).await?;
+        let fs_rx = fs_capture.start(run).await?;
+        let process_rx = process_capture.start(run).await?;
 
-        // Merge all capture layer channels into a single event stream
         let mut merged_rx = merge_layers(vec![pty_rx, git_rx, fs_rx, process_rx]);
-
         let run_id = run.id.clone();
 
-        // Task: store merged events from all capture layers
         let store_event_writer = self.store.clone();
+        let seq_writer = seq.clone();
         let event_writer_handle = tokio::spawn(async move {
-            while let Some(ev) = merged_rx.recv().await {
+            while let Some(mut ev) = merged_rx.recv().await {
+                if ev.sequence == 0 {
+                    ev.sequence = seq_writer.fetch_add(1, Ordering::Relaxed);
+                }
                 if let Err(e) = store_event_writer.insert_event(&ev).await {
                     tracing::error!(error = %e, kind = %ev.kind, "failed to persist capture event");
                 }
             }
         });
 
-        // ── Create initial checkpoint with env + git refs ─────────
+        // ── Start checkpoint ──────────────────────────────────────
         let mut start_checkpoint = Checkpoint::new(&run.id, &env_event.id, &run.cwd);
         start_checkpoint.environment_blob = Some(env_blob.key.clone());
         start_checkpoint.git_commit = git_capture.commit_hash().map(str::to_string);
@@ -170,12 +193,17 @@ impl RunSupervisor {
         tracing::debug!(checkpoint_id = %start_checkpoint.id, "start checkpoint created");
         tracing::info!(run_id = %run.id, command = ?run.command, "run started");
 
-        // ── 3. Spawn the child in a PTY ─────────────────────────
+        // ── Spawn child in a PTY ──────────────────────────────────
+        // Use real terminal size when available so interactive apps lay out correctly.
+        let (rows, cols) = term_size::dimensions()
+            .map(|(w, h)| (h as u16, w as u16))
+            .unwrap_or((24, 80));
+
         let pty_system = NativePtySystem::default();
         let pair = pty_system
             .openpty(PtySize {
-                rows: 24,
-                cols: 80,
+                rows,
+                cols,
                 pixel_width: 0,
                 pixel_height: 0,
             })
@@ -192,98 +220,130 @@ impl RunSupervisor {
             .spawn_command(cmd)
             .context("failed to spawn child process")?;
 
-        let child_pid = child.process_id().unwrap_or(0);
-        tracing::info!(pid = child_pid, "child process spawned");
+        // Release the slave handle in the parent — the child owns its end.
+        drop(pair.slave);
 
-        // Notify process capture of the PID
+        let child_pid = child.process_id().unwrap_or(0);
+        tracing::info!(pid = child_pid, rows, cols, "child process spawned");
+
         process_capture.set_pid(child_pid);
         process_capture.emit_spawned().await;
 
-        // Dup master fd for reading and writing (pair will be dropped)
-        // SAFETY: libc::dup returns a valid fd or -1; we check for -1.
-        // File::from_raw_fd takes ownership and will close the fd on drop.
-        let master_fd = pair
+        // portable-pty reader/writer split:
+        // - try_clone_reader(): continuous output stream
+        // - take_writer(): Drop sends newline+VEOF (Ctrl-D) to the slave,
+        //   which is what unblocks programs like `cat` waiting for stdin EOF.
+        //   Raw libc::dup does NOT do this — that was the hang.
+        let mut reader = pair
             .master
-            .as_raw_fd()
-            .context("failed to get master fd")?;
-        let reader_fd = unsafe { libc::dup(master_fd) };
-        if reader_fd < 0 {
-            anyhow::bail!("failed to dup master fd for reading");
-        }
-        // SAFETY: reader_fd is a valid fd from libc::dup (checked above)
-        let mut reader_file = unsafe { File::from_raw_fd(reader_fd) };
-        let writer_fd = unsafe { libc::dup(master_fd) };
-        if writer_fd < 0 {
-            anyhow::bail!("failed to dup master fd for writing");
-        }
-        // SAFETY: writer_fd is a valid fd from libc::dup (checked above)
-        let mut writer_file = unsafe { File::from_raw_fd(writer_fd) };
+            .try_clone_reader()
+            .context("failed to clone PTY reader")?;
+        let writer = pair
+            .master
+            .take_writer()
+            .context("failed to take PTY writer")?;
 
-        // Drop pair — closes slave and original master fds in parent.
-        drop(pair);
+        let stdin_is_tty = std::io::stdin().is_terminal();
+        tracing::debug!(stdin_is_tty, "stdin terminal status");
 
-        // ── stdin forwarding channel ──────────────────────────────
-        let (stdin_tx, mut stdin_rx) = mpsc::channel::<Vec<u8>>(256);
-
-        // Set up a channel for PTY output bytes
+        // ── Channels ──────────────────────────────────────────────
+        // None on the stdin channel means "host stdin closed / EOF".
+        let (stdin_tx, mut stdin_rx) = mpsc::channel::<Option<Vec<u8>>>(256);
         let (pty_out_tx, mut pty_out_rx) = mpsc::channel::<Vec<u8>>(256);
 
-        // Blocking task: read PTY master output
+        // Read PTY master output
         let reader_handle = tokio::task::spawn_blocking(move || {
             let mut buf = [0u8; 8192];
             loop {
-                match reader_file.read(&mut buf) {
-                    Ok(0) => break, // EOF
+                match reader.read(&mut buf) {
+                    Ok(0) => break,
                     Ok(n) => {
-                        let data = buf[..n].to_vec();
-                        if pty_out_tx.blocking_send(data).is_err() {
+                        if pty_out_tx.blocking_send(buf[..n].to_vec()).is_err() {
                             break;
                         }
                     }
-                    Err(_) => break,
+                    Err(e) => {
+                        // Interrupted reads can happen around signals; retry once
+                        if e.kind() == std::io::ErrorKind::Interrupted {
+                            continue;
+                        }
+                        tracing::debug!(error = %e, "PTY reader closed");
+                        break;
+                    }
                 }
             }
         });
 
-        // Task: read from terminal stdin and forward to PTY master
+        // Read host stdin and forward (or signal EOF)
         let stdin_handle = tokio::task::spawn_blocking(move || {
             let mut stdin = std::io::stdin();
             let mut buf = [0u8; 4096];
             loop {
-                match std::io::Read::read(&mut stdin, &mut buf) {
-                    Ok(0) => break, // EOF
+                match stdin.read(&mut buf) {
+                    Ok(0) => {
+                        // Host stdin EOF — tell the writer task to drop the PTY writer
+                        let _ = stdin_tx.blocking_send(None);
+                        break;
+                    }
                     Ok(n) => {
-                        let data = buf[..n].to_vec();
-                        if stdin_tx.blocking_send(data).is_err() {
+                        if stdin_tx.blocking_send(Some(buf[..n].to_vec())).is_err() {
                             break;
                         }
                     }
-                    Err(_) => break,
+                    Err(e) => {
+                        if e.kind() == std::io::ErrorKind::Interrupted {
+                            continue;
+                        }
+                        tracing::debug!(error = %e, "stdin read error");
+                        let _ = stdin_tx.blocking_send(None);
+                        break;
+                    }
                 }
             }
         });
 
-        // Task: write stdin bytes to PTY master
+        // Write host stdin bytes to PTY; when None arrives (or channel closes),
+        // drop the writer so portable-pty sends VEOF to the child.
         let pty_writer_handle = tokio::task::spawn_blocking(move || {
-            while let Some(data) = stdin_rx.blocking_recv() {
-                if writer_file.write_all(&data).is_err() {
-                    break;
+            let mut writer = writer;
+            while let Some(msg) = stdin_rx.blocking_recv() {
+                match msg {
+                    Some(data) => {
+                        if let Err(e) = writer.write_all(&data) {
+                            tracing::debug!(error = %e, "PTY write failed");
+                            break;
+                        }
+                        let _ = writer.flush();
+                    }
+                    None => {
+                        // Explicit host stdin EOF
+                        tracing::debug!("host stdin EOF — closing PTY writer (sends VEOF)");
+                        break;
+                    }
                 }
             }
+            // writer dropped here → UnixMasterWriter::drop sends \n + VEOF
+            drop(writer);
         });
 
-        // Task: forward SIGINT to child process
+        // SIGINT → child process group / pid
         let signal_child_pid = child_pid;
         let signal_handle = tokio::spawn(async move {
             loop {
                 if tokio::signal::ctrl_c().await.is_err() {
                     break;
                 }
+                if signal_child_pid == 0 {
+                    continue;
+                }
                 tracing::debug!(pid = signal_child_pid, "forwarding SIGINT to child");
-                if signal_child_pid > 0 {
-                    // SAFETY: kill is a simple syscall; pid was obtained from portable-pty
-                    let ret = unsafe { libc::kill(signal_child_pid as i32, libc::SIGINT) };
-                    if ret != 0 {
+                // Prefer process group so shells and their children get the signal.
+                // SAFETY: kill is a simple syscall; negative pid = process group.
+                let ret = unsafe { libc::kill(-(signal_child_pid as i32), libc::SIGINT) };
+                if ret != 0 {
+                    // Fallback: signal the process itself
+                    let ret2 = unsafe { libc::kill(signal_child_pid as i32, libc::SIGINT) };
+                    if ret2 != 0 {
                         tracing::warn!(
                             pid = signal_child_pid,
                             errno = std::io::Error::last_os_error().to_string(),
@@ -294,37 +354,32 @@ impl RunSupervisor {
             }
         });
 
-        // Task: consume PTY output via RawRecorder + AnsiNormalizer + SecretScanner
-        // + harness adapter structured parsing (line-buffered NDJSON)
+        // Consume PTY output: record, normalize, redact, parse
         let store_writer = self.store.clone();
         let run_id_writer = run_id.clone();
         let adapter_writer = adapter.clone();
+        let seq_term = seq.clone();
         let scanner = SecretScanner::new(RedactionConfig::default());
         let ansi_normalizer = AnsiNormalizer::new();
-        let writer_handle = tokio::spawn(async move {
+        let output_handle = tokio::spawn(async move {
             let mut recorder = RawRecorder::new();
             if let Err(e) = recorder.start(&run_id_writer).await {
                 tracing::error!(error = %e, "failed to start RawRecorder");
             }
 
             let mut segment_count: u64 = 0;
-            let mut tool_seq: u64 = 0;
             let mut line_buf = String::new();
 
             while let Some(data) = pty_out_rx.recv().await {
                 segment_count += 1;
 
-                // Record via RawRecorder
                 if let Err(e) = recorder.record_output(&data).await {
                     tracing::warn!(error = %e, "RawRecorder.record_output failed");
                 }
 
                 let raw_text = String::from_utf8_lossy(&data).to_string();
-
-                // Normalize ANSI sequences
                 let normalized_text = ansi_normalizer.normalize(&data);
 
-                // Scan for secrets in the normalized output
                 let redactions = scanner.scan(
                     &normalized_text,
                     &format!("terminal:{}", segment_count),
@@ -343,7 +398,7 @@ impl RunSupervisor {
 
                 let mut ev =
                     TraceEvent::new(&run_id_writer, EventSource::Terminal, "terminal.output");
-                ev.sequence = segment_count;
+                ev.sequence = seq_term.fetch_add(1, Ordering::Relaxed);
                 ev.status = EventStatus::Success;
                 ev.metadata
                     .insert("bytes".to_string(), serde_json::json!(data.len()));
@@ -351,101 +406,104 @@ impl RunSupervisor {
                     .insert("raw".to_string(), serde_json::json!(raw_text));
                 ev.metadata
                     .insert("normalized".to_string(), serde_json::json!(redacted_text));
-
                 if !redactions.is_empty() {
                     ev.metadata.insert(
                         "redactions".to_string(),
                         serde_json::json!(redactions.len()),
                     );
                 }
-
                 if let Err(e) = store_writer.insert_event(&ev).await {
                     tracing::error!(error = %e, "failed to persist terminal event");
                 }
 
-                // ── Adapter structured parse (line-buffered) ──────
-                line_buf.push_str(&redacted_text);
+                // Line-buffered adapter parse (\r\n and \n)
+                line_buf.push_str(&redacted_text.replace('\r', ""));
                 while let Some(pos) = line_buf.find('\n') {
                     let line = line_buf[..pos].to_string();
                     line_buf = line_buf[pos + 1..].to_string();
                     if line.trim().is_empty() {
                         continue;
                     }
-                    for mut parsed in adapter_writer.parse_output(&run_id_writer, line.as_bytes())
-                    {
-                        tool_seq += 1;
-                        parsed.sequence = tool_seq;
+                    for mut parsed in adapter_writer.parse_output(&run_id_writer, line.as_bytes()) {
+                        parsed.sequence = seq_term.fetch_add(1, Ordering::Relaxed);
                         if let Err(e) = store_writer.insert_event(&parsed).await {
                             tracing::error!(
                                 error = %e,
                                 kind = %parsed.kind,
                                 "failed to persist adapter event"
                             );
-                        } else {
-                            tracing::debug!(
-                                kind = %parsed.kind,
-                                "structured harness event"
-                            );
                         }
                     }
                 }
             }
 
-            // Flush any trailing incomplete line through the adapter
             if !line_buf.trim().is_empty() {
-                for mut parsed in adapter_writer.parse_output(&run_id_writer, line_buf.as_bytes())
+                for mut parsed in
+                    adapter_writer.parse_output(&run_id_writer, line_buf.as_bytes())
                 {
-                    tool_seq += 1;
-                    parsed.sequence = tool_seq;
+                    parsed.sequence = seq_term.fetch_add(1, Ordering::Relaxed);
                     if let Err(e) = store_writer.insert_event(&parsed).await {
                         tracing::error!(error = %e, "failed to persist trailing adapter event");
                     }
                 }
             }
 
-            // Flush recorder summary event
             match recorder.stop().await {
                 Ok(summary_events) => {
-                    for ev in summary_events {
+                    for mut ev in summary_events {
+                        ev.sequence = seq_term.fetch_add(1, Ordering::Relaxed);
                         if let Err(e) = store_writer.insert_event(&ev).await {
                             tracing::error!(error = %e, "failed to persist recorder summary");
                         }
                     }
                 }
-                Err(e) => {
-                    tracing::warn!(error = %e, "RawRecorder.stop failed");
-                }
+                Err(e) => tracing::warn!(error = %e, "RawRecorder.stop failed"),
             }
 
             segment_count
         });
 
-        // ── 4. Wait for child to exit ────────────────────────────
-        let exit_status = tokio::task::spawn_blocking(move || child.wait())
-            .await
-            .context("wait task panicked")?
-            .context("failed to wait for child process")?;
+        // ── Wait for child, with a safety timeout for deadlocks ───
+        // Primary path: child exits after stdin EOF → writer drop → VEOF.
+        // Safety: if something still hangs, we don't block forever.
+        let wait_handle = tokio::task::spawn_blocking(move || child.wait());
 
-        // Abort signal handler — child is gone
+        let exit_status = tokio::select! {
+            result = wait_handle => {
+                result.context("wait task panicked")?
+                    .context("failed to wait for child process")?
+            }
+            // Extreme safety net (interactive sessions can be long; 24h)
+            _ = tokio::time::sleep(Duration::from_secs(24 * 60 * 60)) => {
+                anyhow::bail!("child process wait timed out after 24h");
+            }
+        };
+
+        // Child is gone — tear down I/O and signals
         signal_handle.abort();
-        // Wait for reader task to drain
-        let _ = reader_handle.await;
 
-        // For non-interactive commands, stdin may still be open; abort those tasks
+        // Abort stdin forwarding if still blocked on a TTY read
         stdin_handle.abort();
-        pty_writer_handle.abort();
+        // Writer task: either already finished (stdin EOF) or will get channel closed
+        // Give it a brief moment to drop the writer cleanly, then abort.
+        let _ = tokio::time::timeout(Duration::from_millis(200), pty_writer_handle).await;
 
-        // Signal capture layers to stop (emits after-run snapshots)
+        // Drain reader / output pipeline
+        let _ = tokio::time::timeout(Duration::from_secs(2), reader_handle).await;
+        let segments = match tokio::time::timeout(Duration::from_secs(2), output_handle).await {
+            Ok(Ok(n)) => n,
+            _ => 0,
+        };
+
+        // Drop master last (after I/O tasks), as recommended by portable-pty
+        drop(pair.master);
+
+        // Stop capture layers (after-run snapshots)
         let _ = pty_capture.stop().await;
         let _ = git_capture.stop().await;
         let _ = fs_capture.stop().await;
         let _ = process_capture.stop().await;
-
-        // Wait for event writer to finish (channels close after stop)
-        let _ = event_writer_handle.await;
-
-        // Wait for writer task to finish
-        let segments = writer_handle.await.unwrap_or(0);
+        let _ = tokio::time::timeout(Duration::from_secs(2), event_writer_handle).await;
 
         tracing::info!(
             exit_code = exit_status.exit_code(),
@@ -454,9 +512,10 @@ impl RunSupervisor {
             "child process exited"
         );
 
-        // ── Create end checkpoint ─────────────────────────────────
+        // ── End event + checkpoint ────────────────────────────────
         let end_event_id = {
             let mut end_ev = TraceEvent::new(&run.id, EventSource::System, "run.completed");
+            end_ev.sequence = seq.fetch_add(1, Ordering::Relaxed);
             end_ev.status = if exit_status.success() {
                 EventStatus::Success
             } else {
@@ -466,17 +525,16 @@ impl RunSupervisor {
                 "exit_code".to_string(),
                 serde_json::json!(exit_status.exit_code()),
             );
-            end_ev.metadata.insert(
-                "segments".to_string(),
-                serde_json::json!(segments),
-            );
+            end_ev
+                .metadata
+                .insert("segments".to_string(), serde_json::json!(segments));
             self.store
                 .insert_event(&end_ev)
                 .await
                 .context("failed to persist completion event")?;
             end_ev.id.clone()
         };
-        // Discover harness session id from captured events (for resume/fork)
+
         let all_events = self.store.get_events(&run.id).await.unwrap_or_default();
         let session_id = adapter.discover_session_id(&all_events);
         if let Some(ref sid) = session_id {
@@ -494,13 +552,16 @@ impl RunSupervisor {
             .context("failed to persist end checkpoint")?;
         tracing::debug!(checkpoint_id = %end_checkpoint.id, "end checkpoint created");
 
-        // ── 5. Finalize the Run ──────────────────────────────────
+        // ── Finalize ──────────────────────────────────────────────
         run.finish(exit_status.exit_code() as i32);
+        run.next_sequence = seq.load(Ordering::Relaxed);
         self.store
-            .update_run(&run)
+            .update_run(run)
             .await
             .context("failed to update run record")?;
 
-        Ok(run)
+        let _ = args; // silence if unused fields
+        let _ = stdin_is_tty;
+        Ok(())
     }
 }

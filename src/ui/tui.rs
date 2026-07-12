@@ -44,24 +44,43 @@ pub struct App {
 }
 
 impl App {
-    async fn load(store: SqliteStore) -> anyhow::Result<Self> {
+    async fn load(store: SqliteStore, preferred_run_id: Option<&str>) -> anyhow::Result<Self> {
         let runs = store.list_runs().await?;
         let run_ids: Vec<String> = runs.iter().map(|r| r.id.clone()).collect();
 
-        // Load events for the first run (if any)
-        let events = if let Some(first_id) = run_ids.first() {
-            store.get_events(first_id).await?
+        // Resolve preferred run: exact id, prefix match, "latest", or first
+        let selected_run_idx = if let Some(pref) = preferred_run_id {
+            if pref == "latest" {
+                0 // list_runs is most-recent-first
+            } else {
+                run_ids
+                    .iter()
+                    .position(|id| id == pref || id.starts_with(pref))
+                    .unwrap_or(0)
+            }
+        } else {
+            0
+        };
+
+        // Load events for the selected run (if any)
+        let events = if let Some(run_id) = run_ids.get(selected_run_idx) {
+            store.get_events(run_id).await?
         } else {
             Vec::new()
         };
+
+        let mut event_detail = EventView::new();
+        if let Some(ev) = events.first() {
+            event_detail.set_event(ev.clone());
+        }
 
         Ok(Self {
             focus: Focus::Runs,
             runs: RunsView::new(runs),
             _timeline: TimelineView::new(events.clone()),
-            _event_detail: EventView::new(),
+            _event_detail: event_detail,
             events,
-            selected_run_idx: 0,
+            selected_run_idx,
             selected_event_idx: 0,
             run_ids,
             store,
@@ -297,7 +316,9 @@ fn render_layout(frame: &mut Frame, app: &App) {
 }
 
 /// Run the TUI event loop.
-pub async fn run_tui(_run_id: Option<&str>) -> anyhow::Result<()> {
+///
+/// `run_id` may be a full UUID, a prefix, `"latest"`, or `None`.
+pub async fn run_tui(run_id: Option<&str>) -> anyhow::Result<()> {
     // Initialize terminal
     enable_raw_mode().context("failed to enable raw mode")?;
     let mut stdout = io::stdout();
@@ -306,10 +327,10 @@ pub async fn run_tui(_run_id: Option<&str>) -> anyhow::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend).context("failed to create terminal")?;
 
-    // Load data from store
+    // Load data from store, focusing the requested run
     let store = SqliteStore::open("blackbox.db")
         .context("failed to open database")?;
-    let mut app = App::load(store).await?;
+    let mut app = App::load(store, run_id).await?;
 
     // Main loop
     let tick_rate = Duration::from_millis(100);

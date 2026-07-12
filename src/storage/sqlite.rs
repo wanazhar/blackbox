@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use anyhow::Context;
 use rusqlite::{params, Connection};
@@ -11,16 +12,21 @@ use crate::core::event::TraceEvent;
 use crate::core::run::Run;
 use crate::storage::TraceStore;
 
+/// Current schema version. Bump when migrations change.
+const SCHEMA_VERSION: i32 = 2;
+
 /// SQLite-backed trace store with content-addressed blob storage.
 ///
 /// Metadata lives in SQLite; large payloads (blobs) are stored as
 /// files in a content-addressed directory (`<blob_dir>/<sha256>`).
-/// All rusqlite operations run on a dedicated blocking thread via
-/// `tokio::task::spawn_blocking` to avoid holding the async runtime.
+///
+/// A single `Mutex<Connection>` serializes access and avoids
+/// SQLITE_BUSY races from concurrent open-per-call connections.
 pub struct SqliteStore {
-    db_path: String,
+    conn: Mutex<Connection>,
     blob_dir: PathBuf,
 }
+
 impl SqliteStore {
     /// Open or create a SQLite database at the given path.
     ///
@@ -30,22 +36,25 @@ impl SqliteStore {
         let path = path.as_ref().to_path_buf();
         let conn = Connection::open(&path).context("failed to open SQLite database")?;
 
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
-            .context("failed to set pragmas")?;
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL;
+             PRAGMA foreign_keys=ON;
+             PRAGMA busy_timeout=5000;",
+        )
+        .context("failed to set pragmas")?;
 
         let blob_dir = path
             .parent()
             .unwrap_or(Path::new("."))
             .join(".blackbox")
             .join("blobs");
-        std::fs::create_dir_all(&blob_dir)
-            .context("failed to create blob directory")?;
+        std::fs::create_dir_all(&blob_dir).context("failed to create blob directory")?;
 
         let store = Self {
-            db_path: path.to_string_lossy().to_string(),
+            conn: Mutex::new(conn),
             blob_dir,
         };
-        store.migrate(&conn)?;
+        store.migrate()?;
         Ok(store)
     }
 
@@ -53,23 +62,67 @@ impl SqliteStore {
     pub fn open_memory() -> anyhow::Result<Self> {
         let conn = Connection::open_in_memory().context("failed to open in-memory SQLite")?;
 
-        conn.execute_batch("PRAGMA foreign_keys=ON;")
+        conn.execute_batch("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;")
             .context("failed to set pragmas")?;
 
-        let blob_dir = std::env::temp_dir().join("blackbox-test-blobs");
-        std::fs::create_dir_all(&blob_dir)
-            .context("failed to create test blob directory")?;
+        let blob_dir = std::env::temp_dir().join(format!(
+            "blackbox-test-blobs-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&blob_dir).context("failed to create test blob directory")?;
 
         let store = Self {
-            db_path: ":memory:".to_string(),
+            conn: Mutex::new(conn),
             blob_dir,
         };
-        store.migrate(&conn)?;
+        store.migrate()?;
         Ok(store)
     }
-    fn migrate(&self, conn: &Connection) -> anyhow::Result<()> {
-        conn.execute_batch(
 
+    fn lock(&self) -> anyhow::Result<std::sync::MutexGuard<'_, Connection>> {
+        self.conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("sqlite lock poisoned: {}", e))
+    }
+
+    /// Run schema migrations up to `SCHEMA_VERSION`.
+    fn migrate(&self) -> anyhow::Result<()> {
+        let conn = self.lock()?;
+
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS schema_version (
+                version INTEGER NOT NULL
+            );",
+        )
+        .context("failed to create schema_version table")?;
+
+        let current: i32 = conn
+            .query_row(
+                "SELECT COALESCE(MAX(version), 0) FROM schema_version",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+
+        if current < 1 {
+            Self::migrate_v1(&conn)?;
+            conn.execute("INSERT INTO schema_version (version) VALUES (1)", [])?;
+        }
+
+        if current < 2 {
+            Self::migrate_v2(&conn, &self.blob_dir)?;
+            conn.execute("INSERT INTO schema_version (version) VALUES (2)", [])?;
+        }
+
+        // Ensure we never claim a higher version than we support
+        let _ = SCHEMA_VERSION;
+
+        Ok(())
+    }
+
+    /// V1: core tables (runs, events, checkpoints, blobs metadata).
+    fn migrate_v1(conn: &Connection) -> anyhow::Result<()> {
+        conn.execute_batch(
             "
             CREATE TABLE IF NOT EXISTS runs (
                 id              TEXT PRIMARY KEY,
@@ -132,22 +185,91 @@ impl SqliteStore {
             );
             ",
         )
-        .context("failed to create tables")?;
+        .context("failed to create v1 tables")?;
 
         Ok(())
     }
 
-    fn get_conn(&self) -> anyhow::Result<Connection> {
-        Connection::open(&self.db_path).context("failed to open SQLite connection")
+    /// V2: migrate legacy in-DB blob storage to on-disk content-addressed files.
+    ///
+    /// Older schemas stored `data BLOB NOT NULL` inside the blobs table.
+    /// Extract those bytes to disk and drop the column by rebuilding the table.
+    fn migrate_v2(conn: &Connection, blob_dir: &Path) -> anyhow::Result<()> {
+        // Detect whether the old `data` column exists
+        let has_data_col: bool = conn
+            .prepare("PRAGMA table_info(blobs)")
+            .and_then(|mut stmt| {
+                let cols: Vec<String> = stmt
+                    .query_map([], |row| row.get::<_, String>(1))?
+                    .filter_map(|r| r.ok())
+                    .collect();
+                Ok(cols.iter().any(|c| c == "data"))
+            })
+            .unwrap_or(false);
+
+        if has_data_col {
+            // Extract blob data to disk before rebuilding the table
+            let mut stmt = conn
+                .prepare("SELECT key, data FROM blobs")
+                .context("failed to prepare blob extract")?;
+            let rows = stmt
+                .query_map([], |row| {
+                    let key: String = row.get(0)?;
+                    let data: Vec<u8> = row.get(1)?;
+                    Ok((key, data))
+                })
+                .context("failed to query legacy blobs")?;
+
+            for row in rows {
+                let (key, data) = row.context("failed to read legacy blob row")?;
+                let path = blob_dir.join(&key);
+                if !path.exists() {
+                    std::fs::write(&path, &data)
+                        .with_context(|| format!("failed to write blob {}", key))?;
+                }
+            }
+
+            // Rebuild blobs table without the data column
+            conn.execute_batch(
+                "
+                CREATE TABLE blobs_new (
+                    key             TEXT PRIMARY KEY,
+                    size            INTEGER NOT NULL,
+                    compressed      INTEGER NOT NULL DEFAULT 0,
+                    content_type    TEXT
+                );
+                INSERT INTO blobs_new (key, size, compressed, content_type)
+                    SELECT key, size, compressed, content_type FROM blobs;
+                DROP TABLE blobs;
+                ALTER TABLE blobs_new RENAME TO blobs;
+                ",
+            )
+            .context("failed to rebuild blobs table for v2")?;
+        } else {
+            // Ensure the table exists in the correct shape
+            conn.execute_batch(
+                "
+                CREATE TABLE IF NOT EXISTS blobs (
+                    key             TEXT PRIMARY KEY,
+                    size            INTEGER NOT NULL,
+                    compressed      INTEGER NOT NULL DEFAULT 0,
+                    content_type    TEXT
+                );
+                ",
+            )
+            .context("failed to ensure blobs table")?;
+        }
+
+        Ok(())
     }
 }
 
 #[async_trait::async_trait]
 impl TraceStore for SqliteStore {
     async fn insert_run(&self, run: &Run) -> anyhow::Result<()> {
-        let conn = self.get_conn()?;
         let run = run.clone();
-        task::spawn_blocking(move || -> anyhow::Result<()> {
+        {
+            let conn = self.lock()?;
             conn.execute(
                 "INSERT INTO runs (id, name, command, cwd, project_dir, tags, notes, status, started_at, ended_at, exit_code, parent_run_id, next_sequence)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
@@ -168,15 +290,15 @@ impl TraceStore for SqliteStore {
                 ],
             )
             .context("failed to insert run")?;
-            Ok(())
-        })
-        .await?
+        }
+        tokio::task::yield_now().await;
+        Ok(())
     }
 
     async fn update_run(&self, run: &Run) -> anyhow::Result<()> {
-        let conn = self.get_conn()?;
         let run = run.clone();
-        task::spawn_blocking(move || -> anyhow::Result<()> {
+        {
+            let conn = self.lock()?;
             conn.execute(
                 "UPDATE runs SET name=?2, command=?3, cwd=?4, project_dir=?5, tags=?6, notes=?7, status=?8, started_at=?9, ended_at=?10, exit_code=?11, parent_run_id=?12, next_sequence=?13
                  WHERE id=?1",
@@ -197,52 +319,49 @@ impl TraceStore for SqliteStore {
                 ],
             )
             .context("failed to update run")?;
-            Ok(())
-        })
-        .await?
+        }
+        tokio::task::yield_now().await;
+        Ok(())
     }
 
     async fn get_run(&self, run_id: &str) -> anyhow::Result<Option<Run>> {
-        let conn = self.get_conn()?;
         let run_id = run_id.to_string();
-        task::spawn_blocking(move || -> anyhow::Result<Option<Run>> {
+        let result = {
+            let conn = self.lock()?;
             let mut stmt = conn.prepare(
                 "SELECT id, name, command, cwd, project_dir, tags, notes, status, started_at, ended_at, exit_code, parent_run_id, next_sequence
                  FROM runs WHERE id = ?1",
             )?;
-
-            let result = stmt.query_row(params![run_id], |row| run_from_row(row));
-
-            match result {
+            match stmt.query_row(params![run_id], |row| run_from_row(row)) {
                 Ok(run) => Ok(Some(run)),
                 Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
                 Err(e) => Err(e.into()),
             }
-        })
-        .await?
+        };
+        tokio::task::yield_now().await;
+        result
     }
 
     async fn list_runs(&self) -> anyhow::Result<Vec<Run>> {
-        let conn = self.get_conn()?;
-        task::spawn_blocking(move || -> anyhow::Result<Vec<Run>> {
+        let result = {
+            let conn = self.lock()?;
             let mut stmt = conn.prepare(
                 "SELECT id, name, command, cwd, project_dir, tags, notes, status, started_at, ended_at, exit_code, parent_run_id, next_sequence
                  FROM runs ORDER BY started_at DESC",
             )?;
-
             let runs = stmt
                 .query_map([], |row| run_from_row(row))?
                 .collect::<Result<Vec<_>, _>>()?;
-
             Ok(runs)
-        })
-        .await?
+        };
+        tokio::task::yield_now().await;
+        result
     }
 
     async fn insert_event(&self, event: &TraceEvent) -> anyhow::Result<()> {
-        let conn = self.get_conn()?;
         let event = event.clone();
-        task::spawn_blocking(move || -> anyhow::Result<()> {
+        {
+            let conn = self.lock()?;
             conn.execute(
                 "INSERT INTO events (id, run_id, parent_event_id, sequence, source, kind, started_at, ended_at, duration_ms, status, side_effect, input_blob, output_blob, error_blob, metadata)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
@@ -265,53 +384,50 @@ impl TraceStore for SqliteStore {
                 ],
             )
             .context("failed to insert event")?;
-            Ok(())
-        })
-        .await?
+        }
+        tokio::task::yield_now().await;
+        Ok(())
     }
 
     async fn get_events(&self, run_id: &str) -> anyhow::Result<Vec<TraceEvent>> {
-        let conn = self.get_conn()?;
         let run_id = run_id.to_string();
-        task::spawn_blocking(move || -> anyhow::Result<Vec<TraceEvent>> {
+        let result = {
+            let conn = self.lock()?;
             let mut stmt = conn.prepare(
                 "SELECT id, run_id, parent_event_id, sequence, source, kind, started_at, ended_at, duration_ms, status, side_effect, input_blob, output_blob, error_blob, metadata
                  FROM events WHERE run_id = ?1 ORDER BY sequence",
             )?;
-
             let events = stmt
                 .query_map(params![run_id], |row| event_from_row(row))?
                 .collect::<Result<Vec<_>, _>>()?;
-
             Ok(events)
-        })
-        .await?
+        };
+        tokio::task::yield_now().await;
+        result
     }
 
     async fn get_event(&self, event_id: &str) -> anyhow::Result<Option<TraceEvent>> {
-        let conn = self.get_conn()?;
         let event_id = event_id.to_string();
-        task::spawn_blocking(move || -> anyhow::Result<Option<TraceEvent>> {
+        let result = {
+            let conn = self.lock()?;
             let mut stmt = conn.prepare(
                 "SELECT id, run_id, parent_event_id, sequence, source, kind, started_at, ended_at, duration_ms, status, side_effect, input_blob, output_blob, error_blob, metadata
                  FROM events WHERE id = ?1",
             )?;
-
-            let result = stmt.query_row(params![event_id], |row| event_from_row(row));
-
-            match result {
+            match stmt.query_row(params![event_id], |row| event_from_row(row)) {
                 Ok(ev) => Ok(Some(ev)),
                 Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
                 Err(e) => Err(e.into()),
             }
-        })
-        .await?
+        };
+        tokio::task::yield_now().await;
+        result
     }
 
     async fn insert_checkpoint(&self, cp: &Checkpoint) -> anyhow::Result<()> {
-        let conn = self.get_conn()?;
         let cp = cp.clone();
-        task::spawn_blocking(move || -> anyhow::Result<()> {
+        {
+            let conn = self.lock()?;
             conn.execute(
                 "INSERT INTO checkpoints (id, run_id, event_id, git_commit, git_diff_blob, filesystem_manifest_blob, cwd, environment_blob, transcript_blob, harness_session_id, created_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
@@ -330,27 +446,26 @@ impl TraceStore for SqliteStore {
                 ],
             )
             .context("failed to insert checkpoint")?;
-            Ok(())
-        })
-        .await?
+        }
+        tokio::task::yield_now().await;
+        Ok(())
     }
 
     async fn get_checkpoints(&self, run_id: &str) -> anyhow::Result<Vec<Checkpoint>> {
-        let conn = self.get_conn()?;
         let run_id = run_id.to_string();
-        task::spawn_blocking(move || -> anyhow::Result<Vec<Checkpoint>> {
+        let result = {
+            let conn = self.lock()?;
             let mut stmt = conn.prepare(
                 "SELECT id, run_id, event_id, git_commit, git_diff_blob, filesystem_manifest_blob, cwd, environment_blob, transcript_blob, harness_session_id, created_at
                  FROM checkpoints WHERE run_id = ?1",
             )?;
-
             let checkpoints = stmt
                 .query_map(params![run_id], |row| checkpoint_from_row(row))?
                 .collect::<Result<Vec<_>, _>>()?;
-
             Ok(checkpoints)
-        })
-        .await?
+        };
+        tokio::task::yield_now().await;
+        result
     }
 
     async fn store_blob(&self, data: &[u8]) -> anyhow::Result<BlobReference> {
@@ -358,18 +473,15 @@ impl TraceStore for SqliteStore {
         hasher.update(data);
         let key = hex::encode(hasher.finalize());
         let size = data.len() as u64;
-        let data = data.to_vec();
-        let key_clone = key.clone();
 
         // Write blob to disk (content-addressed: key IS the filename)
         let blob_path = self.blob_dir.join(&key);
         if !blob_path.exists() {
             let blob_dir = self.blob_dir.clone();
             let key_for_write = key.clone();
-            let data_for_write = data.clone();
+            let data_for_write = data.to_vec();
             task::spawn_blocking(move || -> anyhow::Result<()> {
-                std::fs::create_dir_all(&blob_dir)
-                    .context("failed to create blob directory")?;
+                std::fs::create_dir_all(&blob_dir).context("failed to create blob directory")?;
                 std::fs::write(blob_dir.join(&key_for_write), &data_for_write)
                     .context("failed to write blob file")?;
                 Ok(())
@@ -378,17 +490,15 @@ impl TraceStore for SqliteStore {
         }
 
         // Insert metadata into SQLite (no data column — data lives on disk)
-        let conn = self.get_conn()?;
-        task::spawn_blocking(move || -> anyhow::Result<()> {
+        {
+            let conn = self.lock()?;
             conn.execute(
                 "INSERT OR IGNORE INTO blobs (key, size, compressed, content_type)
                  VALUES (?1, ?2, 0, NULL)",
-                params![key_clone, size as i64],
+                params![key, size as i64],
             )
             .context("failed to store blob metadata")?;
-            Ok(())
-        })
-        .await??;
+        }
 
         Ok(BlobReference::new(key, size))
     }
@@ -398,8 +508,7 @@ impl TraceStore for SqliteStore {
         let key = reference.key.clone();
         task::spawn_blocking(move || -> anyhow::Result<Vec<u8>> {
             let path = blob_dir.join(&key);
-            std::fs::read(&path)
-                .with_context(|| format!("blob not found: {}", path.display()))
+            std::fs::read(&path).with_context(|| format!("blob not found: {}", path.display()))
         })
         .await?
     }
@@ -450,7 +559,8 @@ fn event_from_row(row: &rusqlite::Row) -> rusqlite::Result<TraceEvent> {
         run_id: row.get(1)?,
         parent_event_id: row.get(2)?,
         sequence: row.get::<_, i64>(3)? as u64,
-        source: serde_json::from_str(&source_json).unwrap_or(crate::core::event::EventSource::System),
+        source: serde_json::from_str(&source_json)
+            .unwrap_or(crate::core::event::EventSource::System),
         kind: row.get(5)?,
         started_at: chrono::DateTime::parse_from_rfc3339(&started_at_str)
             .map(|dt| dt.with_timezone(&chrono::Utc))
@@ -461,8 +571,10 @@ fn event_from_row(row: &rusqlite::Row) -> rusqlite::Result<TraceEvent> {
                 .map(|dt| dt.with_timezone(&chrono::Utc))
         }),
         duration_ms: row.get::<_, Option<i64>>(8)?.map(|d| d as u64),
-        status: serde_json::from_str(&status_json).unwrap_or(crate::core::event::EventStatus::Unknown),
-        side_effect: serde_json::from_str(&side_effect_json).unwrap_or(crate::core::event::SideEffect::Unknown),
+        status: serde_json::from_str(&status_json)
+            .unwrap_or(crate::core::event::EventStatus::Unknown),
+        side_effect: serde_json::from_str(&side_effect_json)
+            .unwrap_or(crate::core::event::SideEffect::Unknown),
         input_blob: row.get(11)?,
         output_blob: row.get(12)?,
         error_blob: row.get(13)?,
@@ -488,4 +600,54 @@ fn checkpoint_from_row(row: &rusqlite::Row) -> rusqlite::Result<Checkpoint> {
             .map(|dt| dt.with_timezone(&chrono::Utc))
             .unwrap_or_else(|_| chrono::Utc::now()),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::event::{EventSource, EventStatus};
+    use crate::core::run::RunStatus;
+
+    #[tokio::test]
+    async fn store_and_load_run() {
+        let store = SqliteStore::open_memory().unwrap();
+        let run = Run::new(vec!["echo".into(), "hi".into()], "/tmp".into());
+        store.insert_run(&run).await.unwrap();
+        let loaded = store.get_run(&run.id).await.unwrap().unwrap();
+        assert_eq!(loaded.id, run.id);
+        assert_eq!(loaded.command, run.command);
+    }
+
+    #[tokio::test]
+    async fn store_blob_on_disk() {
+        let store = SqliteStore::open_memory().unwrap();
+        let data = b"hello blob content";
+        let reference = store.store_blob(data).await.unwrap();
+        assert!(!reference.key.is_empty());
+        let loaded = store.load_blob(&reference).await.unwrap();
+        assert_eq!(loaded, data);
+        // Dedup: second store returns same key
+        let reference2 = store.store_blob(data).await.unwrap();
+        assert_eq!(reference.key, reference2.key);
+    }
+
+    #[tokio::test]
+    async fn insert_event_and_checkpoint() {
+        let store = SqliteStore::open_memory().unwrap();
+        let mut run = Run::new(vec!["true".into()], "/tmp".into());
+        run.status = RunStatus::Running;
+        store.insert_run(&run).await.unwrap();
+
+        let mut ev = TraceEvent::new(&run.id, EventSource::System, "test.event");
+        ev.status = EventStatus::Success;
+        store.insert_event(&ev).await.unwrap();
+
+        let events = store.get_events(&run.id).await.unwrap();
+        assert_eq!(events.len(), 1);
+
+        let cp = Checkpoint::new(&run.id, &ev.id, &run.cwd);
+        store.insert_checkpoint(&cp).await.unwrap();
+        let cps = store.get_checkpoints(&run.id).await.unwrap();
+        assert_eq!(cps.len(), 1);
+    }
 }

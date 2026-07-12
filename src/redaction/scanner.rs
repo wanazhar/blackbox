@@ -1,6 +1,36 @@
 use crate::redaction::{RedactionConfig, RedactionReason, RedactionRecord};
 use regex::Regex;
+use std::sync::LazyLock;
 
+/// Compiled base patterns shared across all scanner instances.
+/// Custom patterns from config are appended per-instance.
+static BASE_PATTERNS: LazyLock<Vec<(RedactionReason, Regex)>> = LazyLock::new(|| {
+    let mut patterns: Vec<(RedactionReason, Regex)> = Vec::new();
+
+    let add = |patterns: &mut Vec<(RedactionReason, Regex)>, reason: RedactionReason, re: &str| {
+        if let Ok(compiled) = Regex::new(re) {
+            patterns.push((reason, compiled));
+        }
+    };
+
+    add(&mut patterns, RedactionReason::AuthorizationHeader, r"(?i)(bearer|basic)\s+[A-Za-z0-9\-._~+/]+=*");
+    add(&mut patterns, RedactionReason::ApiKey, r#"(?i)api[_-]?key[_-]?\s*[:=]\s*['"]?[A-Za-z0-9_\-]{16,}"#);
+    add(&mut patterns, RedactionReason::PatternMatch, r#"(?i)(secret|password|passwd|token|credential)[_-]?\s*[:=]\s*['"]?[^\s'"]{8,}"#);
+    add(&mut patterns, RedactionReason::ApiKey, r"(?i)\b(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{36,}\b");
+    add(&mut patterns, RedactionReason::ApiKey, r"\bsk-[A-Za-z0-9]{20,}\b");
+    add(&mut patterns, RedactionReason::ApiKey, r"\bsk-ant-[A-Za-z0-9\-_]{20,}\b");
+    add(&mut patterns, RedactionReason::CloudCredential, r"\b(AKIA|ASIA)[0-9A-Z]{16}\b");
+    add(&mut patterns, RedactionReason::ApiKey, r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b");
+    add(&mut patterns, RedactionReason::PatternMatch, r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b");
+    add(&mut patterns, RedactionReason::SshKey, r"(?i)-----BEGIN (RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY-----");
+    add(&mut patterns, RedactionReason::ConnectionString, r#"(?i)(postgres|mysql|mongodb|redis)://[^\s:]+:[^\s@]+@[^\s]+"#);
+    add(&mut patterns, RedactionReason::ApiKey, r"\bAIza[0-9A-Za-z\-_]{35}\b");
+    add(&mut patterns, RedactionReason::ApiKey, r"\b(?:sk_live|pk_live|sk_test|pk_test)_[0-9a-zA-Z]{24,}\b");
+    add(&mut patterns, RedactionReason::ApiKey, r"\bnpm_[A-Za-z0-9]{36}\b");
+    add(&mut patterns, RedactionReason::SshKey, r"^[A-Za-z0-9+/]{40,}={0,2}$");
+
+    patterns
+});
 /// Scans text content for secrets and sensitive patterns.
 ///
 /// Pattern list is intentionally conservative but broader than the
@@ -12,108 +42,13 @@ pub struct SecretScanner {
 
 impl SecretScanner {
     pub fn new(config: RedactionConfig) -> Self {
-        let mut patterns: Vec<(RedactionReason, Regex)> = Vec::new();
+        let mut patterns = BASE_PATTERNS.clone();
 
-        let add = |patterns: &mut Vec<(RedactionReason, Regex)>, reason: RedactionReason, re: &str| {
-            if let Ok(compiled) = Regex::new(re) {
-                patterns.push((reason, compiled));
-            }
-        };
-
-        // Authorization header: Bearer or Basic tokens
-        add(
-            &mut patterns,
-            RedactionReason::AuthorizationHeader,
-            r"(?i)(bearer|basic)\s+[A-Za-z0-9\-._~+/]+=*",
-        );
-        // API key assignment: api_key = "..." or apiKey: '...'
-        add(
-            &mut patterns,
-            RedactionReason::ApiKey,
-            r#"(?i)api[_-]?key[_-]?\s*[:=]\s*['"]?[A-Za-z0-9_\-]{16,}"#,
-        );
-        // Generic secret assignment in shell/env style
-        add(
-            &mut patterns,
-            RedactionReason::PatternMatch,
-            r#"(?i)(secret|password|passwd|token|credential)[_-]?\s*[:=]\s*['"]?[^\s'"]{8,}"#,
-        );
-        // GitHub tokens
-        add(
-            &mut patterns,
-            RedactionReason::ApiKey,
-            r"(?i)\b(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{36,}\b",
-        );
-        // OpenAI-style / legacy sk- keys
-        add(
-            &mut patterns,
-            RedactionReason::ApiKey,
-            r"\bsk-[A-Za-z0-9]{20,}\b",
-        );
-        // Anthropic-style keys
-        add(
-            &mut patterns,
-            RedactionReason::ApiKey,
-            r"\bsk-ant-[A-Za-z0-9\-_]{20,}\b",
-        );
-        // AWS access key id
-        add(
-            &mut patterns,
-            RedactionReason::CloudCredential,
-            r"\b(AKIA|ASIA)[0-9A-Z]{16}\b",
-        );
-        // Slack tokens
-        add(
-            &mut patterns,
-            RedactionReason::ApiKey,
-            r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b",
-        );
-        // JWT (three base64url segments)
-        add(
-            &mut patterns,
-            RedactionReason::PatternMatch,
-            r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b",
-        );
-        // SSH / PEM private key markers
-        add(
-            &mut patterns,
-            RedactionReason::SshKey,
-            r"(?i)-----BEGIN (RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY-----",
-        );
-        // Connection strings with credentials
-        add(
-            &mut patterns,
-            RedactionReason::ConnectionString,
-            r#"(?i)(postgres|mysql|mongodb|redis)://[^\s:]+:[^\s@]+@[^\s]+"#,
-        );
-        // Google API keys
-        add(
-            &mut patterns,
-            RedactionReason::ApiKey,
-            r"\bAIza[0-9A-Za-z\-_]{35}\b",
-        );
-        // Stripe keys
-        add(
-            &mut patterns,
-            RedactionReason::ApiKey,
-            r"\b(?:sk_live|pk_live|sk_test|pk_test)_[0-9a-zA-Z]{24,}\b",
-        );
-        // npm tokens
-        add(
-            &mut patterns,
-            RedactionReason::ApiKey,
-            r"\bnpm_[A-Za-z0-9]{36}\b",
-        );
-        // PEM body lines: 40+ base64 characters (content between BEGIN/END markers)
-        add(
-            &mut patterns,
-            RedactionReason::SshKey,
-            r"^[A-Za-z0-9+/]{40,}={0,2}$",
-        );
-
-        // Custom patterns from config
+        // Custom patterns from config (compiled fresh per instance)
         for pat in &config.custom_patterns {
-            add(&mut patterns, RedactionReason::PatternMatch, pat);
+            if let Ok(compiled) = Regex::new(pat) {
+                patterns.push((RedactionReason::PatternMatch, compiled));
+            }
         }
 
         Self { config, patterns }

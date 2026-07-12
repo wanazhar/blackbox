@@ -8,6 +8,8 @@ use base64::Engine;
 use crate::core::blob::BlobReference;
 use crate::core::event::TraceEvent;
 use crate::core::run::Run;
+use crate::redaction::scanner::SecretScanner;
+use crate::redaction::RedactionConfig;
 use crate::storage::TraceStore;
 
 const PORTABLE_VERSION: u64 = 2;
@@ -186,6 +188,19 @@ pub async fn import_portable(
     }
 
     events.sort_by_key(|e| e.sequence);
+    // Redact secrets in imported event metadata so untrusted portable
+    // archives cannot inject sensitive values into the local store.
+    let scanner = SecretScanner::new(RedactionConfig::default());
+    for ev in &mut events {
+        for val in ev.metadata.values_mut() {
+            if let Some(s) = val.as_str() {
+                let redacted = scanner.redact(s);
+                if redacted != s {
+                    *val = serde_json::Value::String(redacted);
+                }
+            }
+        }
+    }
     store.insert_run(&run).await?;
     for ev in &events {
         store.insert_event(ev).await?;
@@ -550,5 +565,26 @@ mod tests {
             Some(parent_id),
             "parent_event_id must NOT still reference the old ID"
         );
+    }
+    #[tokio::test]
+    async fn test_portable_redact() {
+        let store = Arc::new(SqliteStore::open_memory().unwrap());
+        let mut run = make_run();
+        run.cwd = "/home/user/.ssh/keys/secret-project".into();
+        store.insert_run(&run).await.unwrap();
+        let secret_blob = b"AKIAIOSFODNN7EXAMPLE is the access key";
+        let blob_ref = store.store_blob(secret_blob).await.unwrap();
+        let mut ev = make_event(1);
+        ev.output_blob = Some(blob_ref.key.clone());
+        ev.metadata.insert("diff_preview".into(), serde_json::json!("secret token sk-abcdefghijklmnopqrstuvwxyz012345"));
+        ev.metadata.insert("raw".into(), serde_json::json!("raw content with secret"));
+        store.insert_event(&ev).await.unwrap();
+        let events = store.get_events(&run.id).await.unwrap();
+        let output = export_portable(store.as_ref(), &run, &events, true).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(parsed["run"]["cwd"], "secret-project");
+        let event_meta = &parsed["events"][0]["metadata"];
+        assert!(!event_meta.get("raw").is_some_and(|v| !v.is_null()), "raw metadata should be removed");
+        assert_eq!(event_meta["diff_preview"], "[REDACTED]", "diff_preview should be redacted");
     }
 }

@@ -81,7 +81,11 @@ pub async fn search_store(
         }
     }
 
-    hits.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| b.run_id.cmp(&a.run_id)));
+    hits.sort_by(|a, b| {
+        b.score
+            .cmp(&a.score)
+            .then_with(|| b.sequence.unwrap_or(0).cmp(&a.sequence.unwrap_or(0)))
+    });
     hits.truncate(limit);
     Ok(hits)
 }

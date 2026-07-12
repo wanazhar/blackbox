@@ -15,6 +15,7 @@ pub struct ScrubReport {
     pub runs_updated: usize,
     pub events_scanned: usize,
     pub events_updated: usize,
+    pub checkpoints_scanned: usize,
     pub blobs_rewritten: usize,
     pub dry_run: bool,
 }
@@ -148,12 +149,13 @@ async fn scrub_event(
 /// Human-readable summary line.
 pub fn format_report(report: &ScrubReport) -> String {
     format!(
-        "{}runs={}/{} events={}/{} blobs_rewritten={}{}",
+        "{}runs={}/{} events={}/{} checkpoints={} blobs_rewritten={}{}",
         if report.dry_run { "[dry-run] " } else { "" },
         report.runs_updated,
         report.runs_scanned,
         report.events_updated,
         report.events_scanned,
+        report.checkpoints_scanned,
         report.blobs_rewritten,
         if report.dry_run {
             " (no changes written)"
@@ -287,5 +289,41 @@ mod tests {
             .unwrap_or("");
         assert!(preview.contains("[REDACTED]"));
         assert!(!events[0].metadata.contains_key("raw"));
+    }
+    #[tokio::test]
+    async fn test_scrub_rewrites_blobs() {
+        let store = Arc::new(SqliteStore::open_memory().unwrap());
+        let run = crate::core::run::Run::new(
+            vec!["echo".into(), "test".into()],
+            "/tmp".into(),
+        );
+        store.insert_run(&run).await.unwrap();
+
+        let secret_content = b"output from command:AKIAIOSFODNN7EXAMPLE";
+        let blob_ref = store.store_blob(secret_content).await.unwrap();
+        let original_key = blob_ref.key.clone();
+
+        let mut ev = TraceEvent::new(&run.id, EventSource::Terminal, "terminal.output");
+        ev.status = EventStatus::Success;
+        ev.output_blob = Some(original_key.clone());
+        store.insert_event(&ev).await.unwrap();
+
+        let report = scrub_store(store.clone(), false, Some("all"), None)
+            .await
+            .unwrap();
+
+        assert!(report.blobs_rewritten >= 1, "expected blobs_rewritten >= 1, got {}", report.blobs_rewritten);
+
+        let events = store.get_events(&run.id).await.unwrap();
+        let new_key = events[0].output_blob.as_ref().unwrap();
+        assert_ne!(new_key, &original_key, "blob key should change after scrub");
+
+        let new_blob = store
+            .load_blob(&crate::core::blob::BlobReference::new(new_key.clone(), 0))
+            .await
+            .unwrap();
+        let text = String::from_utf8_lossy(&new_blob);
+        assert!(!text.contains("AKIAIOSFODNN7"), "secret must not appear in scrubbed blob: {text}");
+        assert!(text.contains("[REDACTED]"));
     }
 }

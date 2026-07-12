@@ -35,6 +35,9 @@ impl AnsiNormalizer {
         // NOTE: Collecting into Vec<char> allocates proportional to input length.
         // A char-indexed iterator would avoid this, but the index arithmetic
         // (i += 2, i += 1, etc.) makes Vec indexing the clearest correct path.
+        // TODO: Benchmark Vec<char> vs. byte-offset iterator for large inputs
+        // (>100 KB). If measurable savings exist, refactor the loop to work
+        // on byte offsets and decode chars on demand.
         let chars: Vec<char> = text.chars().collect();
         let len = chars.len();
         let mut i = 0;

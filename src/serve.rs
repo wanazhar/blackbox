@@ -15,9 +15,9 @@ use axum::routing::get;
 use axum::{Json, Router};
 use futures_util::stream::{self, Stream};
 use serde::Deserialize;
-
-use crate::export::html::export_html;
+use tokio::sync::Semaphore;
 use crate::export::portable::{export_portable, import_portable};
+use crate::export::html::export_html;
 use crate::search::search_store;
 use crate::storage::sqlite::SqliteStore;
 use crate::storage::TraceStore;
@@ -29,6 +29,8 @@ struct AppState {
     store: Arc<SqliteStore>,
     /// Optional shared secret. When set, all routes require it.
     token: Option<String>,
+    /// Semaphore limiting concurrent SSE streams (max 100).
+    sse_semaphore: Arc<Semaphore>,
 }
 
 /// Dashboard configuration.
@@ -48,6 +50,7 @@ pub async fn serve(store: Arc<SqliteStore>, opts: ServeOptions) -> anyhow::Resul
     let state = AppState {
         store,
         token: opts.token.clone(),
+        sse_semaphore: Arc::new(Semaphore::new(100)),
     };
 
     let app = Router::new()
@@ -66,6 +69,7 @@ pub async fn serve(store: Arc<SqliteStore>, opts: ServeOptions) -> anyhow::Resul
         .route("/api/sync/runs/{id}", get(api_sync_get_run).put(api_sync_put_run))
         .route("/search", get(search_page))
         .layer(from_fn_with_state(state.clone(), auth_middleware))
+        .layer(from_fn_with_state(state.clone(), timeout_middleware))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(opts.addr).await?;
@@ -101,7 +105,7 @@ async fn auth_middleware(
             (
                 StatusCode::UNAUTHORIZED,
                 [(header::WWW_AUTHENTICATE, "Bearer")],
-                "unauthorized: pass Authorization: Bearer <token> or ?token=",
+                "Unauthorized",
             )
                 .into_response()
         }
@@ -113,6 +117,18 @@ async fn auth_middleware(
     headers.insert("x-content-type-options", "nosniff".parse().unwrap());
     headers.insert("x-frame-options", "DENY".parse().unwrap());
     response
+}
+
+/// Per-request timeout middleware (30 seconds).
+async fn timeout_middleware(
+    State(_state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    match tokio::time::timeout(Duration::from_secs(30), next.run(request)).await {
+        Ok(response) => response,
+        Err(_) => (StatusCode::REQUEST_TIMEOUT, "request timed out").into_response(),
+    }
 }
 
 /// Authenticate a request via `Authorization: Bearer` header or `?token=`
@@ -147,11 +163,11 @@ fn token_ok(expected: &str, headers: &HeaderMap, query: Option<&str>) -> bool {
 /// where the first difference occurs, preventing timing side-channel attacks
 /// on bearer-token validation.
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
+    let mut diff = (a.len() != b.len()) as u8;
+    let max_len = a.len().max(b.len());
+    for i in 0..max_len {
+        let x = a.get(i).copied().unwrap_or(0);
+        let y = b.get(i).copied().unwrap_or(0);
         diff |= x ^ y;
     }
     diff == 0
@@ -178,7 +194,7 @@ async fn index(State(state): State<AppState>) -> Result<Html<String>, AppError> 
   <a class="btn secondary" href="/api/runs">JSON API</a>
   <span class="muted" id="stream">live list: connecting…</span>
 </div>
-<p class="muted"><span id="count">{n}</span> run(s) · store {db}</p>
+<p class="muted"><span id="count">{n}</span> run(s)</p>
 <table>
   <thead><tr><th>ID</th><th>Status</th><th>Exit</th><th>Label</th><th>Started</th></tr></thead>
   <tbody id="runs">{rows}</tbody>
@@ -233,7 +249,6 @@ es.onerror = () => {{ streamEl.textContent = 'live list: reconnecting…'; }};
 </script>
 <style>.flash {{ animation: flash 1.2s ease; }} @keyframes flash {{ from {{ background: color-mix(in srgb, var(--accent) 35%, transparent); }} to {{ background: transparent; }} }}</style>"#,
             n = runs.len(),
-            db = html_escape(&state.store.db_path().display().to_string()),
             rows = rows,
         ),
     )))
@@ -521,7 +536,13 @@ async fn api_runs(State(state): State<AppState>) -> Result<Json<serde_json::Valu
 /// SSE stream of run snapshots (initial + updates / new runs).
 async fn api_runs_stream(
     State(state): State<AppState>,
-) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, AppError> {
+    let _permit = state
+        .sse_semaphore
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|_| anyhow::anyhow!("SSE connection limit reached"))?;
     let store = state.store.clone();
     let stream = stream::unfold(
         RunsStreamState {
@@ -532,9 +553,10 @@ async fn api_runs_stream(
         |mut st| async move {
             let runs = match st.store.list_runs().await {
                 Ok(r) => r,
-                Err(_) => {
+                Err(e) => {
+                    tracing::error!(error = %e, "SSE: failed to list runs");
                     tokio::time::sleep(Duration::from_millis(800)).await;
-                    return Some((Ok(Event::default().event("ping").data("ok")), st));
+                    return Some((Ok(Event::default().event("error").data(format!("list_runs failed: {e}"))), st));
                 }
             };
 
@@ -553,9 +575,17 @@ async fn api_runs_stream(
                     .unwrap_or(true);
                 if changed {
                     st.known.insert(run.id.clone(), fingerprint);
-                    if let Ok(data) = serde_json::to_string(run) {
-                        // One SSE frame per tick; remaining changes flush next poll.
-                        return Some((Ok(Event::default().event("run").data(data)), st));
+                    match serde_json::to_string(run) {
+                        Ok(data) => {
+                            // One SSE frame per tick; remaining changes flush next poll.
+                            return Some((Ok(Event::default().event("run").data(data)), st));
+                        }
+                        Err(e) => {
+                            tracing::error!(error = %e, run_id = %run.id, "SSE: failed to serialize run");
+                            st.known.remove(&run.id);
+                            let err_data = serde_json::json!({"error": "serialization failed", "run_id": run.id});
+                            return Some((Ok(Event::default().event("error").data(err_data.to_string())), st));
+                        }
                     }
                 }
             }
@@ -565,7 +595,7 @@ async fn api_runs_stream(
             Some((Ok(Event::default().event("ping").data("ok")), st))
         },
     );
-    Sse::new(stream).keep_alive(KeepAlive::default())
+    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
 }
 
 struct RunsStreamState {
@@ -605,6 +635,12 @@ async fn api_event_stream(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, AppError> {
+    let _permit = state
+        .sse_semaphore
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|_| anyhow::anyhow!("SSE connection limit reached"))?;
     let run_id = resolve_prefix(state.store.as_ref(), &id).await?;
     let store = state.store.clone();
 
@@ -752,7 +788,12 @@ async fn api_sync_put_run(
 ) -> Result<Json<serde_json::Value>, AppError> {
     const MAX_SYNC_BODY: usize = 10 * 1024 * 1024; // 10 MB
     if body.len() > MAX_SYNC_BODY {
-        return Err(AppError(anyhow::anyhow!("payload too large: exceeds 10 MB limit")));
+        return Err(AppError::payload_too_large(anyhow::anyhow!("payload too large: exceeds 10 MB limit")));
+    }
+    if state.token.is_none() {
+        return Err(AppError::forbidden(anyhow::anyhow!(
+            "sync PUT requires authentication: configure --token to enable"
+        )));
     }
     // Prefer keep original ids so multi-machine ids stay stable
     let result = match import_portable(state.store.as_ref(), &body, false).await {
@@ -804,14 +845,14 @@ fn event_row_html(ev: &crate::core::event::TraceEvent) -> String {
     )
 }
 
-async fn resolve_prefix(store: &dyn TraceStore, spec: &str) -> anyhow::Result<String> {
+async fn resolve_prefix(store: &dyn TraceStore, spec: &str) -> Result<String, AppError> {
     if spec == "latest" {
         return store
             .list_runs()
             .await?
             .first()
             .map(|r| r.id.clone())
-            .ok_or_else(|| anyhow::anyhow!("no runs"));
+            .ok_or_else(|| AppError::not_found(anyhow::anyhow!("no runs")));
     }
     if store.get_run(spec).await?.is_some() {
         return Ok(spec.to_string());
@@ -824,8 +865,8 @@ async fn resolve_prefix(store: &dyn TraceStore, spec: &str) -> anyhow::Result<St
         .collect();
     match matches.len() {
         1 => Ok(matches[0].clone()),
-        0 => Err(anyhow::anyhow!("run not found: {spec}")),
-        _ => Err(anyhow::anyhow!("ambiguous run id: {spec}")),
+        0 => Err(AppError::not_found(anyhow::anyhow!("run not found: {spec}"))),
+        _ => Err(AppError::bad_request(anyhow::anyhow!("ambiguous run id: {spec}"))),
     }
 }
 
@@ -916,33 +957,206 @@ fn urlencoding(s: &str) -> String {
     result
 }
 
-struct AppError(anyhow::Error);
+#[derive(Debug)]
+enum AppErrorKind {
+    NotFound(anyhow::Error),
+    BadRequest(anyhow::Error),
+    Forbidden(anyhow::Error),
+    PayloadTooLarge(anyhow::Error),
+    Internal(anyhow::Error),
+}
+
+struct AppError(AppErrorKind);
+
+impl AppError {
+    fn not_found(e: anyhow::Error) -> Self {
+        Self(AppErrorKind::NotFound(e))
+    }
+    fn bad_request(e: anyhow::Error) -> Self {
+        Self(AppErrorKind::BadRequest(e))
+    }
+    fn forbidden(e: anyhow::Error) -> Self {
+        Self(AppErrorKind::Forbidden(e))
+    }
+    fn payload_too_large(e: anyhow::Error) -> Self {
+        Self(AppErrorKind::PayloadTooLarge(e))
+    }
+}
 
 impl From<anyhow::Error> for AppError {
     fn from(e: anyhow::Error) -> Self {
-        Self(e)
+        Self(AppErrorKind::Internal(e))
     }
 }
 
 impl From<serde_json::Error> for AppError {
     fn from(e: serde_json::Error) -> Self {
-        Self(e.into())
+        Self(AppErrorKind::Internal(e.into()))
     }
 }
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        let msg = format!("error: {}", self.0);
-        let status = if msg.contains("not found") {
-            StatusCode::NOT_FOUND
-        } else if msg.contains("bad request") || msg.contains("invalid") {
-            StatusCode::BAD_REQUEST
-        } else if msg.contains("too large") {
-            StatusCode::PAYLOAD_TOO_LARGE
-        } else {
-            tracing::debug!(error = %self.0, "returning 500 Internal Server Error");
-            StatusCode::INTERNAL_SERVER_ERROR
+        let (status, err) = match self.0 {
+            AppErrorKind::NotFound(e) => (StatusCode::NOT_FOUND, e),
+            AppErrorKind::BadRequest(e) => (StatusCode::BAD_REQUEST, e),
+            AppErrorKind::Forbidden(e) => (StatusCode::FORBIDDEN, e),
+            AppErrorKind::PayloadTooLarge(e) => (StatusCode::PAYLOAD_TOO_LARGE, e),
+            AppErrorKind::Internal(e) => {
+                tracing::debug!(error = %e, "returning 500 Internal Server Error");
+                return (StatusCode::INTERNAL_SERVER_ERROR, "internal server error").into_response();
+            }
         };
-        (status, msg).into_response()
+        (status, format!("error: {}", err)).into_response()
+    }
+}
+
+#[cfg(test)]
+mod testing {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    impl AppState {
+        pub fn new(store: Arc<SqliteStore>) -> Self {
+            Self {
+                store,
+                token: None,
+                sse_semaphore: Arc::new(Semaphore::new(100)),
+            }
+        }
+    }
+
+    pub fn build_router(state: AppState) -> Router {
+        Router::new()
+            .route("/api/runs", get(api_runs))
+            .route("/api/runs/{id}", get(api_run))
+            .route("/api/runs/{id}/events", get(api_events))
+            .with_state(state)
+    }
+
+    #[tokio::test]
+    async fn test_serve_endpoints() {
+        let store = Arc::new(SqliteStore::open_memory().unwrap());
+
+        // Insert test data: two runs, each with events
+        let run1 = crate::core::run::Run::new(vec!["echo".into(), "hello".into()], "/tmp".into());
+        let mut run2 = crate::core::run::Run::new(vec!["ls".into(), "-la".into()], "/tmp".into());
+        run2.name = Some("list-files".into());
+        run2.tags = vec!["test".into()];
+        store.insert_run(&run1).await.unwrap();
+        store.insert_run(&run2).await.unwrap();
+
+        let mut ev1 = crate::core::event::TraceEvent::new(&run1.id, crate::core::event::EventSource::Terminal, "terminal.output");
+        ev1.status = crate::core::event::EventStatus::Success;
+        ev1.sequence = 0;
+        store.insert_event(&ev1).await.unwrap();
+
+        let mut ev2 = crate::core::event::TraceEvent::new(&run1.id, crate::core::event::EventSource::Tool, "tool.call");
+        ev2.status = crate::core::event::EventStatus::Running;
+        ev2.sequence = 1;
+        ev2.metadata.insert("tool_name".into(), serde_json::json!("Bash"));
+        store.insert_event(&ev2).await.unwrap();
+
+        let state = AppState::new(store.clone());
+        let app = build_router(state);
+
+        // ── Test GET /api/runs ────────────────────────────────
+        let resp = app.clone()
+            .oneshot(Request::builder().uri("/api/runs").body(Body::empty()).unwrap())
+            .await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let runs: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(runs.len(), 2, "should list both runs");
+
+        // ── Test GET /api/runs/{id} ──────────────────────────
+        let resp = app.clone()
+            .oneshot(Request::builder().uri(format!("/api/runs/{}", run1.id)).body(Body::empty()).unwrap())
+            .await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let run_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(run_json["id"].as_str().unwrap(), run1.id);
+        assert_eq!(run_json["command"].as_array().unwrap().len(), 2);
+
+        // ── Test GET /api/runs/{id}/events ────────────────────
+        let resp = app.clone()
+            .oneshot(Request::builder().uri(format!("/api/runs/{}/events", run1.id)).body(Body::empty()).unwrap())
+            .await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let events: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(events.len(), 2, "should return both events for run1");
+        assert_eq!(events[0]["sequence"].as_u64().unwrap(), 0);
+        assert_eq!(events[1]["sequence"].as_u64().unwrap(), 1);
+
+        // ── Test 404 for non-existent run ────────────────────
+        let resp = app
+            .oneshot(Request::builder().uri("/api/runs/nonexistent-id-12345").body(Body::empty()).unwrap())
+            .await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND, "should return 404 for missing run");
+    }
+    #[test]
+    fn test_auth_token_comparison() {
+        assert!(constant_time_eq(b"secret-token-123", b"secret-token-123"));
+        assert!(!constant_time_eq(b"token-a", b"token-b"));
+        assert!(!constant_time_eq(b"short", b"much-longer-token"));
+        assert!(!constant_time_eq(b"", b"something"));
+        assert!(constant_time_eq(b"", b""));
+        assert!(!constant_time_eq(b"AAAA", b"BAAC"));
+        assert!(!constant_time_eq(b"AAAA", b"AAB"));
+    }
+
+    #[tokio::test]
+    async fn test_auth_middleware_rejects_without_token() {
+        let store = Arc::new(SqliteStore::open_memory().unwrap());
+        let state = AppState { store, token: Some("test-secret".into()), sse_semaphore: Arc::new(Semaphore::new(100)) };
+        let app = Router::new().route("/", get(test_handler))
+            .layer(from_fn_with_state(state.clone(), auth_middleware))
+            .with_state(state);
+        let resp = app.oneshot(Request::builder().uri("/").body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_auth_middleware_accepts_valid_token() {
+        let store = Arc::new(SqliteStore::open_memory().unwrap());
+        let state = AppState { store, token: Some("test-secret".into()), sse_semaphore: Arc::new(Semaphore::new(100)) };
+        let app = Router::new().route("/", get(test_handler))
+            .layer(from_fn_with_state(state.clone(), auth_middleware))
+            .with_state(state);
+        let resp = app.oneshot(Request::builder().uri("/").header(header::AUTHORIZATION, "Bearer test-secret").body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_auth_middleware_passthrough_when_no_token() {
+        let store = Arc::new(SqliteStore::open_memory().unwrap());
+        let state = AppState { store, token: None, sse_semaphore: Arc::new(Semaphore::new(100)) };
+        let app = Router::new().route("/", get(test_handler))
+            .layer(from_fn_with_state(state.clone(), auth_middleware))
+            .with_state(state);
+        let resp = app.oneshot(Request::builder().uri("/").body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_auth_middleware_sets_security_headers() {
+        let store = Arc::new(SqliteStore::open_memory().unwrap());
+        let state = AppState { store, token: None, sse_semaphore: Arc::new(Semaphore::new(100)) };
+        let app = Router::new().route("/", get(test_handler))
+            .layer(from_fn_with_state(state.clone(), auth_middleware))
+            .with_state(state);
+        let resp = app.oneshot(Request::builder().uri("/").body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let headers = resp.headers();
+        assert_eq!(headers.get("x-content-type-options").unwrap(), "nosniff");
+        assert_eq!(headers.get("x-frame-options").unwrap(), "DENY");
+    }
+
+    async fn test_handler() -> (StatusCode, &'static str) {
+        (StatusCode::OK, "ok")
     }
 }

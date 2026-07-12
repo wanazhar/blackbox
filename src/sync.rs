@@ -244,6 +244,13 @@ pub async fn sync_pull_http(
     Ok(report)
 }
 
+/// Build an HTTP client for sync operations.
+///
+/// TLS uses the system-native certificate store (via `rustls-tls` in reqwest).
+/// No custom certificate pinning or root CA configuration is applied — the
+/// platform defaults (e.g. `/etc/ssl/certs` on Linux, system keychain on macOS)
+/// are trusted. This is appropriate for most deployments but should be
+/// documented for air-gapped or certificate-restricted environments.
 fn http_client() -> anyhow::Result<reqwest::Client> {
     reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(120))
@@ -543,6 +550,15 @@ fn load_manifest(dir: &Path) -> anyhow::Result<SyncManifest> {
     let text =
         std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
     let mut man: SyncManifest = serde_json::from_str(&text).context("parse manifest.json")?;
+    // Validate schema version — refuse manifests from a newer writer that
+    // may contain fields we cannot safely round-trip.
+    if man.version > MANIFEST_VERSION {
+        anyhow::bail!(
+            "manifest version {} exceeds supported version {} — upgrade blackbox to sync with this remote",
+            man.version,
+            MANIFEST_VERSION,
+        );
+    }
     if man.version == 0 {
         man.version = MANIFEST_VERSION;
     }
@@ -658,5 +674,25 @@ mod tests {
         let (b2, p2) = parse_s3_url("s3://bucket-only").unwrap();
         assert_eq!(b2, "bucket-only");
         assert!(p2.is_empty());
+    }
+    #[tokio::test]
+    async fn test_sync_checksum() {
+        let store = Arc::new(SqliteStore::open_memory().unwrap());
+        let dir = std::env::temp_dir().join(format!("bb-sync-checksum-{}", uuid::Uuid::new_v4()));
+        let mut run = Run::new(vec!["echo".into(), "checksum".into()], "/tmp".into());
+        run.status = crate::core::run::RunStatus::Succeeded;
+        run.exit_code = Some(0);
+        store.insert_run(&run).await.unwrap();
+        let push = sync_push(store.as_ref(), &dir, false).await.unwrap();
+        assert_eq!(push.pushed, 1);
+        let file_path = dir.join("runs").join(format!("{}.json", run.id));
+        let mut content = std::fs::read_to_string(&file_path).unwrap();
+        content.push_str("\nCORRUPTED");
+        std::fs::write(&file_path, &content).unwrap();
+        let store2 = Arc::new(SqliteStore::open_memory().unwrap());
+        let pull = sync_pull(store2.as_ref(), &dir).await.unwrap();
+        assert_eq!(pull.pulled, 0, "corrupted file should not be imported");
+        assert!(pull.errors.iter().any(|e| e.contains("checksum mismatch")), "should report checksum mismatch, errors: {:?}", pull.errors);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

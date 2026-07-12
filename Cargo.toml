@@ -88,6 +88,7 @@ term_size = "0.3"
 # Local web dashboard
 axum = { version = "0.8", default-features = true, features = ["macros"] }
 tower = "0.5"
+tower-http = { version = "0.6", features = ["timeout"] }
 futures-util = "0.3"
 
 # Remote sync clients

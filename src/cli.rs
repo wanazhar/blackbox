@@ -8,6 +8,10 @@ use crate::config::{BlackboxPaths, CapturePolicy};
 use crate::storage::sqlite::SqliteStore;
 use crate::storage::TraceStore;
 
+
+/// Default bind address for `blackbox serve`.
+#[allow(dead_code)] // documented constant — clap requires a string literal for default_value
+const DEFAULT_SERVE_PORT: &str = "127.0.0.1:7788";
 /// A flight recorder and debugger for AI-agent runs
 #[derive(Parser)]
 #[command(name = "blackbox")]
@@ -626,11 +630,17 @@ async fn cmd_runs(cli: &Cli, args: &RunsArgs) -> anyhow::Result<()> {
     if !args.tag.is_empty() {
         runs.retain(|r| args.tag.iter().any(|t| r.tags.iter().any(|rt| rt == t)));
     }
-    if let Some(ref status) = args.status {
+    if let Some(status) = &args.status {
+        // Validate against known status values with a helpful error
+        let valid_statuses = ["pending", "running", "succeeded", "failed", "cancelled", "unknown"];
         let s = status.to_lowercase();
+        if !valid_statuses.iter().any(|v| v.contains(&s) || s.contains(v)) {
+            anyhow::bail!(
+                "unknown status {:?}; valid values: Pending, Running, Succeeded, Failed, Cancelled, Unknown",
+                status
+            );
+        }
         runs.retain(|r| format!("{:?}", r.status).to_lowercase().contains(&s));
-        // L-18: Lenient matching — accepts partial/lowercase status strings
-        // (e.g. "suc" matches "Succeeded", "fail" matches "Failed").
     }
     if let Some(limit) = args.limit {
         runs.truncate(limit);
@@ -738,6 +748,15 @@ async fn cmd_tag(cli: &Cli, args: &TagArgs) -> anyhow::Result<()> {
     if args.add.is_empty() && args.rm.is_empty() {
         anyhow::bail!("pass --add TAG and/or --rm TAG");
     }
+    // Reject tags that appear in both --add and --rm
+    let overlap: Vec<_> = args.add.iter().filter(|t| args.rm.contains(t)).collect();
+    if !overlap.is_empty() {
+        let names: Vec<&str> = overlap.iter().map(|s| s.as_str()).collect();
+        anyhow::bail!(
+            "tags appear in both --add and --rm: {}; remove the conflict and retry",
+            names.join(", ")
+        );
+    }
     let store = open_store(cli)?;
     let run_id = resolve_run_id(&store, &args.run_id).await?;
     let mut run = store
@@ -745,8 +764,6 @@ async fn cmd_tag(cli: &Cli, args: &TagArgs) -> anyhow::Result<()> {
         .await?
         .ok_or_else(|| anyhow::anyhow!("run not found"))?;
 
-    // L-23: When a tag appears in both --add and --rm, the remove runs first,
-    // then the add re-inserts it. Net effect is the tag stays (idempotent add).
     for t in &args.rm {
         run.tags.retain(|x| x != t);
     }
@@ -1662,7 +1679,10 @@ async fn cmd_scrub(cli: &Cli, args: &ScrubArgs) -> anyhow::Result<()> {
         println!("Scrubbing run {}…", short_id(&id));
         Some(id)
     } else {
-        Some(args.run_id.clone())
+        // Validate run-id exists before scrubbing
+        let id = resolve_run_id(store.as_ref(), &args.run_id).await?;
+        println!("Scrubbing run {}…", short_id(&id));
+        Some(id)
     };
     let filter = filter_owned.as_deref();
 
@@ -2046,4 +2066,65 @@ async fn cmd_serve(cli: &Cli, args: &ServeArgs) -> anyhow::Result<()> {
         },
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn test_cli_parse_all_subcommands() {
+        // Test that every subcommand is recognized (even if it needs more args).
+        // We use --help to verify the subcommand exists without requiring args.
+        let all_subs = vec![
+            "run", "runs", "show", "timeline", "inspect", "diff",
+            "export", "import", "replay", "fork", "analyze", "scrub",
+            "doctor", "rm", "purge", "search", "watch", "tags", "tag",
+            "stats", "completions", "serve", "sync",
+        ];
+        for sub in all_subs {
+            let result = Cli::command().try_get_matches_from(["blackbox", sub, "--help"]);
+            // --help returns DisplayHelp which is an Err variant (same as --version)
+            match result {
+                Err(e) if e.kind() == clap::error::ErrorKind::DisplayHelp => {
+                    // Subcommand recognized and help displayed — success
+                }
+                Err(e) if e.kind() == clap::error::ErrorKind::UnknownArgument => {
+                    panic!("unknown subcommand '{}': {:?}", sub, e);
+                }
+                Err(e) => panic!("unexpected error for '{}': {:?}", sub, e),
+                Ok(_) => {} // shouldn't happen with --help but fine
+            }
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_run_with_command() {
+        let result = Cli::command().try_get_matches_from(["blackbox", "run", "--", "echo", "hello"]);
+        assert!(result.is_ok(), "run subcommand with args should parse");
+    }
+
+    #[test]
+    fn test_cli_parse_sync_subcommands() {
+        assert!(Cli::command().try_get_matches_from(["blackbox", "sync", "push"]).is_ok(), "sync push should parse");
+        assert!(Cli::command().try_get_matches_from(["blackbox", "sync", "pull"]).is_ok(), "sync pull should parse");
+    }
+
+    #[test]
+    fn test_cli_parse_version() {
+        let result = Cli::command().try_get_matches_from(["blackbox", "--version"]);
+        // --version returns DisplayVersion (exits normally), which clap reports as Err
+        match result {
+            Err(e) if e.kind() == clap::error::ErrorKind::DisplayVersion => {
+                // This is expected — version was displayed successfully
+            }
+            other => panic!("--version should return DisplayVersion, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_store_global_flag() {
+        assert!(Cli::command().try_get_matches_from(["blackbox", "--store", "/tmp/test.db", "runs"]).is_ok(), "--store global flag should parse");
+    }
 }

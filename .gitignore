@@ -31,3 +31,6 @@ blobs/
 # Cargo package scratch
 /package/
 *.crate
+target-fixhigh2/
+target-*/
+target-*/

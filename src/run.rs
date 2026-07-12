@@ -32,9 +32,10 @@ use crate::terminal::ansi::AnsiNormalizer;
 use crate::terminal::coalesce::{CoalescePolicy, TerminalCoalescer};
 use crate::terminal::recorder::RawRecorder;
 use crate::terminal::TerminalRecorder;
-/// Maximum bytes for the line buffer before flushing and resetting.
-/// Prevents unbounded growth when a PTY produces very long lines.
 const MAX_LINE_BUF_BYTES: usize = 64 * 1024;
+
+/// Grace period (ms) after SIGINT before escalating to SIGKILL.
+const SIGGRACE_MS: u64 = 5000;
 
 /// Supervises a child process in a PTY and captures trace events.
 pub struct RunSupervisor {
@@ -398,7 +399,6 @@ impl RunSupervisor {
         });
 
         // H-20/H-21: SIGKILL escalation -- on Ctrl+C, send SIGINT then SIGKILL after grace.
-        const SIGGRACE_MS: u64 = 5000;
         let signal_child_pid = child_pid;
         let signal_handle = tokio::spawn(async move {
             loop {
@@ -605,8 +605,9 @@ impl RunSupervisor {
                                 let mut meta_val = serde_json::to_value(&parsed.metadata)
                                     .unwrap_or_else(|_| serde_json::json!({}));
                                 scanner_term.redact_json(&mut meta_val);
-                                if let Ok(m) = serde_json::from_value(meta_val) {
-                                    parsed.metadata = m;
+                                match serde_json::from_value(meta_val) {
+                                    Ok(m) => parsed.metadata = m,
+                                    Err(e) => tracing::warn!(error = %e, "metadata deserialization failed after redaction; keeping original"),
                                 }
                             }
                             if let Err(e) = event_writer.write(parsed).await {
@@ -628,8 +629,9 @@ impl RunSupervisor {
                             let mut meta_val = serde_json::to_value(&parsed.metadata)
                                 .unwrap_or_else(|_| serde_json::json!({}));
                             scanner_term.redact_json(&mut meta_val);
-                            if let Ok(m) = serde_json::from_value(meta_val) {
-                                parsed.metadata = m;
+                            match serde_json::from_value(meta_val) {
+                                Ok(m) => parsed.metadata = m,
+                                Err(e) => tracing::warn!(error = %e, "metadata deserialization failed after redaction; keeping original"),
                             }
                         }
                         if let Err(e) = event_writer.write(parsed).await {

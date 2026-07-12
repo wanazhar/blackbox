@@ -18,3 +18,4 @@ pub mod sync;
 pub mod terminal;
 pub mod transcript;
 pub mod ui;
+pub mod util;

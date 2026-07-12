@@ -1,5 +1,6 @@
 use crate::analysis::AnalysisPass;
 use crate::core::event::{Confidence, EventSource, TraceEvent};
+use chrono::Utc;
 
 /// Correlates events across capture layers to establish causality.
 ///
@@ -106,6 +107,93 @@ impl EventCorrelator {
 
         best.map(|(id, conf, _)| (id, conf))
     }
+    /// BTreeMap-accelerated parent lookup for batch analysis.
+    ///
+    /// Uses a pre-built timestamp index for O(n log n) total analysis
+    /// instead of O(n²) linear scans per event.
+    fn find_parent_btree(
+        &self,
+        event: &TraceEvent,
+        events: &[TraceEvent],
+        ts_index: &std::collections::BTreeMap<chrono::DateTime<Utc>, Vec<&TraceEvent>>,
+    ) -> Option<(String, Confidence)> {
+        let pos = events.iter().position(|e| e.id == event.id)?;
+        if pos == 0 {
+            return None;
+        }
+
+        let window_start = event.started_at - chrono::Duration::milliseconds(30_000);
+        let mut candidates: Vec<&&TraceEvent> = Vec::new();
+        for (_ts, evts) in ts_index.range(..event.started_at) {
+            for ev in evts {
+                if ev.id == event.id {
+                    continue;
+                }
+                if ev.started_at >= window_start {
+                    candidates.push(ev);
+                }
+            }
+        }
+
+        let mut best: Option<(String, Confidence, i64)> = None;
+        for prev in candidates.iter().rev() {
+            let gap = event
+                .started_at
+                .signed_duration_since(prev.started_at)
+                .num_milliseconds();
+
+            let confidence = if prev.source == event.source && gap > 0 && gap < 500 {
+                Confidence::Confirmed
+            } else if prev.source == event.source && gap < 1000 {
+                Confidence::StronglyCorrelated
+            } else if gap < 5000 {
+                Confidence::WeaklyCorrelated
+            } else {
+                Confidence::Unknown
+            };
+
+            let cross_layer = matches!(
+                (&prev.source, &event.source),
+                (EventSource::Process, EventSource::Filesystem)
+                    | (EventSource::Process, EventSource::Git)
+                    | (EventSource::Terminal, EventSource::Process)
+            );
+
+            let confidence = if cross_layer && gap < 2000 {
+                match confidence {
+                    Confidence::Unknown => Confidence::WeaklyCorrelated,
+                    Confidence::WeaklyCorrelated => Confidence::StronglyCorrelated,
+                    other => other,
+                }
+            } else {
+                confidence
+            };
+
+            if matches!(
+                confidence,
+                Confidence::Confirmed | Confidence::StronglyCorrelated | Confidence::WeaklyCorrelated
+            ) {
+                let score = match confidence {
+                    Confidence::Confirmed => 3,
+                    Confidence::StronglyCorrelated => 2,
+                    Confidence::WeaklyCorrelated => 1,
+                    Confidence::Unknown => 0,
+                };
+                let better = best
+                    .as_ref()
+                    .map(|(_, _, s)| score > *s)
+                    .unwrap_or(true);
+                if better {
+                    best = Some((prev.id.clone(), confidence, score));
+                }
+                if matches!(confidence, Confidence::Confirmed) {
+                    break;
+                }
+            }
+        }
+
+        best.map(|(id, conf, _)| (id, conf))
+    }
 }
 
 impl Default for EventCorrelator {
@@ -121,7 +209,15 @@ impl AnalysisPass for EventCorrelator {
     }
 
     async fn analyze(&self, events: &[TraceEvent]) -> anyhow::Result<Vec<TraceEvent>> {
+        use std::collections::BTreeMap;
+
         let mut derived = Vec::new();
+
+        // Build BTreeMap index: timestamp → events at that time.
+        let mut ts_index: BTreeMap<chrono::DateTime<Utc>, Vec<&TraceEvent>> = BTreeMap::new();
+        for event in events {
+            ts_index.entry(event.started_at).or_default().push(event);
+        }
 
         for event in events {
             // Skip noise layers that create weak sequential chains
@@ -135,7 +231,7 @@ impl AnalysisPass for EventCorrelator {
                 continue;
             }
 
-            if let Some((parent_id, confidence)) = self.find_parent(event, events) {
+            if let Some((parent_id, confidence)) = self.find_parent_btree(event, events, &ts_index) {
                 // Quiet: only Confirmed / StronglyCorrelated (drop Weakly)
                 if !matches!(
                     confidence,

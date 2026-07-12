@@ -60,8 +60,27 @@ impl TraceStore for InMemoryStore {
 
     async fn delete_run(&self, run_id: &str) -> anyhow::Result<bool> {
         let removed = self.runs.write().await.remove(run_id).is_some();
+        // Collect blob keys referenced by this run's events before removing them.
+        let blob_keys: Vec<String> = {
+            let events = self.events.read().await;
+            events
+                .get(run_id)
+                .map(|evts| {
+                    evts.iter()
+                        .filter_map(|e| e.output_blob.as_deref().or(e.input_blob.as_deref()).map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
         self.events.write().await.remove(run_id);
         self.checkpoints.write().await.remove(run_id);
+        // Clean up orphaned blobs.
+        if !blob_keys.is_empty() {
+            let mut blobs = self.blobs.write().await;
+            for key in &blob_keys {
+                blobs.remove(key);
+            }
+        }
         Ok(removed)
     }
 

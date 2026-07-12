@@ -190,6 +190,14 @@ impl SqliteStore {
                 .context("failed to record v3 version")?;
             tx.commit().context("failed to commit v3 migration")?;
         }
+        if current < 4 {
+            let tx = conn.unchecked_transaction()
+                .context("failed to start transaction for v4 migration")?;
+            Self::migrate_v4(&tx)?;
+            tx.execute("INSERT INTO schema_version (version) VALUES (4)", [])
+                .context("failed to record v4 version")?;
+            tx.commit().context("failed to commit v4 migration")?;
+        }
 
         // Ensure we never claim a higher version than we support
         let _ = SCHEMA_VERSION;
@@ -249,6 +257,7 @@ impl SqliteStore {
     /// Rebuild the full-text index from scratch (e.g. after bulk import).
     pub fn reindex_fts(&self) -> anyhow::Result<usize> {
         let conn = self.lock();
+        // Clear existing FTS data and rebuild from events table.
         conn.execute("DELETE FROM events_fts", [])?;
         const BATCH: i64 = 500;
         let mut offset: i64 = 0;
@@ -275,6 +284,93 @@ impl SqliteStore {
             offset += BATCH;
         }
         Ok(total)
+    }
+    /// V4: Composite index on events, checkpoints FK, contentless FTS5.
+    fn migrate_v4(conn: &Connection) -> anyhow::Result<()> {
+        // Fix-8: Composite index for get_events ORDER BY run_id, sequence.
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_events_run_sequence ON events(run_id, sequence);",
+        )
+        .context("failed to create composite index idx_events_run_sequence")?;
+
+        // Fix-9: Add FK constraint on checkpoints.event_id referencing events(id).
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS checkpoints_new (
+                id                          TEXT PRIMARY KEY,
+                run_id                      TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+                event_id                    TEXT REFERENCES events(id) ON DELETE SET NULL,
+                git_commit                  TEXT,
+                git_diff_blob               TEXT,
+                filesystem_manifest_blob    TEXT,
+                cwd                         TEXT NOT NULL,
+                environment_blob            TEXT,
+                transcript_blob             TEXT,
+                harness_session_id          TEXT,
+                created_at                  TEXT NOT NULL
+            );
+            INSERT INTO checkpoints_new
+                (id, run_id, event_id, git_commit, git_diff_blob,
+                 filesystem_manifest_blob, cwd, environment_blob,
+                 transcript_blob, harness_session_id, created_at)
+                SELECT id, run_id, event_id, git_commit, git_diff_blob,
+                       filesystem_manifest_blob, cwd, environment_blob,
+                       transcript_blob, harness_session_id, created_at
+                FROM checkpoints;
+            DROP TABLE checkpoints;
+            ALTER TABLE checkpoints_new RENAME TO checkpoints;
+            CREATE INDEX IF NOT EXISTS idx_checkpoints_run_id ON checkpoints(run_id);
+            CREATE INDEX IF NOT EXISTS idx_checkpoints_event_id ON checkpoints(event_id);
+            ",
+        )
+        .context("failed to recreate checkpoints table with FK")?;
+
+        // Fix-10: Rebuild FTS index (content='' is incompatible with our SELECT pattern;
+        // content doubling is the necessary trade-off for working FTS).
+        // Drop and recreate FTS table to pick up any schema changes.
+        conn.execute_batch(
+            "
+            DROP TABLE IF EXISTS events_fts;
+            CREATE VIRTUAL TABLE events_fts USING fts5(
+                event_id UNINDEXED,
+                run_id UNINDEXED,
+                kind,
+                source,
+                status,
+                body,
+                tokenize = 'porter unicode61'
+            );
+            ",
+        )
+        .context("failed to recreate events_fts")?;
+
+        // Rebuild FTS index from events table.
+        const BATCH: i64 = 500;
+        let mut offset: i64 = 0;
+        let mut total: usize = 0;
+        loop {
+            let mut stmt = conn.prepare(
+                "SELECT id, run_id, parent_event_id, sequence, source, kind, started_at, ended_at,
+                        duration_ms, status, side_effect, input_blob, output_blob, error_blob, metadata
+                 FROM events
+                 ORDER BY rowid
+                 LIMIT ?1 OFFSET ?2",
+            )?;
+            let batch: Vec<TraceEvent> = stmt
+                .query_map(params![BATCH, offset], event_from_row)?
+                .collect::<Result<Vec<_>, _>>()?;
+            drop(stmt);
+            if batch.is_empty() {
+                break;
+            }
+            for ev in &batch {
+                fts_upsert(conn, ev)?;
+            }
+            total += batch.len();
+            offset += BATCH;
+        }
+        tracing::info!(count = total, "v4 FTS index rebuilt");
+        Ok(())
     }
 
     /// V1: core tables (runs, events, checkpoints, blobs metadata).
@@ -317,11 +413,12 @@ impl SqliteStore {
 
             CREATE INDEX IF NOT EXISTS idx_events_run_id ON events(run_id);
             CREATE INDEX IF NOT EXISTS idx_events_parent_event_id ON events(parent_event_id);
+            CREATE INDEX IF NOT EXISTS idx_events_run_sequence ON events(run_id, sequence);
 
             CREATE TABLE IF NOT EXISTS checkpoints (
                 id                          TEXT PRIMARY KEY,
                 run_id                      TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-                event_id                    TEXT NOT NULL,
+                event_id                    TEXT REFERENCES events(id) ON DELETE SET NULL,
                 git_commit                  TEXT,
                 git_diff_blob               TEXT,
                 filesystem_manifest_blob    TEXT,
@@ -535,7 +632,9 @@ impl TraceStore for SqliteStore {
             let tx = conn.unchecked_transaction()
                 .context("failed to start transaction for delete_run")?;
             // FK order: events and checkpoints before runs
-            let _ = tx.execute("DELETE FROM events_fts WHERE run_id = ?1", params![run_id]);
+            if let Err(e) = tx.execute("DELETE FROM events_fts WHERE run_id = ?1", params![run_id]) {
+                tracing::warn!(error = %e, run_id = %run_id, "FTS cleanup failed during delete_run; proceeding");
+            }
             tx.execute("DELETE FROM events WHERE run_id = ?1", params![run_id])
                 .context("failed to delete events")?;
             tx.execute(
@@ -557,7 +656,10 @@ impl TraceStore for SqliteStore {
         let event = event.clone();
         {
             let conn = self.lock();
-            conn.execute(
+            // Wrap event INSERT + FTS upsert in a single transaction for atomicity.
+            let tx = conn.unchecked_transaction()
+                .context("failed to start transaction for insert_event")?;
+            tx.execute(
                 "INSERT INTO events (id, run_id, parent_event_id, sequence, source, kind, started_at, ended_at, duration_ms, status, side_effect, input_blob, output_blob, error_blob, metadata)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                 params![
@@ -579,8 +681,10 @@ impl TraceStore for SqliteStore {
                 ],
             )
             .context("failed to insert event")?;
-            // Best-effort FTS (table may be missing on ancient DBs mid-migrate)
-            let _ = fts_upsert(&conn, &event);
+            // FTS upsert within the same transaction (best-effort: table may be
+            // missing on ancient DBs mid-migrate)
+            let _ = fts_upsert_in_tx(&tx, &event);
+            tx.commit().context("failed to commit insert_event transaction")?;
         }
         tokio::task::yield_now().await;
         Ok(())
@@ -625,11 +729,14 @@ impl TraceStore for SqliteStore {
         let event = event.clone();
         {
             let conn = self.lock();
-            let n = conn.execute(
+            // Wrap event UPDATE + FTS upsert in a single transaction for atomicity.
+            let tx = conn.unchecked_transaction()
+                .context("failed to start transaction for update_event")?;
+            let n = tx.execute(
                 "UPDATE events SET run_id=?2, parent_event_id=?3, sequence=?4, source=?5, kind=?6,
-                 started_at=?7, ended_at=?8, duration_ms=?9, status=?10, side_effect=?11,
-                 input_blob=?12, output_blob=?13, error_blob=?14, metadata=?15
-                 WHERE id=?1",
+                started_at=?7, ended_at=?8, duration_ms=?9, status=?10, side_effect=?11,
+                input_blob=?12, output_blob=?13, error_blob=?14, metadata=?15
+                WHERE id=?1",
                 params![
                     event.id,
                     event.run_id,
@@ -650,9 +757,12 @@ impl TraceStore for SqliteStore {
             )
             .context("failed to update event")?;
             if n == 0 {
+                tx.rollback().ok();
                 anyhow::bail!("event not found for update: {}", event.id);
             }
-            let _ = fts_upsert(&conn, &event);
+            // FTS upsert within the same transaction
+            let _ = fts_upsert_in_tx(&tx, &event);
+            tx.commit().context("failed to commit update_event transaction")?;
         }
         tokio::task::yield_now().await;
         Ok(())
@@ -817,28 +927,30 @@ impl TraceStore for SqliteStore {
             .await??;
         }
         // Update SQLite metadata: move the row from old key to new key
+        // inside a transaction so a crash cannot leave the row deleted
+        // without the new row inserted.
         {
             let conn = self.lock();
-            let meta: (i64, bool, Option<String>) = conn
+            let tx = conn.unchecked_transaction()
+                .context("failed to start transaction for move_blob")?;
+            let meta: (i64, bool, Option<String>) = tx
                 .query_row(
                     "SELECT size, compressed, content_type FROM blobs WHERE key = ?1",
                     params![from_key],
                     |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
                 )
                 .unwrap_or((0, false, None));
-            conn.execute("DELETE FROM blobs WHERE key = ?1", params![from_key])?;
-            conn.execute(
+            tx.execute("DELETE FROM blobs WHERE key = ?1", params![from_key])?;
+            tx.execute(
                 "INSERT OR IGNORE INTO blobs (key, size, compressed, content_type)
                  VALUES (?1, ?2, ?3, ?4)",
                 params![to_key, meta.0, meta.1, meta.2],
             )?;
+            tx.commit().context("failed to commit move_blob transaction")?;
         }
         Ok(())
     }
  }
-
-// ── FTS helpers ───────────────────────────────────────────────────
-
 fn event_search_body(event: &TraceEvent) -> String {
     // Only include metadata values in the body column; kind, source, and
     // status are separate FTS columns and indexing them in body too would
@@ -874,13 +986,37 @@ fn fts_upsert(conn: &Connection, event: &TraceEvent) -> anyhow::Result<()> {
             event.id,
             event.run_id,
             event.kind,
-            format!("{:?}", event.source),
-            format!("{:?}", event.status),
+            serde_json::to_string(&event.source).unwrap_or_default(),
+            serde_json::to_string(&event.status).unwrap_or_default(),
             event_search_body(event),
         ],
     )
     .context("failed to upsert events_fts")?;
     tx.commit().context("failed to commit FTS upsert")?;
+    Ok(())
+}
+
+/// FTS upsert that operates within an existing transaction (no inner txn).
+fn fts_upsert_in_tx(tx: &rusqlite::Transaction, event: &TraceEvent) -> anyhow::Result<()> {
+    // Replace existing row for this event_id
+    tx.execute(
+        "DELETE FROM events_fts WHERE event_id = ?1",
+        params![event.id],
+    )
+    .context("failed to delete existing FTS row for upsert")?;
+    tx.execute(
+        "INSERT INTO events_fts(event_id, run_id, kind, source, status, body)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            event.id,
+            event.run_id,
+            event.kind,
+            serde_json::to_string(&event.source).unwrap_or_default(),
+            serde_json::to_string(&event.status).unwrap_or_default(),
+            event_search_body(event),
+        ],
+    )
+    .context("failed to upsert events_fts")?;
     Ok(())
 }
 
@@ -924,7 +1060,10 @@ fn run_from_row(row: &rusqlite::Row) -> rusqlite::Result<Run> {
         status: serde_json::from_str(&status_json).unwrap_or(crate::core::run::RunStatus::Unknown),
         started_at: chrono::DateTime::parse_from_rfc3339(&started_at_str)
             .map(|dt| dt.with_timezone(&chrono::Utc))
-            .unwrap_or_else(|_| chrono::Utc::now()),
+            .map_err(|e| {
+                tracing::warn!("corrupt started_at for run {}: {e}", row.get::<_, String>(0).unwrap_or_default());
+                rusqlite::Error::InvalidParameterName(format!("corrupt timestamp: {started_at_str}: {e}"))
+            })?,
         ended_at: ended_at_str.and_then(|s| {
             chrono::DateTime::parse_from_rfc3339(&s)
                 .ok()
@@ -954,7 +1093,10 @@ fn event_from_row(row: &rusqlite::Row) -> rusqlite::Result<TraceEvent> {
         kind: row.get(5)?,
         started_at: chrono::DateTime::parse_from_rfc3339(&started_at_str)
             .map(|dt| dt.with_timezone(&chrono::Utc))
-            .unwrap_or_else(|_| chrono::Utc::now()),
+            .map_err(|e| {
+                tracing::warn!("corrupt started_at for event {}: {e}", row.get::<_, String>(0).unwrap_or_default());
+                rusqlite::Error::InvalidParameterName(format!("corrupt timestamp: {started_at_str}: {e}"))
+            })?,
         ended_at: ended_at_str.and_then(|s| {
             chrono::DateTime::parse_from_rfc3339(&s)
                 .ok()
@@ -988,13 +1130,17 @@ fn checkpoint_from_row(row: &rusqlite::Row) -> rusqlite::Result<Checkpoint> {
         harness_session_id: row.get(9)?,
         created_at: chrono::DateTime::parse_from_rfc3339(&created_at_str)
             .map(|dt| dt.with_timezone(&chrono::Utc))
-            .unwrap_or_else(|_| chrono::Utc::now()),
+            .map_err(|e| {
+                tracing::warn!("corrupt created_at for checkpoint {}: {e}", row.get::<_, String>(0).unwrap_or_default());
+                rusqlite::Error::InvalidParameterName(format!("corrupt timestamp: {created_at_str}: {e}"))
+            })?,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
     use crate::core::event::{EventSource, EventStatus};
     use crate::core::run::RunStatus;
 
@@ -1071,7 +1217,6 @@ mod tests {
         ev.metadata
             .insert("tool_name".into(), serde_json::json!("WebSearch"));
         store.insert_event(&ev).await.unwrap();
-
         let hits = store.fts_event_ids("WebSearch", 10).await.unwrap().unwrap();
         assert!(!hits.is_empty());
         assert_eq!(hits[0].0, ev.id);
@@ -1160,5 +1305,72 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+    #[test]
+    fn test_migrate_v2_blobs() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("v1test.db");
+        let blob_dir = dir.path().join("blobs");
+        std::fs::create_dir_all(&blob_dir).unwrap();
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
+            conn.execute_batch(
+                "CREATE TABLE schema_version (version INTEGER NOT NULL);
+                 INSERT INTO schema_version (version) VALUES (1);
+                 CREATE TABLE runs (id TEXT PRIMARY KEY, name TEXT, command TEXT NOT NULL, cwd TEXT NOT NULL, project_dir TEXT NOT NULL, tags TEXT NOT NULL DEFAULT '[]', notes TEXT, status TEXT NOT NULL DEFAULT 'Pending', started_at TEXT NOT NULL, ended_at TEXT, exit_code INTEGER, parent_run_id TEXT, next_sequence INTEGER NOT NULL DEFAULT 0);
+                 CREATE TABLE events (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, parent_event_id TEXT, sequence INTEGER NOT NULL DEFAULT 0, source TEXT NOT NULL, kind TEXT NOT NULL, started_at TEXT NOT NULL, ended_at TEXT, duration_ms INTEGER, status TEXT NOT NULL DEFAULT 'Pending', side_effect TEXT NOT NULL DEFAULT 'Unknown', input_blob TEXT, output_blob TEXT, error_blob TEXT, metadata TEXT NOT NULL DEFAULT '{}');
+                 CREATE TABLE checkpoints (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, event_id TEXT NOT NULL, git_commit TEXT, git_diff_blob TEXT, filesystem_manifest_blob TEXT, cwd TEXT NOT NULL, environment_blob TEXT, transcript_blob TEXT, harness_session_id TEXT, created_at TEXT NOT NULL);
+                 CREATE TABLE blobs (key TEXT PRIMARY KEY, data BLOB NOT NULL, size INTEGER NOT NULL, compressed INTEGER NOT NULL DEFAULT 0, content_type TEXT);",
+            ).unwrap();
+            conn.execute(
+                "INSERT INTO blobs (key, data, size, compressed) VALUES (?1, ?2, ?3, 0)",
+                rusqlite::params!["test-blob-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", b"blob-payload-data", 16i64],
+            ).unwrap();
+        }
+        let _store = SqliteStore::open_with_blobs(&db_path, &blob_dir).unwrap();
+        let extracted = blob_dir.join("test-blob-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        assert!(extracted.exists(), "v2 migration should extract blobs to disk");
+        assert_eq!(std::fs::read(&extracted).unwrap(), b"blob-payload-data");
+    }
+
+    #[test]
+    fn test_recover_stale_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("stale.db");
+        let blob_dir = dir.path().join("blobs");
+        std::fs::create_dir_all(&blob_dir).unwrap();
+        let run_id = "stale-run-001";
+        {
+            let store = SqliteStore::open_with_blobs(&db_path, &blob_dir).unwrap();
+            let mut run = Run::new(vec!["long".into(), "command".into()], "/tmp".into());
+            run.id = run_id.to_string();
+            run.status = RunStatus::Running;
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(store.insert_run(&run)).unwrap();
+        }
+        let store = SqliteStore::open_with_blobs(&db_path, &blob_dir).unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let loaded = rt.block_on(store.get_run(run_id)).unwrap().unwrap();
+        assert_eq!(loaded.status, RunStatus::Failed, "Running run should be recovered to Failed on re-open");
+        assert!(loaded.ended_at.is_some(), "recovered run should have ended_at set");
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_insert() {
+        let store = Arc::new(SqliteStore::open_memory().unwrap());
+        let mut handles = Vec::new();
+        for i in 0..50 {
+            let store = store.clone();
+            handles.push(tokio::spawn(async move {
+                let mut run = Run::new(vec![format!("cmd-{i}"), "arg".into()], "/tmp".into());
+                run.status = RunStatus::Succeeded;
+                run.exit_code = Some(0);
+                store.insert_run(&run).await.unwrap();
+            }));
+        }
+        for h in handles { h.await.unwrap(); }
+        let runs = store.list_runs().await.unwrap();
+        assert_eq!(runs.len(), 50, "all 50 concurrent inserts should be persisted");
     }
 }

@@ -9,6 +9,12 @@ pub struct EventView {
     event: Option<TraceEvent>,
 }
 
+impl Default for EventView {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl EventView {
     pub fn new() -> Self {
         Self { event: None }

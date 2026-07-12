@@ -23,7 +23,7 @@ impl EnvironmentRedactor {
         }
 
         let mut records = Vec::new();
-        for (name, _value) in env {
+        for name in env.keys() {
             let upper = name.to_uppercase();
             if self.config.env_var_patterns.iter().any(|p| upper.contains(p)) {
                 records.push(RedactionRecord {

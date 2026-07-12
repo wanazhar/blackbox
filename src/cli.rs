@@ -386,8 +386,8 @@ async fn cmd_runs(cli: &Cli) -> anyhow::Result<()> {
         println!("  Try: blackbox run -- echo hello");
     } else {
         println!(
-            "{:<2} {:<10} {:<12} {:<6} {}",
-            "", "ID", "STATUS", "EXIT", "LABEL"
+            "{:<2} {:<10} {:<12} {:<6} LABEL",
+            "", "ID", "STATUS", "EXIT"
         );
         for run in &runs {
             let status = match &run.status {
@@ -548,8 +548,8 @@ async fn cmd_timeline(cli: &Cli, args: &TimelineArgs) -> anyhow::Result<()> {
             if args.semantic { ", semantic" } else { "" }
         );
         println!(
-            "{:<6} {:<12} {:<28} {:<8} {}",
-            "SEQ", "SRC", "KIND", "STATUS", "DETAIL"
+            "{:<6} {:<12} {:<28} {:<8} DETAIL",
+            "SEQ", "SRC", "KIND", "STATUS"
         );
         println!("{}", "-".repeat(90));
         for ev in &events {
@@ -960,7 +960,7 @@ async fn cmd_analyze(cli: &Cli, args: &AnalyzeArgs) -> anyhow::Result<()> {
     );
     if !by_kind.is_empty() {
         let mut kinds: Vec<_> = by_kind.into_iter().collect();
-        kinds.sort_by(|a, b| b.1.cmp(&a.1));
+        kinds.sort_by_key(|b| std::cmp::Reverse(b.1));
         for (k, n) in kinds {
             println!("  {:<28} {}", k, n);
         }

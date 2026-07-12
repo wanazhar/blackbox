@@ -238,16 +238,10 @@ impl ReplayEngine for SandboxReplay {
             };
 
             // For sandbox policy, allow Unknown shell only if it's a clearly read-only command
-            let allowed = if self.is_allowed(&side) {
-                true
-            } else if self.policy == ReplayPolicy::Sandbox
-                && side == SideEffect::Unknown
-                && is_readonly_command(&cmd)
-            {
-                true
-            } else {
-                false
-            };
+            let allowed = self.is_allowed(&side)
+                || (self.policy == ReplayPolicy::Sandbox
+                    && side == SideEffect::Unknown
+                    && is_readonly_command(&cmd));
 
             if !allowed {
                 println!(

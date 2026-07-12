@@ -8,6 +8,12 @@ use crate::core::event::{EventSource, EventStatus, TraceEvent};
 /// and enriches the trace with structured error metadata.
 pub struct ErrorDetector;
 
+impl Default for ErrorDetector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ErrorDetector {
     pub fn new() -> Self {
         Self
@@ -79,8 +85,8 @@ impl ErrorDetector {
         for line in output.lines() {
             let trimmed = line.trim();
             for prefix in &js_error_prefixes {
-                if trimmed.starts_with(prefix) {
-                    let message = trimmed[prefix.len()..].trim().to_string();
+                if let Some(message) = trimmed.strip_prefix(prefix) {
+                    let message = message.trim().to_string();
                     let (file, line_num, col) = self.parse_file_location(trimmed);
                     errors.push(StructuredError {
                         error_type: "javascript".to_string(),
@@ -129,7 +135,7 @@ impl ErrorDetector {
             let message = output
                 .lines()
                 .find(|l| l.contains("FAILED"))
-                .unwrap_or(&"")
+                .unwrap_or("")
                 .trim()
                 .to_string();
             let (file, line_num, col) = self.parse_file_location(&message);
@@ -144,7 +150,7 @@ impl ErrorDetector {
             let message = output
                 .lines()
                 .find(|l| l.contains("failures:"))
-                .unwrap_or(&"")
+                .unwrap_or("")
                 .trim()
                 .to_string();
             errors.push(StructuredError {

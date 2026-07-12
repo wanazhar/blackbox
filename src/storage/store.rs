@@ -20,6 +20,12 @@ pub struct InMemoryStore {
     blobs: Arc<RwLock<HashMap<String, Vec<u8>>>>,
 }
 
+impl Default for InMemoryStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl InMemoryStore {
     pub fn new() -> Self {
         Self {
@@ -49,7 +55,7 @@ impl TraceStore for InMemoryStore {
 
     async fn list_runs(&self) -> anyhow::Result<Vec<Run>> {
         let mut runs: Vec<Run> = self.runs.read().await.values().cloned().collect();
-        runs.sort_by(|a, b| b.started_at.cmp(&a.started_at));
+        runs.sort_by_key(|b| std::cmp::Reverse(b.started_at));
         Ok(runs)
     }
 

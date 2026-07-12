@@ -35,7 +35,7 @@ impl HarnessAdapter for ClaudeAdapter {
     }
 
     fn detect(&self, command: &[String]) -> bool {
-        command.first().map_or(false, |c| {
+        command.first().is_some_and(|c| {
             c.ends_with("claude") || c == "claude"
         })
     }

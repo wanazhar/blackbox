@@ -70,14 +70,14 @@ pub fn list_candidate_files(roots: &[PathBuf]) -> Vec<PathBuf> {
         std::fs::metadata(p)
             .and_then(|m| m.modified())
             .ok()
-            .map(|t| std::cmp::Reverse(t))
+            .map(std::cmp::Reverse)
             .unwrap_or(std::cmp::Reverse(std::time::SystemTime::UNIX_EPOCH))
     });
     files.truncate(32); // cap watch set
     files
 }
 
-fn walk_logs(root: &Path, dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
+fn walk_logs(_root: &Path, dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
     if depth > 4 || out.len() >= 64 {
         return;
     }
@@ -98,7 +98,7 @@ fn walk_logs(root: &Path, dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
             continue;
         }
         if path.is_dir() {
-            walk_logs(root, &path, depth + 1, out);
+            walk_logs(_root, &path, depth + 1, out);
         } else if path.is_file() {
             let ext = path
                 .extension()
@@ -268,7 +268,7 @@ mod tests {
         let mut f = std::fs::File::create(&path).unwrap();
         writeln!(f, r#"{{"type":"system","session_id":"abc"}}"#).unwrap();
 
-        let files = list_candidate_files(&[dir.clone()]);
+        let files = list_candidate_files(std::slice::from_ref(&dir));
         assert!(files.iter().any(|p| p.ends_with("session.jsonl")));
         let _ = std::fs::remove_dir_all(&dir);
     }

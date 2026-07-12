@@ -316,8 +316,10 @@ mod tests {
         let events = parse_claude_json_line("run-1", line);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].kind, "tool.result");
-        assert!(events[0].metadata.get("output").is_some()
-            || events[0].metadata.get("output_full").is_some());
+        assert!(
+            events[0].metadata.contains_key("output")
+                || events[0].metadata.contains_key("output_full")
+        );
         assert!(events[0].output_blob.is_none()); // blob keys assigned by capture pipeline only
     }
 

@@ -223,9 +223,12 @@ pub fn gc_orphan_blobs(
             continue;
         }
         if !referenced.contains(&name) {
-            if dry_run {
-                deleted += 1;
-            } else if std::fs::remove_file(entry.path()).is_ok() {
+            let should_count = if dry_run {
+                true
+            } else {
+                std::fs::remove_file(entry.path()).is_ok()
+            };
+            if should_count {
                 deleted += 1;
             }
         }

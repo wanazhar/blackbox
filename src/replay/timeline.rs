@@ -30,8 +30,8 @@ impl ReplayEngine for TimelineReplay {
             run.status
         );
         println!(
-            "{:<6} {:<12} {:<24} {:<10} {}",
-            "SEQ", "SOURCE", "KIND", "STATUS", "TIME"
+            "{:<6} {:<12} {:<24} {:<10} TIME",
+            "SEQ", "SOURCE", "KIND", "STATUS"
         );
         println!("{}", "─".repeat(80));
 

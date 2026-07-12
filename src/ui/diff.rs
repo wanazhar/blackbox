@@ -6,6 +6,12 @@ use ratatui::Frame;
 /// Run comparison panel — shows differences between two runs.
 pub struct DiffView;
 
+impl Default for DiffView {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DiffView {
     pub fn new() -> Self {
         Self

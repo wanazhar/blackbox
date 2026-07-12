@@ -379,7 +379,7 @@ impl TraceStore for SqliteStore {
                 "SELECT id, name, command, cwd, project_dir, tags, notes, status, started_at, ended_at, exit_code, parent_run_id, next_sequence
                  FROM runs WHERE id = ?1",
             )?;
-            match stmt.query_row(params![run_id], |row| run_from_row(row)) {
+            match stmt.query_row(params![run_id], run_from_row) {
                 Ok(run) => Ok(Some(run)),
                 Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
                 Err(e) => Err(e.into()),
@@ -397,7 +397,7 @@ impl TraceStore for SqliteStore {
                  FROM runs ORDER BY started_at DESC",
             )?;
             let runs = stmt
-                .query_map([], |row| run_from_row(row))?
+                .query_map([], run_from_row)?
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(runs)
         };
@@ -445,7 +445,7 @@ impl TraceStore for SqliteStore {
                  FROM events WHERE run_id = ?1 ORDER BY sequence",
             )?;
             let events = stmt
-                .query_map(params![run_id], |row| event_from_row(row))?
+                .query_map(params![run_id], event_from_row)?
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(events)
         };
@@ -461,7 +461,7 @@ impl TraceStore for SqliteStore {
                 "SELECT id, run_id, parent_event_id, sequence, source, kind, started_at, ended_at, duration_ms, status, side_effect, input_blob, output_blob, error_blob, metadata
                  FROM events WHERE id = ?1",
             )?;
-            match stmt.query_row(params![event_id], |row| event_from_row(row)) {
+            match stmt.query_row(params![event_id], event_from_row) {
                 Ok(ev) => Ok(Some(ev)),
                 Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
                 Err(e) => Err(e.into()),
@@ -543,7 +543,7 @@ impl TraceStore for SqliteStore {
                  FROM checkpoints WHERE run_id = ?1",
             )?;
             let checkpoints = stmt
-                .query_map(params![run_id], |row| checkpoint_from_row(row))?
+                .query_map(params![run_id], checkpoint_from_row)?
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(checkpoints)
         };

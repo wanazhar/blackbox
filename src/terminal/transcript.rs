@@ -4,6 +4,12 @@
 /// full-text search, event correlation, and context retrieval.
 pub struct TranscriptIndexer;
 
+impl Default for TranscriptIndexer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TranscriptIndexer {
     pub fn new() -> Self {
         Self

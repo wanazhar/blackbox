@@ -38,6 +38,12 @@ pub struct GitCapture {
     after_commit_hash: Option<String>,
 }
 
+impl Default for GitCapture {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GitCapture {
     pub fn new() -> Self {
         Self {

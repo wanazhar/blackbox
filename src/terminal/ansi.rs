@@ -12,6 +12,12 @@ use crate::core::event::{EventSource, EventStatus, TraceEvent};
 /// - **Derived plain-text transcript** — search and display
 pub struct AnsiNormalizer;
 
+impl Default for AnsiNormalizer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AnsiNormalizer {
     pub fn new() -> Self {
         Self

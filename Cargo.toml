@@ -6,8 +6,12 @@ description = "A flight recorder and debugger for AI-agent runs"
 authors = ["blackbox team"]
 license = "MIT OR Apache-2.0"
 readme = "README.md"
+repository = "https://github.com/blackbox-dev/blackbox"
+homepage = "https://github.com/blackbox-dev/blackbox"
+documentation = "https://docs.rs/blackbox"
 keywords = ["ai", "agent", "debugger", "trace", "cli"]
 categories = ["command-line-utilities", "development-tools", "asynchronous"]
+exclude = ["blackbox.db", ".blackbox/", "target/"]
 
 [dependencies]
 # CLI
@@ -66,6 +70,7 @@ term_size = "0.3"
 # Local web dashboard
 axum = { version = "0.8", default-features = true, features = ["macros"] }
 tower = "0.5"
+futures-util = "0.3"
 
 [profile.release]
 opt-level = 3

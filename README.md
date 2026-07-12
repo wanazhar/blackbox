@@ -102,9 +102,16 @@ blackbox completions fish > ~/.config/fish/completions/blackbox.fish
 # bash:  blackbox completions bash > /etc/bash_completion.d/blackbox
 # zsh:   blackbox completions zsh > "${fpath[1]}/_blackbox"
 
-# Local web dashboard (FTS-backed search in-browser)
+# Local web dashboard (FTS-backed search + live SSE)
 blackbox serve
 # → http://127.0.0.1:7788
+# → http://127.0.0.1:7788/watch          (latest run, live)
+# → http://127.0.0.1:7788/runs/<id>/live
+
+# Optional shared secret (also BLACKBOX_SERVE_TOKEN)
+blackbox serve --token "s3cret"
+# clients: Authorization: Bearer s3cret   or  ?token=s3cret
+
 blackbox serve --bind 127.0.0.1:9000 --reindex
 
 # Rebuild full-text index
@@ -162,7 +169,7 @@ Export is **redacted by default**. Pass `--no-redact` only for private offline a
 | `tags` / `tag` | List tags; add/remove tags on a run |
 | `stats` | Aggregate store dashboard |
 | `completions` | Generate bash/zsh/fish completions |
-| `serve` | Local web dashboard (browse + search + API) |
+| `serve` | Local web dashboard (browse, search, **live SSE**, optional token) |
 | `export` | JSONL / HTML / portable |
 | `replay` | Timeline, mock tools, sandbox (seeded workspace) |
 | `fork` | Branch a new run record from a checkpoint |

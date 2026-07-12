@@ -83,6 +83,10 @@ pub struct ServeArgs {
     /// Rebuild FTS index before serving
     #[arg(long)]
     pub reindex: bool,
+
+    /// Require this shared secret (Authorization: Bearer or ?token=)
+    #[arg(long, env = "BLACKBOX_SERVE_TOKEN")]
+    pub token: Option<String>,
 }
 
 #[derive(Args)]
@@ -1838,13 +1842,17 @@ async fn cmd_doctor(cli: &Cli, args: &DoctorArgs) -> anyhow::Result<()> {
 
 async fn cmd_serve(cli: &Cli, args: &ServeArgs) -> anyhow::Result<()> {
     let store = open_store(cli)?;
-    if args.reindex {
-        let n = store.reindex_fts()?;
-        println!("Reindexed FTS ({n} events)");
-    }
     let addr: std::net::SocketAddr = args
         .bind
         .parse()
         .map_err(|e| anyhow::anyhow!("invalid --bind address: {e}"))?;
-    crate::serve::serve(Arc::new(store), addr).await
+    crate::serve::serve(
+        Arc::new(store),
+        crate::serve::ServeOptions {
+            addr,
+            token: args.token.clone(),
+            reindex: args.reindex,
+        },
+    )
+    .await
 }

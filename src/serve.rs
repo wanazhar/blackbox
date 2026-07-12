@@ -163,7 +163,7 @@ function upsert(run) {{
   const status = run.status || '?';
   const exit = run.exit_code == null ? '-' : String(run.exit_code);
   const started = run.started_at || '';
-  const tags = (run.tags && run.tags.length) ? `<span class="tags">${{run.tags.join(', ')}}</span>` : '';
+  const tags = (run.tags && run.tags.length) ? run.tags.join(', ') : '';
   let tr = rows.get(id);
   if (!tr) {{
     tr = document.createElement('tr');
@@ -177,7 +177,7 @@ function upsert(run) {{
 <td><span class="badge">${{status}}</span> <a class="muted" href="/runs/${{id}}/live">live</a></td>
 <td>${{exit}}</td><td></td><td class="muted">${{started}}</td>`;
   tr.children[3].textContent = label + ' ';
-  if (tags) tr.children[3].insertAdjacentHTML('beforeend', tags);
+  if (tags) {{ const span = document.createElement('span'); span.className = 'tags'; span.textContent = tags; tr.children[3].appendChild(span); }}
 }}
 const qs = new URLSearchParams(location.search);
 const token = qs.get('token');
@@ -828,10 +828,35 @@ fn html_escape(s: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+        .replace('\'', "&#x27;")
 }
 
 fn urlencoding(s: &str) -> String {
-    s.to_string()
+    // Percent-encode characters that are unsafe in URLs
+    let mut result = String::with_capacity(s.len() * 3);
+    for byte in s.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                result.push(byte as char);
+            }
+            b' ' => result.push_str("%20"),
+            b'/' => result.push_str("%2F"),
+            b'?' => result.push_str("%3F"),
+            b'#' => result.push_str("%23"),
+            b'%' => result.push_str("%25"),
+            b'&' => result.push_str("%26"),
+            b'=' => result.push_str("%3D"),
+            b'+' => result.push_str("%2B"),
+            b'"' => result.push_str("%22"),
+            b'<' => result.push_str("%3C"),
+            b'>' => result.push_str("%3E"),
+            b'\'' => result.push_str("%27"),
+            _ => {
+                result.push_str(&format!("%{:02X}", byte));
+            }
+        }
+    }
+    result
 }
 
 struct AppError(anyhow::Error);

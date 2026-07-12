@@ -87,7 +87,9 @@ impl TerminalCoalescer {
 
     fn take(&mut self) -> CoalescedSegment {
         let preview = if self.text.len() > 200 {
-            format!("{}…", &self.text[..200])
+            // Use char-safe truncation to avoid panicking on multi-byte UTF-8
+            let end = self.text.floor_char_boundary(200);
+            format!("{}…", &self.text[..end])
         } else {
             self.text.clone()
         };

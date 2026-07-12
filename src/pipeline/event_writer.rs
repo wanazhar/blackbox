@@ -44,12 +44,12 @@ impl EventWriter {
 
     /// Current next-sequence value (not yet assigned).
     pub fn next_sequence(&self) -> u64 {
-        self.seq.load(Ordering::Relaxed)
+        self.seq.load(Ordering::Acquire)
     }
 
     /// Assign the next sequence number without persisting.
     pub fn allocate_sequence(&self) -> u64 {
-        self.seq.fetch_add(1, Ordering::Relaxed)
+        self.seq.fetch_add(1, Ordering::AcqRel)
     }
 
     /// Persist an event, assigning a sequence if `event.sequence == 0`.

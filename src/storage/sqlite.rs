@@ -685,6 +685,8 @@ impl TraceStore for SqliteStore {
         let size = data.len() as u64;
 
         // Write blob to disk (content-addressed: key IS the filename)
+        // Write blob to disk using atomic write (write-to-temp + rename)
+        // to prevent TOCTOU race conditions with concurrent writers
         let blob_path = self.blob_dir.join(&key);
         if !blob_path.exists() {
             let blob_dir = self.blob_dir.clone();
@@ -692,8 +694,14 @@ impl TraceStore for SqliteStore {
             let data_for_write = data.to_vec();
             task::spawn_blocking(move || -> anyhow::Result<()> {
                 std::fs::create_dir_all(&blob_dir).context("failed to create blob directory")?;
-                std::fs::write(blob_dir.join(&key_for_write), &data_for_write)
-                    .context("failed to write blob file")?;
+                let target = blob_dir.join(&key_for_write);
+                // Use atomic write: write to temp file, then rename
+                let temp = target.with_extension("tmp");
+                std::fs::write(&temp, &data_for_write)
+                    .context("failed to write blob temp file")?;
+                // rename is atomic on the same filesystem
+                std::fs::rename(&temp, &target)
+                    .context("failed to rename blob temp file")?;
                 Ok(())
             })
             .await??;

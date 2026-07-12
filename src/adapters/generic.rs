@@ -79,7 +79,8 @@ impl HarnessAdapter for GenericAdapter {
                 ev.status = EventStatus::Error;
                 ev.side_effect = SideEffect::None;
                 let preview = if trimmed.len() > 300 {
-                    format!("{}...", &trimmed[..300])
+                    let end = trimmed.floor_char_boundary(300);
+                    format!("{}...", &trimmed[..end])
                 } else {
                     trimmed.to_string()
                 };

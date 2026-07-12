@@ -246,7 +246,7 @@ fn render_layout(frame: &mut Frame, app: &App) {
                 Style::default()
             };
             Line::from(Span::styled(
-                format!("{} {}  {}", status, &run.id[..8], name),
+                format!("{} {}  {}", status, run.id.get(..8).unwrap_or(&run.id), name),
                 style,
             ))
         })

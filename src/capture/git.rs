@@ -207,7 +207,8 @@ impl GitCapture {
         ev.metadata.insert(
             "diff_preview".to_string(),
             serde_json::json!(if diff.len() > 500 {
-                format!("{}...", &diff[..500])
+                let end = diff.floor_char_boundary(500);
+                format!("{}...", &diff[..end])
             } else {
                 diff.to_string()
             }),

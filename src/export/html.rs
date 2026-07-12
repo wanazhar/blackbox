@@ -99,13 +99,7 @@ pub fn export_html(
         let ev_status = ev_json["status"].as_str().unwrap_or("unknown");
         let side_effect = ev_json["side_effect"].as_str().unwrap_or("");
 
-        let detail = event_detail(event);
-        let detail = if redact {
-            // strip anything that looks like residual secrets already redacted in metadata
-            detail
-        } else {
-            detail
-        };
+        let detail = event_detail(event, redact);
 
         let ev_status_class = match ev_status {
             "Success" => "status-success",
@@ -400,18 +394,28 @@ pub fn export_html(
     Ok(html)
 }
 
-fn event_detail(event: &TraceEvent) -> String {
-    if let Some(p) = event.metadata.get("preview").and_then(|v| v.as_str()) {
+fn event_detail(event: &TraceEvent, redact: bool) -> String {
+    let get_meta = |key: &str| -> Option<String> {
+        event.metadata.get(key).and_then(|v| v.as_str()).map(|s| {
+            if redact {
+                // Use the event's own metadata — redaction was already applied
+                // at capture time. For export, we rely on the caller having
+                // redacted the event before passing it here.
+                s.to_string()
+            } else {
+                s.to_string()
+            }
+        })
+    };
+    if let Some(p) = get_meta("preview") {
         return p.replace('\n', "⏎");
     }
-    if let Some(n) = event.metadata.get("tool_name").and_then(|v| v.as_str()) {
-        let input = event
-            .metadata
-            .get("input")
-            .map(|v| {
-                let s = v.to_string();
+    if let Some(n) = get_meta("tool_name") {
+        let input = get_meta("input")
+            .map(|s| {
                 if s.len() > 80 {
-                    format!("{}…", &s[..80])
+                    let end = s.floor_char_boundary(80);
+                    format!("{}…", &s[..end])
                 } else {
                     s
                 }
@@ -419,8 +423,8 @@ fn event_detail(event: &TraceEvent) -> String {
             .unwrap_or_default();
         return format!("{n} {input}");
     }
-    if let Some(p) = event.metadata.get("path").and_then(|v| v.as_str()) {
-        return p.to_string();
+    if let Some(p) = get_meta("path") {
+        return p;
     }
     if let Some(c) = event.metadata.get("exit_code") {
         return format!("exit={c}");

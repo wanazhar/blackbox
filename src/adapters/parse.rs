@@ -88,7 +88,8 @@ pub fn tool_result_event(
         // keys (set by the capture pipeline when payloads are large).
         let preview = match &output {
             serde_json::Value::String(s) if s.len() > 500 => {
-                serde_json::json!(format!("{}...", &s[..500]))
+                let end = s.floor_char_boundary(500);
+                serde_json::json!(format!("{}...", &s[..end]))
             }
             other => other.clone(),
         };
@@ -98,7 +99,7 @@ pub fn tool_result_event(
             let body = if s.len() <= 8000 {
                 s.to_string()
             } else {
-                format!("{}…", &s[..8000])
+                format!("{}…", &s[..s.floor_char_boundary(8000)])
             };
             ev.metadata
                 .insert("output_full".to_string(), serde_json::json!(body));
@@ -125,7 +126,8 @@ pub fn assistant_event(run_id: &str, preview: &str) -> TraceEvent {
     ev.status = EventStatus::Success;
     ev.side_effect = SideEffect::None;
     let text = if preview.len() > 400 {
-        format!("{}...", &preview[..400])
+        let end = preview.floor_char_boundary(400);
+        format!("{}...", &preview[..end])
     } else {
         preview.to_string()
     };

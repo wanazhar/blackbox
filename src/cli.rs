@@ -661,7 +661,8 @@ async fn cmd_runs(cli: &Cli, args: &RunsArgs) -> anyhow::Result<()> {
             let cmd = run.command.join(" ");
             let label = run.name.as_deref().unwrap_or(&cmd);
             let label = if label.len() > 50 {
-                format!("{}…", &label[..47])
+                let end = label.floor_char_boundary(47);
+                format!("{}…", &label[..end])
             } else {
                 label.to_string()
             };
@@ -676,7 +677,8 @@ async fn cmd_runs(cli: &Cli, args: &RunsArgs) -> anyhow::Result<()> {
                     run.tags.join(",")
                 };
                 let tags = if tags.len() > 18 {
-                    format!("{}…", &tags[..17])
+                    let end = tags.floor_char_boundary(17);
+                    format!("{}…", &tags[..end])
                 } else {
                     tags
                 };
@@ -982,7 +984,8 @@ async fn cmd_show(cli: &Cli, args: &ShowArgs) -> anyhow::Result<()> {
             Ok(text) => {
                 // Cap display for huge traces
                 if text.len() > 50_000 {
-                    print!("{}", &text[..50_000]);
+                    let end = text.floor_char_boundary(50_000);
+                    print!("{}", &text[..end]);
                     println!("\n… (truncated; {} bytes total)", text.len());
                 } else {
                     print!("{}", text);
@@ -1085,7 +1088,8 @@ fn event_detail_line(ev: &crate::core::event::TraceEvent) -> String {
     if let Some(preview) = ev.metadata.get("preview").and_then(|v| v.as_str()) {
         let p = preview.replace('\n', "⏎");
         if p.len() > 50 {
-            return format!("{}…", &p[..50]);
+            let end = p.floor_char_boundary(50);
+            return format!("{}…", &p[..end]);
         }
         return p;
     }
@@ -1138,7 +1142,8 @@ async fn cmd_inspect(cli: &Cli, args: &InspectArgs) -> anyhow::Result<()> {
         if let Ok(data) = store.load_blob(&bref).await {
             let text = String::from_utf8_lossy(&data);
             let show = if text.len() > 2000 {
-                format!("{}…\n  ({} bytes total)", &text[..2000], data.len())
+                let end = text.floor_char_boundary(2000);
+                format!("{}…\n  ({} bytes total)", &text[..end], data.len())
             } else {
                 text.to_string()
             };
@@ -1154,7 +1159,8 @@ async fn cmd_inspect(cli: &Cli, args: &InspectArgs) -> anyhow::Result<()> {
         for (k, v) in &event.metadata {
             let val_str = if let Some(s) = v.as_str() {
                 if s.len() > 200 {
-                    format!("{}...", &s[..200])
+                    let end = s.floor_char_boundary(200);
+                    format!("{}...", &s[..end])
                 } else {
                     s.to_string()
                 }

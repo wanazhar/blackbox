@@ -35,7 +35,7 @@ impl Panel for RunsView {
                     crate::core::run::RunStatus::Running => "\u{25CF}",
                     _ => "?",
                 };
-                let label = format!("{} {}  {}", status, &run.id[..8], name);
+                let label = format!("{} {}  {}", status, run.id.get(..8).unwrap_or(&run.id), name);
                 ListItem::new(Span::raw(label))
             })
             .collect();

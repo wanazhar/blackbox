@@ -156,7 +156,7 @@ impl Cli {
 
 async fn cmd_run(args: &RunArgs) -> anyhow::Result<()> {
     use std::sync::Arc;
-    use crate::storage::store::InMemoryStore;
+    use crate::storage::sqlite::SqliteStore;
     use crate::run::RunSupervisor;
 
     tracing::info!(
@@ -167,7 +167,8 @@ async fn cmd_run(args: &RunArgs) -> anyhow::Result<()> {
         "run command"
     );
 
-    let store: Arc<dyn crate::storage::TraceStore> = Arc::new(InMemoryStore::new());
+    let store = SqliteStore::open("blackbox.db")?;
+    let store: Arc<dyn crate::storage::TraceStore> = Arc::new(store);
     let supervisor = RunSupervisor::new(store);
     let run = supervisor.execute(args).await?;
 
@@ -176,7 +177,27 @@ async fn cmd_run(args: &RunArgs) -> anyhow::Result<()> {
 }
 
 async fn cmd_runs() -> anyhow::Result<()> {
-    println!("No runs recorded yet.");
+    use crate::storage::sqlite::SqliteStore;
+    use crate::storage::TraceStore;
+
+    let store = SqliteStore::open("blackbox.db")?;
+    let runs = store.list_runs().await?;
+
+    if runs.is_empty() {
+        println!("No runs recorded yet.");
+    } else {
+        for run in &runs {
+            let status = match &run.status {
+                crate::core::run::RunStatus::Succeeded => "✓",
+                crate::core::run::RunStatus::Failed => "✗",
+                crate::core::run::RunStatus::Running => "●",
+                _ => "○",
+            };
+            let cmd = run.command.join(" ");
+            let label = run.name.as_deref().unwrap_or(&cmd);
+            println!("{} {}  {}  {:?}", status, &run.id[..8], label, run.exit_code);
+        }
+    }
     Ok(())
 }
 

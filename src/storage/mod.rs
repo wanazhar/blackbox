@@ -1,4 +1,5 @@
 pub mod store;
+pub mod sqlite;
 
 use crate::core::blob::BlobReference;
 use crate::core::checkpoint::Checkpoint;

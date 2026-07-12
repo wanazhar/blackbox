@@ -44,6 +44,8 @@ pub enum Command {
     Analyze(AnalyzeArgs),
     /// Re-redact secrets in historical traces (at-rest cleanup)
     Scrub(ScrubArgs),
+    /// Diagnose store path, schema, and environment
+    Doctor,
 }
 
 #[derive(Args)]
@@ -212,6 +214,7 @@ impl Cli {
             Command::Fork(args) => cmd_fork(self, args).await,
             Command::Analyze(args) => cmd_analyze(self, args).await,
             Command::Scrub(args) => cmd_scrub(self, args).await,
+            Command::Doctor => cmd_doctor(self).await,
         }
     }
 }
@@ -380,9 +383,9 @@ async fn cmd_runs(cli: &Cli) -> anyhow::Result<()> {
     let store = open_store(cli)?;
     let runs = store.list_runs().await?;
 
+    println!("Store: {}", store.db_path().display());
     if runs.is_empty() {
         println!("No runs recorded yet.");
-        println!("  Store: {}", store.db_path().display());
         println!("  Try: blackbox run -- echo hello");
     } else {
         println!(
@@ -1054,5 +1057,70 @@ async fn cmd_scrub(cli: &Cli, args: &ScrubArgs) -> anyhow::Result<()> {
     } else {
         println!("Done.");
     }
+    Ok(())
+}
+
+async fn cmd_doctor(cli: &Cli) -> anyhow::Result<()> {
+    use crate::redaction::scanner::SecretScanner;
+    use crate::redaction::RedactionConfig;
+
+    println!("blackbox doctor");
+    println!("{}", "─".repeat(48));
+
+    let project = std::env::current_dir().ok();
+    let paths = BlackboxPaths::resolve(project.as_deref(), cli.store.as_deref())?;
+    println!("cwd:        {}", project.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "?".into()));
+    println!("db path:    {}", paths.db_path.display());
+    println!("blob dir:   {}", paths.blob_dir.display());
+    println!("db exists:  {}", paths.db_path.exists());
+    println!("blobs dir:  {}", paths.blob_dir.exists());
+
+    if let Ok(store) = open_store(cli) {
+        let runs = store.list_runs().await?;
+        let running = runs
+            .iter()
+            .filter(|r| matches!(r.status, crate::core::run::RunStatus::Running))
+            .count();
+        println!("runs:       {} (running/orphan: {})", runs.len(), running);
+        let blob_count = std::fs::read_dir(store.blob_dir())
+            .map(|rd| rd.filter_map(|e| e.ok()).count())
+            .unwrap_or(0);
+        println!("blob files: {}", blob_count);
+
+        // Quick secret scan of recent run commands
+        let scanner = SecretScanner::new(RedactionConfig::default());
+        let mut dirty = 0usize;
+        for run in runs.iter().take(20) {
+            let cmd = run.command.join(" ");
+            if !scanner.scan(&cmd, "doctor", None).is_empty() {
+                dirty += 1;
+            }
+        }
+        if dirty > 0 {
+            println!(
+                "warning:    {dirty} recent run command(s) still match secret patterns"
+            );
+            println!("            run: blackbox scrub");
+        } else {
+            println!("secrets:    no secret patterns in recent run argv");
+        }
+    } else {
+        println!("store:      could not open (will be created on first run)");
+    }
+
+    println!();
+    println!("env:");
+    println!(
+        "  BLACKBOX_DB         = {}",
+        std::env::var("BLACKBOX_DB").unwrap_or_else(|_| "(unset)".into())
+    );
+    println!(
+        "  BLACKBOX_FORCE_JSON = {}",
+        std::env::var("BLACKBOX_FORCE_JSON").unwrap_or_else(|_| "(unset)".into())
+    );
+    println!("  RUST_LOG            = {}", std::env::var("RUST_LOG").unwrap_or_else(|_| "(unset)".into()));
+
+    println!();
+    println!("ok — use `blackbox run -- echo hi` to verify capture");
     Ok(())
 }

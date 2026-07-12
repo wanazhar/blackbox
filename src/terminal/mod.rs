@@ -1,5 +1,6 @@
-pub mod recorder;
 pub mod ansi;
+pub mod coalesce;
+pub mod recorder;
 pub mod transcript;
 
 use crate::core::event::TraceEvent;

@@ -29,6 +29,7 @@ use crate::redaction::scanner::SecretScanner;
 use crate::redaction::RedactionConfig;
 use crate::storage::TraceStore;
 use crate::terminal::ansi::AnsiNormalizer;
+use crate::terminal::coalesce::{CoalescePolicy, TerminalCoalescer};
 use crate::terminal::recorder::RawRecorder;
 use crate::terminal::TerminalRecorder;
 
@@ -462,8 +463,45 @@ impl RunSupervisor {
             }
 
             let mut segment_count: u64 = 0;
+            let mut event_count: u64 = 0;
             let mut line_buf = String::new();
             let mut total_redactions: u64 = 0;
+            let mut coalescer =
+                TerminalCoalescer::new(CoalescePolicy::default(), insecure_raw);
+
+            // Persist one coalesced terminal.output event
+            async fn emit_terminal(
+                store: &Arc<dyn TraceStore>,
+                writer: &EventWriter,
+                run_id: &str,
+                seg: crate::terminal::coalesce::CoalescedSegment,
+                insecure_raw: bool,
+            ) -> anyhow::Result<()> {
+                let text_blob = store.store_blob(seg.text.as_bytes()).await?.key;
+                let mut ev = TraceEvent::new(run_id, EventSource::Terminal, "terminal.output");
+                ev.status = EventStatus::Success;
+                ev.output_blob = Some(text_blob);
+                if insecure_raw && !seg.insecure_raw.is_empty() {
+                    let raw_key = store.store_blob(&seg.insecure_raw).await?.key;
+                    ev.input_blob = Some(raw_key);
+                    ev.metadata
+                        .insert("raw_stored".to_string(), serde_json::json!(true));
+                }
+                ev.metadata
+                    .insert("bytes".to_string(), serde_json::json!(seg.raw_bytes));
+                ev.metadata
+                    .insert("chunks".to_string(), serde_json::json!(seg.chunks));
+                ev.metadata
+                    .insert("preview".to_string(), serde_json::json!(seg.preview));
+                if seg.redactions > 0 {
+                    ev.metadata.insert(
+                        "redactions".to_string(),
+                        serde_json::json!(seg.redactions),
+                    );
+                }
+                writer.write(ev).await?;
+                Ok(())
+            }
 
             while let Some(data) = pty_out_rx.recv().await {
                 segment_count += 1;
@@ -482,73 +520,39 @@ impl RunSupervisor {
                 } else {
                     Vec::new()
                 };
-                let safe_text = if do_redact && !redactions.is_empty() {
-                    total_redactions += redactions.len() as u64;
-                    tracing::warn!(
-                        count = redactions.len(),
-                        segment = segment_count,
-                        "redacted secrets in terminal output"
-                    );
-                    scanner_term.redact(&normalized_text)
-                } else if do_redact {
+                let redact_n = redactions.len() as u64;
+                let safe_text = if do_redact {
+                    if redact_n > 0 {
+                        total_redactions += redact_n;
+                        tracing::warn!(
+                            count = redact_n,
+                            segment = segment_count,
+                            "redacted secrets in terminal output"
+                        );
+                    }
                     scanner_term.redact(&normalized_text)
                 } else {
                     normalized_text.clone()
                 };
 
-                // Store redacted text as content-addressed blob
-                let text_blob = match store_writer.store_blob(safe_text.as_bytes()).await {
-                    Ok(r) => Some(r.key),
-                    Err(e) => {
-                        tracing::error!(error = %e, "failed to store terminal blob");
-                        None
+                // Coalesce for storage (adapter parse is still immediate below)
+                if let Some(seg) = coalescer.push(&safe_text, &data, redact_n) {
+                    if let Err(e) = emit_terminal(
+                        &store_writer,
+                        event_writer.as_ref(),
+                        &run_id_writer,
+                        seg,
+                        insecure_raw,
+                    )
+                    .await
+                    {
+                        tracing::error!(error = %e, "failed to persist terminal event");
+                    } else {
+                        event_count += 1;
                     }
-                };
-
-                // Optional raw blob — only with --insecure-raw
-                let raw_blob = if insecure_raw {
-                    match store_writer.store_blob(&data).await {
-                        Ok(r) => Some(r.key),
-                        Err(e) => {
-                            tracing::error!(error = %e, "failed to store raw terminal blob");
-                            None
-                        }
-                    }
-                } else {
-                    None
-                };
-
-                let preview = if safe_text.len() > 200 {
-                    format!("{}…", &safe_text[..200])
-                } else {
-                    safe_text.clone()
-                };
-
-                let mut ev =
-                    TraceEvent::new(&run_id_writer, EventSource::Terminal, "terminal.output");
-                ev.status = EventStatus::Success;
-                ev.output_blob = text_blob;
-                if let Some(raw_key) = raw_blob {
-                    ev.input_blob = Some(raw_key); // raw on input_blob only when insecure
-                    ev.metadata
-                        .insert("raw_stored".to_string(), serde_json::json!(true));
-                }
-                ev.metadata
-                    .insert("bytes".to_string(), serde_json::json!(data.len()));
-                ev.metadata
-                    .insert("preview".to_string(), serde_json::json!(preview));
-                if !redactions.is_empty() {
-                    ev.metadata.insert(
-                        "redactions".to_string(),
-                        serde_json::json!(redactions.len()),
-                    );
-                }
-                // NEVER store raw/normalized plaintext in metadata
-                if let Err(e) = event_writer.write(ev).await {
-                    tracing::error!(error = %e, "failed to persist terminal event");
                 }
 
-                // Line-buffered adapter parse on redacted text
+                // Line-buffered adapter parse on redacted text (not coalesced)
                 line_buf.push_str(&safe_text.replace('\r', ""));
                 while let Some(pos) = line_buf.find('\n') {
                     let line = line_buf[..pos].to_string();
@@ -557,7 +561,6 @@ impl RunSupervisor {
                         continue;
                     }
                     for mut parsed in adapter_writer.parse_output(&run_id_writer, line.as_bytes()) {
-                        // Redact any secrets that slipped into parsed metadata
                         if do_redact {
                             let mut meta_val = serde_json::to_value(&parsed.metadata)
                                 .unwrap_or_else(|_| serde_json::json!({}));
@@ -570,6 +573,23 @@ impl RunSupervisor {
                             tracing::error!(error = %e, "failed to persist adapter event");
                         }
                     }
+                }
+            }
+
+            // Drain coalescer
+            if let Some(seg) = coalescer.finish() {
+                if let Err(e) = emit_terminal(
+                    &store_writer,
+                    event_writer.as_ref(),
+                    &run_id_writer,
+                    seg,
+                    insecure_raw,
+                )
+                .await
+                {
+                    tracing::error!(error = %e, "failed to persist final terminal event");
+                } else {
+                    event_count += 1;
                 }
             }
 
@@ -600,6 +620,7 @@ impl RunSupervisor {
                 Err(e) => tracing::warn!(error = %e, "RawRecorder.stop failed"),
             }
 
+            let _ = event_count;
             (segment_count, total_redactions)
         });
 

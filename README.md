@@ -100,6 +100,7 @@ Export is **redacted by default**. Pass `--no-redact` only for private offline a
 | `diff` | Compare two runs (status, tools, kinds) |
 | `analyze` | Error / side-effect / correlation passes |
 | `scrub` | Re-redact secrets already stored at rest |
+| `doctor` | Diagnose store path, blob dir, secret residue |
 | `export` | JSONL / HTML / portable |
 | `replay` | Timeline, mock tools, sandbox (seeded workspace) |
 | `fork` | Branch a new run record from a checkpoint |

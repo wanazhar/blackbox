@@ -1669,9 +1669,7 @@ async fn cmd_analyze(cli: &Cli, args: &AnalyzeArgs) -> anyhow::Result<()> {
 }
 
 async fn cmd_scrub(cli: &Cli, args: &ScrubArgs) -> anyhow::Result<()> {
-    use crate::scrub::{
-        collect_referenced_blobs, format_report, gc_orphan_blobs, scrub_store,
-    };
+    use crate::scrub::{format_report, gc_unreferenced_blobs, scrub_store};
 
     let store = open_store(cli)?;
     let blob_dir = store.blob_dir().to_path_buf();
@@ -1710,12 +1708,13 @@ async fn cmd_scrub(cli: &Cli, args: &ScrubArgs) -> anyhow::Result<()> {
     println!("{}", format_report(&report));
 
     if args.gc {
-        let refs = collect_referenced_blobs(store.as_ref()).await?;
-        let n = gc_orphan_blobs(&blob_dir, &refs, args.dry_run).await?;
+        let (files, meta) =
+            gc_unreferenced_blobs(store.as_ref(), &blob_dir, args.dry_run).await?;
         println!(
-            "{}orphan blobs: {} ({})",
+            "{}orphan blobs: {} file(s), {} metadata row(s) ({})",
             if args.dry_run { "[dry-run] " } else { "" },
-            n,
+            files,
+            meta,
             blob_dir.display()
         );
     }
@@ -1880,7 +1879,7 @@ async fn cmd_watch(cli: &Cli, args: &WatchArgs) -> anyhow::Result<()> {
 }
 
 async fn cmd_rm(cli: &Cli, args: &RmArgs) -> anyhow::Result<()> {
-    use crate::scrub::{collect_referenced_blobs, gc_orphan_blobs};
+    use crate::scrub::gc_unreferenced_blobs;
 
     if args.run_ids.is_empty() {
         anyhow::bail!("pass at least one run id (or latest)");
@@ -1920,9 +1919,8 @@ async fn cmd_rm(cli: &Cli, args: &RmArgs) -> anyhow::Result<()> {
     println!("Removed {deleted} run(s).");
 
     if args.gc {
-        let refs = collect_referenced_blobs(store.as_ref()).await?;
-        let n = gc_orphan_blobs(&blob_dir, &refs, false).await?;
-        println!("gc: removed {n} orphan blob file(s)");
+        let (files, meta) = gc_unreferenced_blobs(store.as_ref(), &blob_dir, false).await?;
+        println!("gc: removed {files} orphan blob file(s), {meta} metadata row(s)");
     } else {
         println!("Tip: blackbox scrub --gc  to reclaim unreferenced blobs");
     }
@@ -1930,7 +1928,7 @@ async fn cmd_rm(cli: &Cli, args: &RmArgs) -> anyhow::Result<()> {
 }
 
 async fn cmd_purge(cli: &Cli, args: &PurgeArgs) -> anyhow::Result<()> {
-    use crate::scrub::{collect_referenced_blobs, gc_orphan_blobs};
+    use crate::scrub::gc_unreferenced_blobs;
 
     if !args.yes {
         anyhow::bail!("purge is destructive; pass --yes to confirm");
@@ -1981,9 +1979,8 @@ async fn cmd_purge(cli: &Cli, args: &PurgeArgs) -> anyhow::Result<()> {
     println!("Deleted {deleted} run(s).");
 
     if args.gc {
-        let refs = collect_referenced_blobs(store.as_ref()).await?;
-        let n = gc_orphan_blobs(&blob_dir, &refs, false).await?;
-        println!("gc: removed {n} orphan blob file(s)");
+        let (files, meta) = gc_unreferenced_blobs(store.as_ref(), &blob_dir, false).await?;
+        println!("gc: removed {files} orphan blob file(s), {meta} metadata row(s)");
     }
     Ok(())
 }

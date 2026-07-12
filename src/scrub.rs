@@ -168,6 +168,10 @@ pub fn format_report(report: &ScrubReport) -> String {
 }
 
 /// Collect every blob key still referenced by runs/events/checkpoints.
+///
+/// Only live references count. Keys that merely exist in the `blobs`
+/// metadata table (e.g. after `delete_run`, or after scrub rewrote a secret
+/// blob to a new key) are *not* treated as live — callers must GC those.
 pub async fn collect_referenced_blobs(
     store: &dyn TraceStore,
 ) -> anyhow::Result<std::collections::HashSet<String>> {
@@ -205,16 +209,6 @@ pub async fn collect_referenced_blobs(
                 keys.insert(k);
             }
             if let Some(k) = cp.transcript_blob {
-                keys.insert(k);
-            }
-        }
-
-        // Also collect keys from the blobs table itself. A blob may have been
-        // stored (row + file on disk) but not yet referenced by any event or
-        // checkpoint. Without this, the file gets GC'd while the blobs table
-        // row persists, creating a metadata/data inconsistency.
-        if let Ok(blob_keys) = store.all_blob_keys().await {
-            for k in blob_keys {
                 keys.insert(k);
             }
         }
@@ -257,6 +251,38 @@ pub async fn gc_orphan_blobs(
     })
     .await
     .context("spawn_blocking panicked for gc_orphan_blobs")?
+}
+
+/// Full GC pass: remove unreferenced blob files *and* their metadata rows.
+///
+/// Returns `(files_deleted, metadata_rows_deleted)`.
+///
+/// Note: do not run while an active recording may be writing blobs that are
+/// not yet linked from events — the race window can reclaim in-flight content.
+pub async fn gc_unreferenced_blobs(
+    store: &dyn TraceStore,
+    blob_dir: &std::path::Path,
+    dry_run: bool,
+) -> anyhow::Result<(usize, usize)> {
+    let referenced = collect_referenced_blobs(store).await?;
+    let files = gc_orphan_blobs(blob_dir, &referenced, dry_run).await?;
+
+    // Prune metadata rows that have no live event/checkpoint reference.
+    // (R2-H3: earlier "fix" treated every blobs-table key as live, which
+    // made GC a no-op and left secret-bearing blobs after scrub rewrites.)
+    let all_keys = store.all_blob_keys().await.unwrap_or_default();
+    let orphan_keys: Vec<String> = all_keys
+        .into_iter()
+        .filter(|k| !referenced.contains(k))
+        .collect();
+    let meta = if dry_run {
+        orphan_keys.len()
+    } else if orphan_keys.is_empty() {
+        0
+    } else {
+        store.delete_blob_keys(&orphan_keys).await?
+    };
+    Ok((files, meta))
 }
 
 #[cfg(test)]
@@ -343,5 +369,105 @@ mod tests {
         let text = String::from_utf8_lossy(&new_blob);
         assert!(!text.contains("AKIAIOSFODNN7"), "secret must not appear in scrubbed blob: {text}");
         assert!(text.contains("[REDACTED]"));
+    }
+
+    #[tokio::test]
+    async fn gc_removes_unreferenced_blob_after_delete_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("t.db");
+        let blob_dir = dir.path().join("blobs");
+        std::fs::create_dir_all(&blob_dir).unwrap();
+        let store = SqliteStore::open_with_blobs(&db, &blob_dir).unwrap();
+
+        let run = crate::core::run::Run::new(vec!["echo".into()], "/tmp".into());
+        store.insert_run(&run).await.unwrap();
+        let blob = store.store_blob(b"orphan-after-delete").await.unwrap();
+        let mut ev = TraceEvent::new(&run.id, EventSource::Terminal, "terminal.output");
+        ev.status = EventStatus::Success;
+        ev.output_blob = Some(blob.key.clone());
+        store.insert_event(&ev).await.unwrap();
+
+        // Blob file and metadata exist
+        assert!(blob_dir.join(&blob.key).exists());
+        assert!(store
+            .all_blob_keys()
+            .await
+            .unwrap()
+            .contains(&blob.key));
+
+        // Delete run → event reference gone; blob remains until GC
+        assert!(store.delete_run(&run.id).await.unwrap());
+        assert!(blob_dir.join(&blob.key).exists());
+
+        let (files, meta) = gc_unreferenced_blobs(&store, &blob_dir, false)
+            .await
+            .unwrap();
+        assert_eq!(files, 1, "should delete orphan blob file");
+        assert_eq!(meta, 1, "should prune orphan blobs-table row");
+        assert!(!blob_dir.join(&blob.key).exists());
+        assert!(!store
+            .all_blob_keys()
+            .await
+            .unwrap()
+            .contains(&blob.key));
+    }
+
+    #[tokio::test]
+    async fn gc_preserves_still_referenced_blobs() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("t.db");
+        let blob_dir = dir.path().join("blobs");
+        std::fs::create_dir_all(&blob_dir).unwrap();
+        let store = SqliteStore::open_with_blobs(&db, &blob_dir).unwrap();
+
+        let run = crate::core::run::Run::new(vec!["echo".into()], "/tmp".into());
+        store.insert_run(&run).await.unwrap();
+        let blob = store.store_blob(b"keep-me").await.unwrap();
+        let mut ev = TraceEvent::new(&run.id, EventSource::Terminal, "terminal.output");
+        ev.status = EventStatus::Success;
+        ev.output_blob = Some(blob.key.clone());
+        store.insert_event(&ev).await.unwrap();
+
+        let (files, meta) = gc_unreferenced_blobs(&store, &blob_dir, false)
+            .await
+            .unwrap();
+        assert_eq!(files, 0);
+        assert_eq!(meta, 0);
+        assert!(blob_dir.join(&blob.key).exists());
+    }
+
+    #[tokio::test]
+    async fn gc_reclaims_old_blob_after_scrub_rewrite() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("t.db");
+        let blob_dir = dir.path().join("blobs");
+        std::fs::create_dir_all(&blob_dir).unwrap();
+        let store = Arc::new(SqliteStore::open_with_blobs(&db, &blob_dir).unwrap());
+
+        let run = crate::core::run::Run::new(vec!["echo".into()], "/tmp".into());
+        store.insert_run(&run).await.unwrap();
+        let secret = b"token AKIAIOSFODNN7EXAMPLE leftover";
+        let old = store.store_blob(secret).await.unwrap();
+        let mut ev = TraceEvent::new(&run.id, EventSource::Terminal, "terminal.output");
+        ev.status = EventStatus::Success;
+        ev.output_blob = Some(old.key.clone());
+        store.insert_event(&ev).await.unwrap();
+
+        scrub_store(store.clone(), false, Some("all"), None)
+            .await
+            .unwrap();
+        let events = store.get_events(&run.id).await.unwrap();
+        let new_key = events[0].output_blob.as_ref().unwrap().clone();
+        assert_ne!(new_key, old.key);
+        // Old secret blob still on disk until GC
+        assert!(blob_dir.join(&old.key).exists());
+
+        let (files, meta) = gc_unreferenced_blobs(store.as_ref(), &blob_dir, false)
+            .await
+            .unwrap();
+        assert!(files >= 1, "old secret blob file must be reclaimed");
+        assert!(meta >= 1, "old secret blob metadata must be pruned");
+        assert!(!blob_dir.join(&old.key).exists());
+        assert!(blob_dir.join(&new_key).exists());
     }
 }

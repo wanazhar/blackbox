@@ -113,17 +113,13 @@ fn tool_fingerprint(event: &TraceEvent) -> Option<String> {
         return Some(format!("{}:{}", event.kind, tool_use_id));
     }
 
-    // Fallback: kind + name + compact input
+    // Fallback: kind + name + compact input (UTF-8 safe truncate)
     let input = event
         .metadata
         .get("input")
         .map(|v| v.to_string())
         .unwrap_or_default();
-    let input_key = if input.len() > 120 {
-        format!("{}…", &input[..120])
-    } else {
-        input
-    };
+    let input_key = crate::util::truncate(&input, 120);
     if tool_name.is_empty() && input_key.is_empty() {
         return None;
     }

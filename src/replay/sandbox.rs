@@ -277,11 +277,17 @@ impl ReplayEngine for SandboxReplay {
                 event.side_effect.clone()
             };
 
-            // For sandbox policy, allow Unknown shell only if it's a clearly read-only command
-            let allowed = self.is_allowed(&side)
-                || (self.policy == ReplayPolicy::Sandbox
-                    && side == SideEffect::Unknown
-                    && is_readonly_command(&cmd));
+            // R2-C3 / R2-H13: shell interpreters can execute arbitrary argv payloads
+            // (e.g. `sh -c "rm -rf /"`). Block them under every policy except Live,
+            // even when the event was mis-tagged as Read/LocalWrite.
+            let shell_blocked = self.policy != ReplayPolicy::Live && is_shell_interpreter(&cmd);
+
+            // For sandbox policy, allow Unknown only if it's a clearly read-only command
+            let allowed = !shell_blocked
+                && (self.is_allowed(&side)
+                    || (self.policy == ReplayPolicy::Sandbox
+                        && side == SideEffect::Unknown
+                        && is_readonly_command(&cmd)));
 
             if !allowed {
                 println!(
@@ -404,6 +410,19 @@ fn seed_walk(
     Ok(())
 }
 
+/// True when the command binary is a shell interpreter (basename match).
+///
+/// Accepts both bare names (`sh`) and paths (`/bin/bash`) so sandbox policy
+/// cannot be bypassed via absolute paths.
+fn is_shell_interpreter(cmd: &[String]) -> bool {
+    let first = cmd.first().map(|s| s.as_str()).unwrap_or("");
+    let base = std::path::Path::new(first)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(first);
+    matches!(base, "sh" | "bash" | "dash" | "zsh" | "fish" | "ksh")
+}
+
 fn is_readonly_command(cmd: &[String]) -> bool {
     let joined = cmd.join(" ").to_lowercase();
     let first = cmd.first().map(|s| s.as_str()).unwrap_or("");
@@ -411,7 +430,7 @@ fn is_readonly_command(cmd: &[String]) -> bool {
     // Block shell interpreters entirely — they can execute arbitrary commands
     // passed as arguments (e.g. `sh -c "rm -rf /"`), bypassing the side-effect
     // classification if the event was incorrectly tagged as Read/LocalWrite.
-    if matches!(first, "sh" | "bash" | "dash" | "zsh" | "fish" | "ksh") {
+    if is_shell_interpreter(cmd) {
         return false;
     }
 
@@ -511,6 +530,58 @@ mod tests {
                 executed, skipped, ..
             } => {
                 assert_eq!(executed, 0);
+                assert_eq!(skipped, 1);
+            }
+            other => panic!("unexpected {:?}", other),
+        }
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn is_readonly_blocks_shell_interpreters() {
+        // R2-C3 / R2-H13: shell passthrough would allow `sh -c "rm -rf /"`
+        // even when the event was mis-tagged as Read.
+        assert!(is_shell_interpreter(&["sh".into(), "-c".into(), "echo hi".into()]));
+        assert!(is_shell_interpreter(&["/bin/bash".into(), "-c".into(), "rm -rf /".into()]));
+        assert!(is_shell_interpreter(&["zsh".into()]));
+        assert!(!is_shell_interpreter(&["echo".into(), "hi".into()]));
+        assert!(!is_readonly_command(&["sh".into(), "-c".into(), "echo hi".into()]));
+        assert!(!is_readonly_command(&[
+            "bash".into(),
+            "-c".into(),
+            "rm -rf /".into()
+        ]));
+        assert!(!is_readonly_command(&["zsh".into(), "-c".into(), "true".into()]));
+        assert!(!is_readonly_command(&["fish".into(), "-c".into(), "true".into()]));
+        assert!(!is_readonly_command(&["dash".into(), "-c".into(), "true".into()]));
+        assert!(!is_readonly_command(&["ksh".into(), "-c".into(), "true".into()]));
+        // Legitimate read-only tools still allowed
+        assert!(is_readonly_command(&["echo".into(), "hi".into()]));
+        assert!(is_readonly_command(&["cat".into(), "file.txt".into()]));
+        assert!(is_readonly_command(&["ls".into(), "-la".into()]));
+    }
+
+    #[tokio::test]
+    async fn sandbox_blocks_shell_even_if_tagged_read() {
+        let run = Run::new(vec!["sh".into()], "/tmp".into());
+        let mut ev = TraceEvent::new(&run.id, EventSource::Process, "process.command");
+        // Mis-classified as Read — must still be blocked
+        ev.side_effect = SideEffect::Read;
+        ev.metadata.insert(
+            "command".into(),
+            serde_json::json!(["sh", "-c", "echo should-not-run"]),
+        );
+
+        let ws = std::env::temp_dir().join(format!("bb-sbx-shell-{}", uuid::Uuid::new_v4()));
+        let mut engine = SandboxReplay::new()
+            .with_workspace(ws.clone())
+            .without_seed();
+        let outcome = engine.start(&run, &[ev], None).await.unwrap();
+        match outcome {
+            ReplayOutcome::Sandboxed {
+                executed, skipped, ..
+            } => {
+                assert_eq!(executed, 0, "shell must not execute under sandbox");
                 assert_eq!(skipped, 1);
             }
             other => panic!("unexpected {:?}", other),

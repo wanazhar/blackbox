@@ -100,10 +100,20 @@ pub trait TraceStore: Send + Sync + 'static {
 
     /// Return all blob keys currently tracked in the blob metadata table.
     ///
-    /// Used by scrub GC to cross-reference blobs table entries against
-    /// event and checkpoint references. Returns empty vec on backends
-    /// that do not maintain a blob metadata table.
+    /// Used by scrub GC to find metadata rows that no longer have live
+    /// event/checkpoint references. Returns empty vec on backends that do
+    /// not maintain a blob metadata table.
     async fn all_blob_keys(&self) -> anyhow::Result<Vec<String>> {
         Ok(Vec::new())
+    }
+
+    /// Delete blob metadata rows for the given keys.
+    ///
+    /// Used after orphan file GC so the `blobs` table does not retain rows
+    /// for content that is no longer referenced. Does not remove on-disk
+    /// files (callers use `gc_orphan_blobs` for that). Returns the number of
+    /// rows deleted. Default is a no-op.
+    async fn delete_blob_keys(&self, _keys: &[String]) -> anyhow::Result<usize> {
+        Ok(0)
     }
 }

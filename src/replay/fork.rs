@@ -185,8 +185,8 @@ impl ReplayEngine for ForkManager {
 
         let summary = format!(
             "created run {} from parent {} at {} (seq {}); {} events after fork point",
-            &new_run.id[..8],
-            &run.id[..8.min(run.id.len())],
+            crate::util::short_id(&new_run.id),
+            crate::util::short_id(&run.id),
             fork_point.kind,
             fork_point.sequence,
             slice.len()

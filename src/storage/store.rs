@@ -169,4 +169,19 @@ impl TraceStore for InMemoryStore {
         }
         Ok(())
     }
- }
+
+    async fn all_blob_keys(&self) -> anyhow::Result<Vec<String>> {
+        Ok(self.blobs.read().await.keys().cloned().collect())
+    }
+
+    async fn delete_blob_keys(&self, keys: &[String]) -> anyhow::Result<usize> {
+        let mut blobs = self.blobs.write().await;
+        let mut deleted = 0usize;
+        for key in keys {
+            if blobs.remove(key).is_some() {
+                deleted += 1;
+            }
+        }
+        Ok(deleted)
+    }
+}

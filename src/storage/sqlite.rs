@@ -1121,6 +1121,26 @@ impl TraceStore for SqliteStore {
             .collect::<Result<Vec<_>, _>>()?;
         Ok(keys)
     }
+
+    async fn delete_blob_keys(&self, keys: &[String]) -> anyhow::Result<usize> {
+        if keys.is_empty() {
+            return Ok(0);
+        }
+        let conn = self.lock();
+        let tx = conn
+            .unchecked_transaction()
+            .context("failed to start transaction for delete_blob_keys")?;
+        let mut deleted = 0usize;
+        for key in keys {
+            let n = tx
+                .execute("DELETE FROM blobs WHERE key = ?1", params![key])
+                .with_context(|| format!("failed to delete blob metadata for {key}"))?;
+            deleted += n;
+        }
+        tx.commit()
+            .context("failed to commit delete_blob_keys")?;
+        Ok(deleted)
+    }
 }
 
 fn event_search_body(event: &TraceEvent) -> String {

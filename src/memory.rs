@@ -157,6 +157,22 @@ fn side_effect_str(se: &SideEffect) -> String {
     }
 }
 
+/// True when a porcelain line only refers to blackbox store paths (not real WIP).
+fn porcelain_line_is_blackbox_only(line: &str) -> bool {
+    // Formats: "?? .blackbox/", " M path", "MM path", "R  old -> new", etc.
+    let path_part = line.get(3..).unwrap_or(line).trim();
+    let path = if let Some((_, dst)) = path_part.split_once(" -> ") {
+        dst.trim()
+    } else {
+        path_part
+    };
+    let path = path.trim_matches('"');
+    path == ".blackbox"
+        || path.starts_with(".blackbox/")
+        || path.ends_with("/.blackbox")
+        || path.contains("/.blackbox/")
+}
+
 /// Live git status --porcelain with timeout (500ms). dirty=false on fail.
 pub fn live_git_status(project_root: &Path) -> GitMemoryView {
     let mut view = GitMemoryView::default();
@@ -172,15 +188,20 @@ pub fn live_git_status(project_root: &Path) -> GitMemoryView {
         return view;
     }
     if let Some(out) = porcelain {
-        let trimmed = out.trim();
-        view.dirty = !trimmed.is_empty();
+        // Ignore blackbox's own store so ambient capture never sticks attention=wip forever
+        // on an otherwise clean tree (`.blackbox/` is usually gitignored but not always).
+        let meaningful: Vec<&str> = out
+            .lines()
+            .filter(|line| !line.trim().is_empty() && !porcelain_line_is_blackbox_only(line))
+            .collect();
+        view.dirty = !meaningful.is_empty();
         if view.dirty {
             let mut modified = 0usize;
             let mut untracked = 0usize;
-            for line in trimmed.lines() {
+            for line in &meaningful {
                 if line.starts_with("??") {
                     untracked += 1;
-                } else if !line.trim().is_empty() {
+                } else {
                     modified += 1;
                 }
             }
@@ -188,7 +209,7 @@ pub fn live_git_status(project_root: &Path) -> GitMemoryView {
             // short hash for cache debug only
             use sha2::{Digest, Sha256};
             let mut hasher = Sha256::new();
-            hasher.update(trimmed.as_bytes());
+            hasher.update(meaningful.join("\n").as_bytes());
             let dig = hasher.finalize();
             view.porcelain_hash = Some(hex::encode(&dig[..4]));
         } else {
@@ -1147,6 +1168,15 @@ mod tests {
                 ..Default::default()
             },
         );
+    }
+
+    #[test]
+    fn ignores_blackbox_store_in_porcelain() {
+        assert!(porcelain_line_is_blackbox_only("?? .blackbox/"));
+        assert!(porcelain_line_is_blackbox_only("?? .blackbox/state.json"));
+        assert!(porcelain_line_is_blackbox_only(" M .blackbox/config.toml"));
+        assert!(!porcelain_line_is_blackbox_only(" M src/main.rs"));
+        assert!(!porcelain_line_is_blackbox_only("?? README.md"));
     }
 
     #[tokio::test]

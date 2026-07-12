@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use clap_complete::Shell;
 
 use crate::config::{BlackboxPaths, CapturePolicy};
 use crate::storage::sqlite::SqliteStore;
@@ -25,7 +26,7 @@ pub enum Command {
     /// Run a command under observation
     Run(RunArgs),
     /// List recorded runs
-    Runs,
+    Runs(RunsArgs),
     /// Show details of a specific run (text summary; use --tui for interactive)
     Show(ShowArgs),
     /// Display the timeline of a run
@@ -54,6 +55,60 @@ pub enum Command {
     Search(SearchArgs),
     /// Live-tail events for a run as they appear
     Watch(WatchArgs),
+    /// List tags and their run counts
+    Tags,
+    /// Add or remove tags on a run
+    Tag(TagArgs),
+    /// Aggregate stats for the store
+    Stats(StatsArgs),
+    /// Generate shell completions
+    Completions(CompletionsArgs),
+}
+
+#[derive(Args)]
+pub struct RunsArgs {
+    /// Only show runs with this tag (repeatable; any match)
+    #[arg(long)]
+    pub tag: Vec<String>,
+
+    /// Filter by status (Succeeded, Failed, Pending, Running, …)
+    #[arg(long)]
+    pub status: Option<String>,
+
+    /// Max runs to list (default: all)
+    #[arg(long)]
+    pub limit: Option<usize>,
+
+    /// Show tags column
+    #[arg(long)]
+    pub show_tags: bool,
+}
+
+#[derive(Args)]
+pub struct TagArgs {
+    /// Run ID, prefix, or "latest"
+    pub run_id: String,
+
+    /// Tags to add
+    #[arg(long = "add")]
+    pub add: Vec<String>,
+
+    /// Tags to remove
+    #[arg(long = "rm")]
+    pub rm: Vec<String>,
+}
+
+#[derive(Args)]
+pub struct StatsArgs {
+    /// Max recent runs to sample for event totals (default: 50)
+    #[arg(long, default_value = "50")]
+    pub max_runs: usize,
+}
+
+#[derive(Args)]
+pub struct CompletionsArgs {
+    /// Shell to generate completions for
+    pub shell: Shell,
 }
 
 #[derive(Args)]
@@ -298,7 +353,7 @@ impl Cli {
     pub async fn execute(&self) -> anyhow::Result<()> {
         match &self.command {
             Command::Run(args) => cmd_run(self, args).await,
-            Command::Runs => cmd_runs(self).await,
+            Command::Runs(args) => cmd_runs(self, args).await,
             Command::Show(args) => cmd_show(self, args).await,
             Command::Timeline(args) => cmd_timeline(self, args).await,
             Command::Inspect(args) => cmd_inspect(self, args).await,
@@ -313,6 +368,10 @@ impl Cli {
             Command::Purge(args) => cmd_purge(self, args).await,
             Command::Search(args) => cmd_search(self, args).await,
             Command::Watch(args) => cmd_watch(self, args).await,
+            Command::Tags => cmd_tags(self).await,
+            Command::Tag(args) => cmd_tag(self, args).await,
+            Command::Stats(args) => cmd_stats(self, args).await,
+            Command::Completions(args) => cmd_completions(args),
         }
     }
 }
@@ -477,19 +536,37 @@ async fn cmd_run(cli: &Cli, args: &RunArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn cmd_runs(cli: &Cli) -> anyhow::Result<()> {
+async fn cmd_runs(cli: &Cli, args: &RunsArgs) -> anyhow::Result<()> {
     let store = open_store(cli)?;
-    let runs = store.list_runs().await?;
+    let mut runs = store.list_runs().await?;
+
+    if !args.tag.is_empty() {
+        runs.retain(|r| args.tag.iter().any(|t| r.tags.iter().any(|rt| rt == t)));
+    }
+    if let Some(ref status) = args.status {
+        let s = status.to_lowercase();
+        runs.retain(|r| format!("{:?}", r.status).to_lowercase().contains(&s));
+    }
+    if let Some(limit) = args.limit {
+        runs.truncate(limit);
+    }
 
     println!("Store: {}", store.db_path().display());
     if runs.is_empty() {
-        println!("No runs recorded yet.");
-        println!("  Try: blackbox run -- echo hello");
+        println!("No runs matched.");
+        println!("  Try: blackbox run --tag demo -- echo hello");
     } else {
-        println!(
-            "{:<2} {:<10} {:<12} {:<6} LABEL",
-            "", "ID", "STATUS", "EXIT"
-        );
+        if args.show_tags {
+            println!(
+                "{:<2} {:<10} {:<12} {:<6} {:<20} LABEL",
+                "", "ID", "STATUS", "EXIT", "TAGS"
+            );
+        } else {
+            println!(
+                "{:<2} {:<10} {:<12} {:<6} LABEL",
+                "", "ID", "STATUS", "EXIT"
+            );
+        }
         for run in &runs {
             let status = match &run.status {
                 crate::core::run::RunStatus::Succeeded => "✓",
@@ -501,8 +578,8 @@ async fn cmd_runs(cli: &Cli) -> anyhow::Result<()> {
             };
             let cmd = run.command.join(" ");
             let label = run.name.as_deref().unwrap_or(&cmd);
-            let label = if label.len() > 60 {
-                format!("{}…", &label[..57])
+            let label = if label.len() > 50 {
+                format!("{}…", &label[..47])
             } else {
                 label.to_string()
             };
@@ -510,16 +587,201 @@ async fn cmd_runs(cli: &Cli) -> anyhow::Result<()> {
                 .exit_code
                 .map(|c| c.to_string())
                 .unwrap_or_else(|| "-".into());
-            println!(
-                "{}  {}  {:<12} {:<6} {}",
-                status,
-                short_id(&run.id),
-                format!("{:?}", run.status),
-                exit,
-                label
-            );
+            if args.show_tags {
+                let tags = if run.tags.is_empty() {
+                    "-".to_string()
+                } else {
+                    run.tags.join(",")
+                };
+                let tags = if tags.len() > 18 {
+                    format!("{}…", &tags[..17])
+                } else {
+                    tags
+                };
+                println!(
+                    "{}  {}  {:<12} {:<6} {:<20} {}",
+                    status,
+                    short_id(&run.id),
+                    format!("{:?}", run.status),
+                    exit,
+                    tags,
+                    label
+                );
+            } else {
+                println!(
+                    "{}  {}  {:<12} {:<6} {}",
+                    status,
+                    short_id(&run.id),
+                    format!("{:?}", run.status),
+                    exit,
+                    label
+                );
+            }
+        }
+        println!("({} run(s))", runs.len());
+    }
+    Ok(())
+}
+
+async fn cmd_tags(cli: &Cli) -> anyhow::Result<()> {
+    use std::collections::BTreeMap;
+
+    let store = open_store(cli)?;
+    let runs = store.list_runs().await?;
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    for run in &runs {
+        for t in &run.tags {
+            *counts.entry(t.clone()).or_insert(0) += 1;
         }
     }
+    if counts.is_empty() {
+        println!("No tags yet. Add with: blackbox run --tag demo -- …");
+        println!("  or: blackbox tag latest --add demo");
+        return Ok(());
+    }
+    println!("{:<24} COUNT", "TAG");
+    println!("{}", "-".repeat(32));
+    for (tag, n) in counts {
+        println!("{:<24} {}", tag, n);
+    }
+    Ok(())
+}
+
+async fn cmd_tag(cli: &Cli, args: &TagArgs) -> anyhow::Result<()> {
+    if args.add.is_empty() && args.rm.is_empty() {
+        anyhow::bail!("pass --add TAG and/or --rm TAG");
+    }
+    let store = open_store(cli)?;
+    let run_id = resolve_run_id(&store, &args.run_id).await?;
+    let mut run = store
+        .get_run(&run_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("run not found"))?;
+
+    for t in &args.rm {
+        run.tags.retain(|x| x != t);
+    }
+    for t in &args.add {
+        if !run.tags.iter().any(|x| x == t) {
+            run.tags.push(t.clone());
+        }
+    }
+    store.update_run(&run).await?;
+    println!(
+        "Run {} tags: {}",
+        short_id(&run.id),
+        if run.tags.is_empty() {
+            "(none)".into()
+        } else {
+            run.tags.join(", ")
+        }
+    );
+    Ok(())
+}
+
+async fn cmd_stats(cli: &Cli, args: &StatsArgs) -> anyhow::Result<()> {
+    use std::collections::HashMap;
+
+    let store = open_store(cli)?;
+    let runs = store.list_runs().await?;
+    println!("Store: {}", store.db_path().display());
+    println!("Blobs: {}", store.blob_dir().display());
+    println!();
+
+    let mut by_status: HashMap<String, usize> = HashMap::new();
+    let mut by_adapter: HashMap<String, usize> = HashMap::new();
+    let mut tagged = 0usize;
+    for run in &runs {
+        *by_status
+            .entry(format!("{:?}", run.status))
+            .or_insert(0) += 1;
+        if !run.tags.is_empty() {
+            tagged += 1;
+        }
+        let adapter = run
+            .notes
+            .as_deref()
+            .and_then(|n| {
+                n.split(';')
+                    .find_map(|p| p.trim().strip_prefix("adapter:"))
+            })
+            .unwrap_or("unknown");
+        *by_adapter.entry(adapter.to_string()).or_insert(0) += 1;
+    }
+
+    println!("Runs: {} ({} tagged)", runs.len(), tagged);
+    println!("  by status:");
+    let mut statuses: Vec<_> = by_status.into_iter().collect();
+    statuses.sort_by_key(|b| std::cmp::Reverse(b.1));
+    for (s, n) in statuses {
+        println!("    {:<12} {}", s, n);
+    }
+    println!("  by adapter:");
+    let mut adapters: Vec<_> = by_adapter.into_iter().collect();
+    adapters.sort_by_key(|b| std::cmp::Reverse(b.1));
+    for (a, n) in adapters {
+        println!("    {:<12} {}", a, n);
+    }
+
+    // Sample recent runs for event / tool / error counts
+    let sample: Vec<_> = runs.into_iter().take(args.max_runs).collect();
+    let mut total_events = 0usize;
+    let mut total_tools = 0usize;
+    let mut total_errors = 0usize;
+    let mut kind_counts: HashMap<String, usize> = HashMap::new();
+    for run in &sample {
+        let events = store.get_events(&run.id).await?;
+        total_events += events.len();
+        for ev in &events {
+            *kind_counts.entry(ev.kind.clone()).or_insert(0) += 1;
+            if ev.kind == "tool.call" {
+                total_tools += 1;
+            }
+            if matches!(ev.status, crate::core::event::EventStatus::Error) {
+                total_errors += 1;
+            }
+        }
+    }
+
+    println!();
+    println!(
+        "Events (last {} runs): {} total, {} tool.call, {} errors",
+        sample.len(),
+        total_events,
+        total_tools,
+        total_errors
+    );
+    let mut kinds: Vec<_> = kind_counts.into_iter().collect();
+    kinds.sort_by_key(|b| std::cmp::Reverse(b.1));
+    println!("  top kinds:");
+    for (k, n) in kinds.into_iter().take(12) {
+        println!("    {:<28} {}", k, n);
+    }
+
+    let blob_files = std::fs::read_dir(store.blob_dir())
+        .map(|rd| rd.filter_map(|e| e.ok()).count())
+        .unwrap_or(0);
+    let blob_bytes: u64 = std::fs::read_dir(store.blob_dir())
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .filter_map(|e| e.metadata().ok())
+                .map(|m| m.len())
+                .sum()
+        })
+        .unwrap_or(0);
+    println!();
+    println!(
+        "Blobs: {} files, {:.1} MiB",
+        blob_files,
+        blob_bytes as f64 / (1024.0 * 1024.0)
+    );
+    Ok(())
+}
+
+fn cmd_completions(args: &CompletionsArgs) -> anyhow::Result<()> {
+    let mut cmd = Cli::command();
+    let name = cmd.get_name().to_string();
+    clap_complete::generate(args.shell, &mut cmd, name, &mut std::io::stdout());
     Ok(())
 }
 

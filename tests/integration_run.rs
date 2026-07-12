@@ -177,6 +177,40 @@ async fn redacts_secret_in_command_argv() {
 }
 
 #[tokio::test]
+async fn tags_persist_on_run() {
+    let ws = temp_workspace();
+    let db = ws.join("test.db");
+    let blobs = ws.join("blobs");
+    let store = SqliteStore::open_with_blobs(&db, &blobs).unwrap();
+    let store: Arc<dyn TraceStore> = Arc::new(store);
+    let supervisor = RunSupervisor::new(store.clone());
+
+    let args = RunArgs {
+        name: Some("tagged".into()),
+        project: Some(ws.to_string_lossy().into()),
+        tag: vec!["alpha".into(), "beta".into()],
+        insecure_raw: false,
+        no_redact: false,
+        command: vec!["true".into()],
+    };
+    let run = supervisor.execute(&args).await.unwrap();
+    let loaded = store.get_run(&run.id).await.unwrap().unwrap();
+    assert!(loaded.tags.contains(&"alpha".into()));
+    assert!(loaded.tags.contains(&"beta".into()));
+
+    let mut updated = loaded;
+    updated.tags.retain(|t| t != "beta");
+    updated.tags.push("gamma".into());
+    store.update_run(&updated).await.unwrap();
+    let again = store.get_run(&run.id).await.unwrap().unwrap();
+    assert!(again.tags.contains(&"alpha".into()));
+    assert!(again.tags.contains(&"gamma".into()));
+    assert!(!again.tags.contains(&"beta".into()));
+
+    let _ = std::fs::remove_dir_all(&ws);
+}
+
+#[tokio::test]
 async fn export_jsonl_transcript_and_delete_run() {
     use blackbox::export::export_run;
 

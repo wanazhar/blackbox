@@ -87,6 +87,20 @@ blackbox watch latest --idle-exit 30
 
 # HTML report (client-side filter + dark mode)
 blackbox export latest --format html > report.html
+
+# Tags
+blackbox run --tag ci --tag smoke -- echo hi
+blackbox tag latest --add important
+blackbox runs --tag important --show-tags
+blackbox tags
+
+# Stats dashboard
+blackbox stats
+
+# Shell completions (fish example)
+blackbox completions fish > ~/.config/fish/completions/blackbox.fish
+# bash:  blackbox completions bash > /etc/bash_completion.d/blackbox
+# zsh:   blackbox completions zsh > "${fpath[1]}/_blackbox"
 ```
 
 ### Record an agent
@@ -137,6 +151,9 @@ Export is **redacted by default**. Pass `--no-redact` only for private offline a
 | `purge` | Bulk delete by policy (`--keep`, `--pending`, `--failed`) |
 | `search` | Search runs/events by free text |
 | `watch` | Live-tail events for a run |
+| `tags` / `tag` | List tags; add/remove tags on a run |
+| `stats` | Aggregate store dashboard |
+| `completions` | Generate bash/zsh/fish completions |
 | `export` | JSONL / HTML / portable |
 | `replay` | Timeline, mock tools, sandbox (seeded workspace) |
 | `fork` | Branch a new run record from a checkpoint |

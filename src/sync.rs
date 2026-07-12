@@ -146,6 +146,7 @@ pub async fn sync_pull(store: &dyn TraceStore, dir: &Path) -> anyhow::Result<Syn
                 &entry.sha256[..12.min(entry.sha256.len())],
                 &hash[..12.min(hash.len())]
             ));
+            continue;
         }
 
         match import_with_fallback(store, &json).await {
@@ -405,6 +406,16 @@ pub async fn sync_pull_s3(
             }
         };
         let json = String::from_utf8_lossy(&data).to_string();
+        let hash = sha256_hex(json.as_bytes());
+        if hash != entry.sha256 {
+            report.errors.push(format!(
+                "{}: checksum mismatch (manifest {} vs file {})",
+                short(run_id),
+                &entry.sha256[..12.min(entry.sha256.len())],
+                &hash[..12.min(hash.len())]
+            ));
+            continue;
+        }
         match import_with_fallback(store, &json).await {
             Ok(()) => {
                 report.pulled += 1;

@@ -145,7 +145,8 @@ impl TraceEvent {
         if let Some(end) = self.ended_at {
             self.duration_ms = Some(
                 end.signed_duration_since(self.started_at)
-                    .num_milliseconds() as u64,
+                    .num_milliseconds()
+                    .max(0) as u64,
             );
         }
     }

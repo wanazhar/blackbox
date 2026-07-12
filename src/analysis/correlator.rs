@@ -23,6 +23,12 @@ impl EventCorrelator {
             return None;
         }
 
+        // NOTE: This is O(n²) worst-case (every event compared against all
+        // predecessors). The 30s window break below limits the inner loop
+        // to a constant bound in practice, making the amortized cost O(n)
+        // for typical trace workloads. A BTreeMap-based rewrite would be
+        // cleaner but is deferred to avoid regression risk this pass.
+
         // Prefer same-source previous event within a tight window,
         // otherwise any previous event within a wider window.
         let mut best: Option<(String, Confidence, i64)> = None;
@@ -38,7 +44,9 @@ impl EventCorrelator {
                 break;
             }
 
-            let confidence = if prev.source == event.source && gap < 500 {
+            // Identical timestamps: defer to sequence order (loop iterates
+            // backwards, so the first hit is the nearest predecessor).
+            let confidence = if prev.source == event.source && gap > 0 && gap < 500 {
                 Confidence::Confirmed
             } else if gap < 1000 {
                 Confidence::StronglyCorrelated

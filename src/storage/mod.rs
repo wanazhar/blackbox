@@ -61,6 +61,18 @@ pub trait TraceStore: Send + Sync + 'static {
     /// Retrieve blob content by reference.
     async fn load_blob(&self, reference: &BlobReference) -> anyhow::Result<Vec<u8>>;
 
+    /// Rename a blob from `from_key` to `to_key`.
+    ///
+    /// Used during portable archive import when the expected key differs
+    /// from the content-addressed SHA-256 hash. Default is a no-op.
+    async fn move_blob(
+        &self,
+        _from_key: &str,
+        _to_key: &str,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     // ── Search ──
 
     /// Full-text search over events when the backend supports it (e.g. SQLite FTS5).

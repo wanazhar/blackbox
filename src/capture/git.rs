@@ -1,6 +1,7 @@
 use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
+use tracing;
 
 use crate::capture::CaptureLayer;
 use crate::core::event::{EventSource, EventStatus, TraceEvent};
@@ -8,6 +9,14 @@ use crate::core::run::Run;
 use crate::storage::TraceStore;
 use async_trait::async_trait;
 use tokio::sync::mpsc;
+/// Maximum bytes allowed for captured diffs. Diffs exceeding this are
+/// truncated to avoid unbounded memory allocation on large repositories.
+const MAX_DIFF_BYTES: usize = 1024 * 1024; // 1 MiB
+// TODO(R2-M19): All synchronous `Command::new("git")` calls below block the
+// async runtime. They should be wrapped in `tokio::task::spawn_blocking` to
+// avoid starving the tokio executor. This is a larger refactor deferred to
+// a dedicated pass because it changes the call-site signatures (sync → async)
+// and requires careful handling of the Result types.
 
 /// Git-aware change tracker.
 ///
@@ -165,7 +174,18 @@ impl GitCapture {
         if parts.is_empty() {
             None
         } else {
-            Some(parts.join("\n\n"))
+            let combined = parts.join("\n\n");
+            if combined.len() > MAX_DIFF_BYTES {
+                tracing::warn!(
+                    diff_len = combined.len(),
+                    max = MAX_DIFF_BYTES,
+                    "git diff exceeds size limit; truncating"
+                );
+                let end = combined.floor_char_boundary(MAX_DIFF_BYTES);
+                Some(format!("{}...\n[truncated at {} bytes]", &combined[..end], MAX_DIFF_BYTES))
+            } else {
+                Some(combined)
+            }
         }
     }
 
@@ -234,7 +254,9 @@ impl GitCapture {
             }
         }
 
-        let _ = tx.send(ev).await;
+        if tx.send(ev).await.is_err() {
+            tracing::debug!("git capture event channel closed, dropping event");
+        }
         blob_key
     }
 }
@@ -277,20 +299,25 @@ impl CaptureLayer for GitCapture {
             ev.metadata.insert(
                 "manifest_preview".to_string(),
                 serde_json::json!(if manifest.len() > 500 {
-                    format!("{}...", &manifest[..500])
+                    let end = manifest.floor_char_boundary(500);
+                    format!("{}...", &manifest[..end])
                 } else {
                     manifest
                 }),
             );
 
-            let _ = tx.send(ev).await;
+            if tx.send(ev).await.is_err() {
+                tracing::debug!("git capture event channel closed, dropping filesystem manifest event");
+            }
             self.event_tx = Some(tx);
             return Ok(rx);
         }
 
         // Emit observer started event
         let ev = TraceEvent::new(&run.id, EventSource::Git, "git.observer.started");
-        let _ = tx.send(ev).await;
+        if tx.send(ev).await.is_err() {
+            tracing::debug!("git capture event channel closed, dropping observer started event");
+        }
 
         // Capture initial commit hash
         if let Some(hash) = Self::get_commit_hash(&cwd) {
@@ -299,7 +326,9 @@ impl CaptureLayer for GitCapture {
             ev.metadata
                 .insert("commit".to_string(), serde_json::json!(hash));
             self.commit_hash = Some(hash);
-            let _ = tx.send(ev).await;
+            if tx.send(ev).await.is_err() {
+                tracing::debug!("git capture event channel closed, dropping commit event");
+            }
         }
 
         // Capture initial diff snapshot (before the run starts producing changes)
@@ -336,7 +365,9 @@ impl CaptureLayer for GitCapture {
                     .insert("diff_size".to_string(), serde_json::json!(0));
                 ev.metadata
                     .insert("clean".to_string(), serde_json::json!(true));
-                let _ = tx.send(ev).await;
+                if tx.send(ev).await.is_err() {
+                    tracing::debug!("git capture event channel closed, dropping diff.after event");
+                }
             }
 
             // Capture final commit (may have changed if commits were made)
@@ -346,7 +377,9 @@ impl CaptureLayer for GitCapture {
                 ev.metadata
                     .insert("commit".to_string(), serde_json::json!(hash));
                 self.after_commit_hash = Some(hash);
-                let _ = tx.send(ev).await;
+                if tx.send(ev).await.is_err() {
+                    tracing::debug!("git capture event channel closed, dropping commit.after event");
+                }
             }
         } else {
             // After-run filesystem manifest
@@ -362,12 +395,16 @@ impl CaptureLayer for GitCapture {
                     self.after_diff_blob = Some(reference.key);
                 }
             }
-            let _ = tx.send(ev).await;
+        if tx.send(ev).await.is_err() {
+            tracing::debug!("git capture event channel closed, dropping after-run manifest event");
+        }
         }
 
         let mut stop_ev = TraceEvent::new(&run_id, EventSource::Git, "git.observer.stopped");
         stop_ev.status = EventStatus::Success;
-        let _ = tx.send(stop_ev).await;
+        if tx.send(stop_ev).await.is_err() {
+            tracing::debug!("git capture event channel closed, dropping observer stopped event");
+        }
 
         Ok(())
     }

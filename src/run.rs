@@ -32,6 +32,9 @@ use crate::terminal::ansi::AnsiNormalizer;
 use crate::terminal::coalesce::{CoalescePolicy, TerminalCoalescer};
 use crate::terminal::recorder::RawRecorder;
 use crate::terminal::TerminalRecorder;
+/// Maximum bytes for the line buffer before flushing and resetting.
+/// Prevents unbounded growth when a PTY produces very long lines.
+const MAX_LINE_BUF_BYTES: usize = 64 * 1024;
 
 /// Supervises a child process in a PTY and captures trace events.
 pub struct RunSupervisor {
@@ -369,7 +372,9 @@ impl RunSupervisor {
                             tracing::debug!(error = %e, "PTY write failed");
                             break;
                         }
-                        let _ = w.flush();
+                        if let Err(e) = w.flush() {
+                            tracing::debug!(error = %e, "PTY flush failed");
+                        }
                     }
                     None => {
                         tracing::debug!("host stdin EOF — closing PTY writer (sends VEOF)");
@@ -390,8 +395,13 @@ impl RunSupervisor {
                     continue;
                 }
                 tracing::debug!(pid = signal_child_pid, "forwarding SIGINT to child");
+                // SAFETY: signal_child_pid was obtained from process::Command output and is a valid
+                // child PID. The negative PID sends the signal to the entire process group, which is
+                // the intended behavior for forwarding Ctrl+C to the child and its subprocesses.
                 let ret = unsafe { libc::kill(-(signal_child_pid as i32), libc::SIGINT) };
                 if ret != 0 {
+                    // SAFETY: Same PID as above; falling back to sending SIGINT to the child process
+                    // directly when the process-group kill fails (e.g., child has no process group).
                     let ret2 = unsafe { libc::kill(signal_child_pid as i32, libc::SIGINT) };
                     if ret2 != 0 {
                         tracing::warn!(
@@ -553,6 +563,33 @@ impl RunSupervisor {
                 }
 
                 // Line-buffered adapter parse on redacted text (not coalesced)
+                // Guard against unbounded growth when PTY produces very long lines.
+                if line_buf.len() + safe_text.len() > MAX_LINE_BUF_BYTES {
+                    tracing::warn!(
+                        buf_len = line_buf.len(),
+                        added = safe_text.len(),
+                        "line_buf exceeded max size; flushing incomplete line"
+                    );
+                    // Flush whatever is in the buffer as a partial line
+                    if !line_buf.trim().is_empty() {
+                        for mut parsed in
+                            adapter_writer.parse_output(&run_id_writer, line_buf.as_bytes())
+                        {
+                            if do_redact {
+                                let mut meta_val = serde_json::to_value(&parsed.metadata)
+                                    .unwrap_or_else(|_| serde_json::json!({}));
+                                scanner_term.redact_json(&mut meta_val);
+                                if let Ok(m) = serde_json::from_value(meta_val) {
+                                    parsed.metadata = m;
+                                }
+                            }
+                            if let Err(e) = event_writer.write(parsed).await {
+                                tracing::error!(error = %e, "failed to persist adapter event");
+                            }
+                        }
+                    }
+                    line_buf.clear();
+                }
                 line_buf.push_str(&safe_text.replace('\r', ""));
                 while let Some(pos) = line_buf.find('\n') {
                     let line = line_buf[..pos].to_string();
@@ -647,7 +684,10 @@ impl RunSupervisor {
         let (segments, total_redactions) =
             match tokio::time::timeout(Duration::from_secs(2), output_handle).await {
                 Ok(Ok(pair)) => pair,
-                _ => (0, 0),
+                _ => {
+                    tracing::warn!("cleanup timeout: output collector did not finish, zeroing segment/redaction counts");
+                    (0, 0)
+                }
             };
 
         drop(master);

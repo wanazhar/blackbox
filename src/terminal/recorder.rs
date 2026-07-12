@@ -1,20 +1,24 @@
 use std::time::Instant;
 
+use tracing;
+
 use crate::core::event::{EventSource, EventStatus, TraceEvent};
-use crate::terminal::ansi::AnsiNormalizer;
 use crate::terminal::{TerminalRecorder, TerminalSegment};
+
+/// Maximum number of segments a RawRecorder will retain.
+/// When exceeded, the oldest segments are dropped with a warning.
+const MAX_SEGMENTS: usize = 10_000;
 
 /// Raw terminal I/O recorder.
 ///
 /// Captures every byte written to and read from the PTY,
 /// storing both the raw stream and derived timestamps.
-/// Output is normalized through `AnsiNormalizer` so segments
-/// carry both raw and clean text.
+/// Normalization is handled by the caller pipeline (run.rs),
+/// not here — this avoids double-normalization.
 pub struct RawRecorder {
     run_id: Option<String>,
     segments: Vec<TerminalSegment>,
     start: Option<Instant>,
-    normalizer: AnsiNormalizer,
 }
 
 impl RawRecorder {
@@ -23,7 +27,19 @@ impl RawRecorder {
             run_id: None,
             segments: Vec::new(),
             start: None,
-            normalizer: AnsiNormalizer::new(),
+        }
+    }
+
+    /// Drop oldest segments when we exceed the cap, logging a warning.
+    fn evict_if_over_limit(&mut self) {
+        if self.segments.len() > MAX_SEGMENTS {
+            let excess = self.segments.len() - MAX_SEGMENTS;
+            self.segments.drain(..excess);
+            tracing::warn!(
+                dropped = excess,
+                remaining = self.segments.len(),
+                "RawRecorder segment cap exceeded; dropped oldest segments"
+            );
         }
     }
 
@@ -66,6 +82,7 @@ impl TerminalRecorder for RawRecorder {
             normalized_text: String::new(), // input is not normalized
         };
         self.segments.push(seg);
+        self.evict_if_over_limit();
         Ok(())
     }
 
@@ -74,13 +91,15 @@ impl TerminalRecorder for RawRecorder {
             .start
             .map(|s| s.elapsed().as_millis() as u64)
             .unwrap_or(0);
-        let normalized_text = self.normalizer.normalize(data);
+        // NOTE: Normalization is done by the caller (run.rs) which has access to
+        // the full pipeline. We store raw data here only.
         let seg = TerminalSegment {
             offset_ms,
             raw_data: data.to_vec(),
-            normalized_text,
+            normalized_text: String::new(),
         };
         self.segments.push(seg);
+        self.evict_if_over_limit();
         Ok(())
     }
 

@@ -24,8 +24,10 @@ pub async fn scrub_store(
     store: Arc<dyn TraceStore>,
     dry_run: bool,
     run_filter: Option<&str>,
+    redaction_config: Option<RedactionConfig>,
 ) -> anyhow::Result<ScrubReport> {
-    let scanner = SecretScanner::new(RedactionConfig::default());
+    let config = redaction_config.unwrap_or_default();
+    let scanner = SecretScanner::new(config);
     let mut report = ScrubReport {
         dry_run,
         ..Default::default()
@@ -179,13 +181,11 @@ pub async fn collect_referenced_blobs(
             if let Some(k) = ev.error_blob {
                 keys.insert(k);
             }
-            // metadata blob keys
-            for (k, v) in &ev.metadata {
-                if k.contains("blob") {
-                    if let Some(s) = v.as_str() {
-                        if s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit()) {
-                            keys.insert(s.to_string());
-                        }
+            // Check all metadata values for 64-char hex blob references
+            for v in ev.metadata.values() {
+                if let Some(s) = v.as_str() {
+                    if s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit()) {
+                        keys.insert(s.to_string());
                     }
                 }
             }
@@ -270,7 +270,7 @@ mod tests {
         );
         store.insert_event(&ev).await.unwrap();
 
-        let report = scrub_store(store.clone(), false, Some("all"))
+        let report = scrub_store(store.clone(), false, Some("all"), None)
             .await
             .unwrap();
         assert!(report.runs_updated >= 1);

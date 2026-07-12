@@ -278,13 +278,12 @@ impl CaptureLayer for FilesystemCapture {
     async fn stop(&mut self) -> anyhow::Result<()> {
         // Drop watcher first so the bridge task can exit
         self._watcher = None;
-        if let Some(handle) = self.bridge_handle.take() {
-            // Give the bridge a moment, then abort if still running
-            tokio::select! {
-                _ = handle => {},
-                _ = tokio::time::sleep(Duration::from_millis(100)) => {
-                    // handle already moved into select — re-abort not needed
-                }
+        if let Some(mut handle) = self.bridge_handle.take() {
+            // Give the bridge a moment to finish gracefully, then abort if stuck.
+            let _ = tokio::time::timeout(Duration::from_millis(100), &mut handle).await;
+            if !handle.is_finished() {
+                tracing::debug!("bridge task did not exit in time; aborting");
+                handle.abort();
             }
         }
 

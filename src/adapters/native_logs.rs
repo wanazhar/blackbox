@@ -157,6 +157,11 @@ pub async fn poll_native_logs(
             }
             _ = tick.tick() => {
                 let files = list_candidate_files(&roots);
+                // Prune offset entries for files that no longer exist
+                // when the map grows large
+                if offsets.len() > 100 {
+                    offsets.retain(|path, _| path.exists());
+                }
                 for path in files {
                     if let Err(e) = ingest_file_delta(
                         &path,

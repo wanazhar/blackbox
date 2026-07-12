@@ -124,11 +124,22 @@ pub async fn import_portable(
                 .with_context(|| format!("blob {key}"))?;
             let stored = store.store_blob(&data).await?;
             if stored.key != *key {
-                tracing::warn!(
-                    expected = %key,
-                    got = %stored.key,
-                    "imported blob hash mismatch (content still stored)"
-                );
+                // Blob stored under its computed hash, but events reference
+                // the expected key. Rename so load_blob(key) succeeds.
+                if let Err(e) = store.move_blob(&stored.key, key).await {
+                    tracing::warn!(
+                        expected = %key,
+                        got = %stored.key,
+                        error = %e,
+                        "failed to rename mismatched blob"
+                    );
+                } else {
+                    tracing::debug!(
+                        expected = %key,
+                        computed = %stored.key,
+                        "renamed blob to expected key"
+                    );
+                }
             }
             blobs_restored += 1;
         }

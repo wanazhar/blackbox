@@ -73,7 +73,8 @@ pub fn rebuild_tool_transcript(events: &[TraceEvent]) -> String {
             .map(|v| {
                 let s = v.to_string();
                 if s.len() > 120 {
-                    format!("{}…", &s[..120])
+                    let end = s.floor_char_boundary(120);
+                    format!("{}…", &s[..end])
                 } else {
                     s
                 }

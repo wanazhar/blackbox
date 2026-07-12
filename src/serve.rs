@@ -87,20 +87,25 @@ async fn auth_middleware(
     request: Request,
     next: Next,
 ) -> Response {
-    let Some(ref expected) = state.token else {
-        return next.run(request).await;
+    let mut response = if let Some(expected) = &state.token {
+        if token_ok(expected, request.headers(), request.uri().query()) {
+            next.run(request).await
+        } else {
+            (
+                StatusCode::UNAUTHORIZED,
+                [(header::WWW_AUTHENTICATE, "Bearer")],
+                "unauthorized: pass Authorization: Bearer <token> or ?token=",
+            )
+                .into_response()
+        }
+    } else {
+        next.run(request).await
     };
 
-    if token_ok(expected, request.headers(), request.uri().query()) {
-        next.run(request).await
-    } else {
-        (
-            StatusCode::UNAUTHORIZED,
-            [(header::WWW_AUTHENTICATE, "Bearer")],
-            "unauthorized: pass Authorization: Bearer <token> or ?token=",
-        )
-            .into_response()
-    }
+    let headers = response.headers_mut();
+    headers.insert("x-content-type-options", "nosniff".parse().unwrap());
+    headers.insert("x-frame-options", "DENY".parse().unwrap());
+    response
 }
 
 fn token_ok(expected: &str, headers: &HeaderMap, query: Option<&str>) -> bool {
@@ -174,11 +179,18 @@ function upsert(run) {{
     countEl.textContent = String(rows.size);
     tr.classList.add('flash');
   }}
-  tr.innerHTML = `<td class="mono"><a href="/runs/${{encodeURIComponent(id)}}">${{esc(short)}}</a></td>
-<td><span class="badge">${{esc(status)}}</span> <a class="muted" href="/runs/${{encodeURIComponent(id)}}/live">live</a></td>
-<td>${{esc(exit)}}</td><td></td><td class="muted">${{esc(started)}}</td>`;
-  tr.children[3].textContent = label + ' ';
-  if (tags) {{ const span = document.createElement('span'); span.className = 'tags'; span.textContent = tags; tr.children[3].appendChild(span); }}
+  tr.textContent = '';
+  const td1 = document.createElement('td'); td1.className = 'mono';
+  const a1 = document.createElement('a'); a1.href = `/runs/${{encodeURIComponent(id)}}`; a1.textContent = short;
+  td1.appendChild(a1); tr.appendChild(td1);
+  const td2 = document.createElement('td');
+  const badge = document.createElement('span'); badge.className = 'badge'; badge.textContent = status;
+  td2.appendChild(badge); td2.appendChild(document.createTextNode(' '));
+  const a2 = document.createElement('a'); a2.className = 'muted'; a2.href = `/runs/${{encodeURIComponent(id)}}/live`; a2.textContent = 'live';
+  td2.appendChild(a2); tr.appendChild(td2);
+  const td3 = document.createElement('td'); td3.textContent = exit; tr.appendChild(td3);
+  const td4 = document.createElement('td'); td4.textContent = label + ' '; tr.appendChild(td4);
+  if (tags) {{ const span = document.createElement('span'); span.className = 'tags'; span.textContent = tags; td4.appendChild(span); }}
 }}
 const qs = new URLSearchParams(location.search);
 const token = qs.get('token');
@@ -349,8 +361,12 @@ function add(ev) {{
   const tr = document.createElement('tr');
   if (ev.kind && ev.kind.startsWith('tool.')) tr.className = 'row-tool';
   if (ev.status === 'Error') tr.className = 'row-error';
-  tr.innerHTML = `<td class="num">${{esc(ev.sequence)}}</td><td>${{esc(ev.source)}}</td><td class="mono">${{esc(ev.kind)}}</td><td class="detail"></td>`;
-  tr.querySelector('.detail').textContent = detail(ev);
+  tr.textContent = '';
+  const td1 = document.createElement('td'); td1.className = 'num'; td1.textContent = String(ev.sequence);
+  const td2 = document.createElement('td'); td2.textContent = String(ev.source);
+  const td3 = document.createElement('td'); td3.className = 'mono'; td3.textContent = String(ev.kind);
+  const td4 = document.createElement('td'); td4.className = 'detail'; td4.textContent = detail(ev);
+  tr.append(td1, td2, td3, td4);
   tl.appendChild(tr);
   n++;
   countEl.textContent = String(n);
@@ -372,7 +388,7 @@ es.addEventListener('status', (e) => {{
 }});
 es.addEventListener('open', () => {{ streamEl.textContent = 'connected'; }});
 es.onerror = () => {{ streamEl.textContent = 'reconnecting…'; }};
-document.getElementById('clear').onclick = () => {{ tl.innerHTML=''; n=0; countEl.textContent='0'; }};
+document.getElementById('clear').onclick = () => {{ tl.textContent=''; n=0; countEl.textContent='0'; }};
 </script>"#,
         id = urlencoding(&run_id),
         title = html_escape(&label),
@@ -493,10 +509,11 @@ async fn api_runs_stream(
 
             for run in runs.iter().take(100) {
                 let fingerprint = format!(
-                    "{:?}|{:?}|{}",
+                    "{:?}|{:?}|{}|{}",
                     run.status,
                     run.exit_code,
-                    run.tags.join(",")
+                    run.tags.join(","),
+                    run.name.as_deref().unwrap_or(""),
                 );
                 let changed = st
                     .known
@@ -606,9 +623,7 @@ async fn api_event_stream(
                             .data(data.to_string()),
                     );
                 }
-                if finished {
-                    st.ticks_idle += 1;
-                } else {
+                if !finished {
                     st.ticks_idle = 0;
                 }
             }
@@ -623,7 +638,7 @@ async fn api_event_stream(
             }
 
             tokio::time::sleep(Duration::from_millis(400)).await;
-            st.ticks_idle += 1;
+            st.ticks_idle = st.ticks_idle.saturating_add(1);
             // heartbeat comment via empty data event name "ping"
             Some((
                 Ok(Event::default().event("ping").data("ok")),
@@ -699,6 +714,10 @@ async fn api_sync_put_run(
     Path(id): Path<String>,
     body: String,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    const MAX_SYNC_BODY: usize = 10 * 1024 * 1024; // 10 MB
+    if body.len() > MAX_SYNC_BODY {
+        return Err(AppError(anyhow::anyhow!("payload too large: exceeds 10 MB limit")));
+    }
     // Prefer keep original ids so multi-machine ids stay stable
     let result = match import_portable(state.store.as_ref(), &body, false).await {
         Ok(r) => r,
@@ -877,10 +896,17 @@ impl From<serde_json::Error> for AppError {
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("error: {}", self.0),
-        )
-            .into_response()
+        let msg = format!("error: {}", self.0);
+        let status = if msg.contains("not found") {
+            StatusCode::NOT_FOUND
+        } else if msg.contains("bad request") || msg.contains("invalid") {
+            StatusCode::BAD_REQUEST
+        } else if msg.contains("too large") {
+            StatusCode::PAYLOAD_TOO_LARGE
+        } else {
+            tracing::debug!(error = %self.0, "returning 500 Internal Server Error");
+            StatusCode::INTERNAL_SERVER_ERROR
+        };
+        (status, msg).into_response()
     }
 }

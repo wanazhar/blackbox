@@ -13,7 +13,8 @@ use crate::core::event::{EventSource, SideEffect, TraceEvent};
 /// | `read_file`, `rg`, `grep`, `ls`, `cat` | `Read` |
 /// | `sed -i`, `write_file`, `npm install` | `LocalWrite` |
 /// | `git push`, `curl POST`, `aws deploy` | `ExternalWrite` |
-/// | `rm -rf`, `DROP TABLE`, `DELETE FROM` | `Destructive` |
+/// | `rm`, `rm -rf`, `DROP TABLE`, `DELETE FROM` | `Destructive` |
+/// | `echo` | `None` |
 /// | Unknown commands | `Unknown` |
 pub struct SideEffectClassifier;
 
@@ -40,20 +41,18 @@ impl SideEffectClassifier {
         }
 
         match base {
-            "ls" | "cat" | "head" | "tail" | "grep" | "rg" | "find" | "echo"
+            "ls" | "cat" | "head" | "tail" | "grep" | "rg" | "find"
             | "read" | "which" | "file" | "stat" | "du" | "df" | "ps" | "top"
             | "pwd" | "whoami" | "id" | "env" | "printenv" | "type" | "true"
             | "false" | "test" | "wc" | "sort" | "uniq" | "diff" | "tree" => {
                 SideEffect::Read
             }
-            "sed" | "awk" | "touch" | "mkdir" | "cp" | "mv" | "rm" | "chmod"
+            "echo" => SideEffect::None,
+            "sed" | "awk" | "touch" | "mkdir" | "cp" | "mv" | "chmod"
             | "chown" | "ln" | "truncate" | "tee" => {
-                if lower.contains("-rf") || lower.contains(" -r ") {
-                    SideEffect::Destructive
-                } else {
-                    SideEffect::LocalWrite
-                }
+                SideEffect::LocalWrite
             }
+            "rm" => SideEffect::Destructive,
             "curl" | "wget" | "nc" | "ssh" | "scp" | "rsync" | "npm" | "pip"
             | "cargo" | "docker" | "kubectl" | "aws" | "gcloud" | "az" => {
                 if lower.contains("get") || lower.contains("list") || lower.contains("describe")
@@ -73,9 +72,10 @@ impl SideEffectClassifier {
                 }
             }
             "git" => {
-                if lower.contains("push") || lower.contains("fetch") || lower.contains("pull") {
+                if lower.contains("push") || lower.contains("pull") {
                     SideEffect::ExternalWrite
-                } else if lower.contains("status")
+                } else if lower.contains("fetch")
+                    || lower.contains("status")
                     || lower.contains("log")
                     || lower.contains("diff")
                     || lower.contains("show")
@@ -112,10 +112,11 @@ impl SideEffectClassifier {
                 return SideEffect::Read;
             }
             EventSource::Git => {
-                if event.kind.contains("push") || event.kind.contains("fetch") {
+                if event.kind.contains("push") || event.kind.contains("pull") {
                     return SideEffect::ExternalWrite;
                 }
-                if event.kind.contains("diff")
+                if event.kind.contains("fetch")
+                    || event.kind.contains("diff")
                     || event.kind.contains("commit")
                     || event.kind.contains("status")
                 {

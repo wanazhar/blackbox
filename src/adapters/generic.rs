@@ -73,6 +73,14 @@ impl HarnessAdapter for GenericAdapter {
                 || trimmed.starts_with("Error:")
                 || trimmed.starts_with("ERROR:")
                 || trimmed.starts_with("fatal:")
+                || trimmed.starts_with("FATAL:")
+                || trimmed.starts_with("panic:")
+                || trimmed.starts_with("panicked at")
+                || trimmed.starts_with("Segmentation fault")
+                || trimmed.starts_with("core dumped")
+                || trimmed.starts_with("FAILED")
+                || trimmed.starts_with("Aborted")
+                || trimmed.starts_with("Killed")
                 || trimmed.contains("Traceback (most recent call last)")
             {
                 let mut ev = TraceEvent::new(run_id, EventSource::System, "process.error_banner");

@@ -106,7 +106,7 @@ impl HarnessAdapter for CodexAdapter {
         // Codex resume flag naming varies by version; use common form
         Some(vec![
             "codex".to_string(),
-            "resume".to_string(),
+            "--resume".to_string(),
             session_id.to_string(),
         ])
     }

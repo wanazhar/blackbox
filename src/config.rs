@@ -13,6 +13,14 @@ pub struct BlackboxPaths {
     pub blob_dir: PathBuf,
 }
 
+/// Check if a file is readable (has read permission).
+fn is_readable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path)
+        .map(|m| m.permissions().mode() & 0o444 != 0)
+        .unwrap_or(false)
+}
+
 impl BlackboxPaths {
     /// Resolve store paths.
     ///
@@ -30,12 +38,31 @@ impl BlackboxPaths {
 
         if let Ok(env_db) = std::env::var("BLACKBOX_DB") {
             if !env_db.is_empty() {
-                return Ok(Self::from_db_path(PathBuf::from(env_db)));
+                let env_path = PathBuf::from(&env_db);
+                if env_path.is_dir() {
+                    anyhow::bail!(
+                        "BLACKBOX_DB points to a directory, not a file: {}",
+                        env_db
+                    );
+                }
+                if env_path.exists() && !is_readable(&env_path) {
+                    anyhow::bail!(
+                        "BLACKBOX_DB is not readable: {}",
+                        env_db
+                    );
+                }
+                return Ok(Self::from_db_path(env_path));
             }
         }
 
         let project = match project {
-            Some(p) => p.to_path_buf(),
+            Some(p) => {
+                if p.exists() {
+                    std::fs::canonicalize(p)?
+                } else {
+                    p.to_path_buf()
+                }
+            }
             None => std::env::current_dir()?,
         };
 
@@ -118,6 +145,7 @@ impl Default for CapturePolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn from_db_path_legacy_cwd() {
@@ -130,5 +158,48 @@ mod tests {
         let p = BlackboxPaths::from_db_path(PathBuf::from("/tmp/proj/.blackbox/blackbox.db"));
         assert_eq!(p.root, PathBuf::from("/tmp/proj/.blackbox"));
         assert_eq!(p.blob_dir, PathBuf::from("/tmp/proj/.blackbox/blobs"));
+    }
+
+    /// Helper: create a temp project dir with optional legacy blackbox.db.
+    fn make_project(legacy: bool) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let proj = dir.path().to_path_buf();
+        if legacy {
+            fs::write(proj.join("blackbox.db"), b"").unwrap();
+        }
+        (dir, proj)
+    }
+
+    #[test]
+    fn resolve_explicit_override_takes_priority() {
+        let (_dir, proj) = make_project(true);
+        let explicit = proj.join("custom.db");
+        let paths = BlackboxPaths::resolve(Some(&proj), Some(&explicit)).unwrap();
+        assert_eq!(paths.db_path, explicit);
+    }
+
+    #[test]
+    fn resolve_env_db_takes_priority_over_legacy() {
+        let (_dir, proj) = make_project(true);
+        let env_db = proj.join("env.db");
+        std::env::set_var("BLACKBOX_DB", &env_db);
+        let paths = BlackboxPaths::resolve(Some(&proj), None).unwrap();
+        assert_eq!(paths.db_path, env_db);
+        std::env::remove_var("BLACKBOX_DB");
+    }
+
+    #[test]
+    fn resolve_legacy_used_when_present() {
+        let (_dir, proj) = make_project(true);
+        let paths = BlackboxPaths::resolve(Some(&proj), None).unwrap();
+        assert_eq!(paths.db_path, proj.join("blackbox.db"));
+    }
+
+    #[test]
+    fn resolve_default_when_nothing_exists() {
+        let (_dir, proj) = make_project(false);
+        let paths = BlackboxPaths::resolve(Some(&proj), None).unwrap();
+        assert_eq!(paths.db_path, proj.join(".blackbox").join("blackbox.db"));
+        assert_eq!(paths.blob_dir, proj.join(".blackbox").join("blobs"));
     }
 }

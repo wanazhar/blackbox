@@ -15,8 +15,12 @@ pub fn has_option(command: &[String], option: &str) -> bool {
     let eq_prefix = format!("{}=", option);
     command.iter().enumerate().any(|(i, a)| {
         a == option || a.starts_with(&eq_prefix) || {
-            // previous token is option and this is its value
-            i > 0 && command[i - 1] == option
+            // previous token is the option and this is its value,
+            // but only if the value itself doesn't start with '-'
+            // (to avoid treating a consecutive flag as an option value)
+            i > 0
+                && command[i - 1] == option
+                && !a.starts_with('-')
         }
     })
 }

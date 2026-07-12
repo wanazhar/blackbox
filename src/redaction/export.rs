@@ -22,21 +22,46 @@ impl ExportRedactor {
     /// Scans every string field in the serialized JSON value
     /// and replaces matched secrets with `[REDACTED]`.
     pub fn redact_json(&self, value: &mut serde_json::Value) {
+        self.redact_json_inner(value, 0, 32);
+    }
+
+    /// Internal recursive redaction with depth tracking.
+    ///
+    /// Stops recursing at `max_depth` to prevent stack overflow
+    /// on adversarially deep JSON.
+    fn redact_json_inner(&self, value: &mut serde_json::Value, depth: usize, max_depth: usize) {
+        if depth > max_depth {
+            return;
+        }
         match value {
             serde_json::Value::String(s) => {
                 *s = self.scanner.redact(s);
             }
+            serde_json::Value::Number(n) => {
+                let s = n.to_string();
+                let redacted = self.scanner.redact(&s);
+                if redacted != s {
+                    *value = serde_json::Value::String(redacted);
+                }
+            }
+            serde_json::Value::Bool(b) => {
+                let s = b.to_string();
+                let redacted = self.scanner.redact(&s);
+                if redacted != s {
+                    *value = serde_json::Value::String(redacted);
+                }
+            }
             serde_json::Value::Object(obj) => {
                 for val in obj.values_mut() {
-                    self.redact_json(val);
+                    self.redact_json_inner(val, depth + 1, max_depth);
                 }
             }
             serde_json::Value::Array(arr) => {
                 for val in arr.iter_mut() {
-                    self.redact_json(val);
+                    self.redact_json_inner(val, depth + 1, max_depth);
                 }
             }
-            _ => {}
+            serde_json::Value::Null => {}
         }
     }
 }

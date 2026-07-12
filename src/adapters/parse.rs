@@ -235,7 +235,20 @@ pub fn parse_claude_json_line(run_id: &str, line: &str) -> Vec<TraceEvent> {
         }
         "result" => {
             let mut ev = TraceEvent::new(run_id, EventSource::Harness, "harness.result");
-            ev.status = EventStatus::Success;
+            // Check for error indicators before defaulting to Success
+            let is_error = val
+                .get("is_error")
+                .and_then(|e| e.as_bool())
+                .unwrap_or(false)
+                || val
+                    .get("subtype")
+                    .and_then(|s| s.as_str())
+                    .is_some_and(|s| s.contains("error"));
+            ev.status = if is_error {
+                EventStatus::Error
+            } else {
+                EventStatus::Success
+            };
             if let Some(r) = val.get("result") {
                 ev.metadata.insert("result".to_string(), r.clone());
             }
@@ -258,9 +271,12 @@ pub fn parse_codex_json_line(run_id: &str, line: &str) -> Vec<TraceEvent> {
                 .insert("harness".to_string(), serde_json::json!("codex"));
         }
     }
+    // If parse_claude_json_line already emitted tool.call events for this
+    // line, skip Codex-specific tool parsing to avoid duplicates.
+    let already_has_tool_call = events.iter().any(|e| e.kind == "tool.call");
 
     let line = line.trim();
-    if line.starts_with('{') {
+    if line.starts_with('{') && !already_has_tool_call {
         if let Ok(val) = serde_json::from_str::<serde_json::Value>(line) {
             // Codex agent events: item.started / item.completed with tool info
             if let Some(item) = val.get("item") {

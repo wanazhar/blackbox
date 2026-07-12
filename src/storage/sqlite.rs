@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use parking_lot::Mutex;
 
 use anyhow::Context;
 use rusqlite::{params, Connection};
@@ -56,6 +56,11 @@ impl SqliteStore {
         )
         .context("failed to set pragmas")?;
 
+        // Checkpoint any leftover WAL from a previous session so we
+        // start with a clean baseline.
+        conn.execute_batch("PRAGMA wal_checkpoint(PASSIVE);")
+            .context("failed to WAL checkpoint")?;
+
         let store = Self {
             conn: Mutex::new(conn),
             blob_dir,
@@ -80,7 +85,7 @@ impl SqliteStore {
     ///
     /// Called on open so a killed supervisor does not leave ghost sessions.
     fn recover_stale_runs(&self) -> anyhow::Result<()> {
-        let conn = self.lock()?;
+        let conn = self.lock();
         let now = chrono::Utc::now().to_rfc3339();
         let n = conn.execute(
             "UPDATE runs
@@ -126,15 +131,13 @@ impl SqliteStore {
         Ok(store)
     }
 
-    fn lock(&self) -> anyhow::Result<std::sync::MutexGuard<'_, Connection>> {
-        self.conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("sqlite lock poisoned: {}", e))
+    fn lock(&self) -> parking_lot::MutexGuard<'_, Connection> {
+        self.conn.lock()
     }
 
     /// Run schema migrations up to `SCHEMA_VERSION`.
     fn migrate(&self) -> anyhow::Result<()> {
-        let conn = self.lock()?;
+        let conn = self.lock();
 
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS schema_version (
@@ -152,18 +155,30 @@ impl SqliteStore {
             .unwrap_or(0);
 
         if current < 1 {
-            Self::migrate_v1(&conn)?;
-            conn.execute("INSERT INTO schema_version (version) VALUES (1)", [])?;
+            let tx = conn.unchecked_transaction()
+                .context("failed to start transaction for v1 migration")?;
+            Self::migrate_v1(&tx)?;
+            tx.execute("INSERT INTO schema_version (version) VALUES (1)", [])
+                .context("failed to record v1 version")?;
+            tx.commit().context("failed to commit v1 migration")?;
         }
 
         if current < 2 {
-            Self::migrate_v2(&conn, &self.blob_dir)?;
-            conn.execute("INSERT INTO schema_version (version) VALUES (2)", [])?;
+            let tx = conn.unchecked_transaction()
+                .context("failed to start transaction for v2 migration")?;
+            Self::migrate_v2(&tx, &self.blob_dir)?;
+            tx.execute("INSERT INTO schema_version (version) VALUES (2)", [])
+                .context("failed to record v2 version")?;
+            tx.commit().context("failed to commit v2 migration")?;
         }
 
         if current < 3 {
-            Self::migrate_v3(&conn)?;
-            conn.execute("INSERT INTO schema_version (version) VALUES (3)", [])?;
+            let tx = conn.unchecked_transaction()
+                .context("failed to start transaction for v3 migration")?;
+            Self::migrate_v3(&tx)?;
+            tx.execute("INSERT INTO schema_version (version) VALUES (3)", [])
+                .context("failed to record v3 version")?;
+            tx.commit().context("failed to commit v3 migration")?;
         }
 
         // Ensure we never claim a higher version than we support
@@ -211,7 +226,7 @@ impl SqliteStore {
 
     /// Rebuild the full-text index from scratch (e.g. after bulk import).
     pub fn reindex_fts(&self) -> anyhow::Result<usize> {
-        let conn = self.lock()?;
+        let conn = self.lock();
         conn.execute("DELETE FROM events_fts", [])?;
         let mut stmt = conn.prepare(
             "SELECT id, run_id, parent_event_id, sequence, source, kind, started_at, ended_at,
@@ -251,7 +266,7 @@ impl SqliteStore {
 
             CREATE TABLE IF NOT EXISTS events (
                 id              TEXT PRIMARY KEY,
-                run_id          TEXT NOT NULL REFERENCES runs(id),
+                run_id          TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
                 parent_event_id TEXT,
                 sequence        INTEGER NOT NULL DEFAULT 0,
                 source          TEXT NOT NULL,
@@ -268,11 +283,11 @@ impl SqliteStore {
             );
 
             CREATE INDEX IF NOT EXISTS idx_events_run_id ON events(run_id);
-            CREATE INDEX IF NOT EXISTS idx_events_kind ON events(kind);
+            CREATE INDEX IF NOT EXISTS idx_events_parent_event_id ON events(parent_event_id);
 
             CREATE TABLE IF NOT EXISTS checkpoints (
                 id                          TEXT PRIMARY KEY,
-                run_id                      TEXT NOT NULL REFERENCES runs(id),
+                run_id                      TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
                 event_id                    TEXT NOT NULL,
                 git_commit                  TEXT,
                 git_diff_blob               TEXT,
@@ -285,6 +300,7 @@ impl SqliteStore {
             );
 
             CREATE INDEX IF NOT EXISTS idx_checkpoints_run_id ON checkpoints(run_id);
+            CREATE INDEX IF NOT EXISTS idx_checkpoints_event_id ON checkpoints(event_id);
 
             CREATE TABLE IF NOT EXISTS blobs (
                 key             TEXT PRIMARY KEY,
@@ -378,19 +394,25 @@ impl TraceStore for SqliteStore {
     async fn insert_run(&self, run: &Run) -> anyhow::Result<()> {
         let run = run.clone();
         {
-            let conn = self.lock()?;
+            let conn = self.lock();
+            let command_json =
+                serde_json::to_string(&run.command).context("failed to serialize command")?;
+            let tags_json =
+                serde_json::to_string(&run.tags).context("failed to serialize tags")?;
+            let status_json =
+                serde_json::to_string(&run.status).context("failed to serialize status")?;
             conn.execute(
                 "INSERT INTO runs (id, name, command, cwd, project_dir, tags, notes, status, started_at, ended_at, exit_code, parent_run_id, next_sequence)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
                 params![
                     run.id,
                     run.name,
-                    serde_json::to_string(&run.command).unwrap_or_default(),
+                    command_json,
                     run.cwd,
                     run.project_dir,
-                    serde_json::to_string(&run.tags).unwrap_or_default(),
+                    tags_json,
                     run.notes,
-                    serde_json::to_string(&run.status).unwrap_or_default(),
+                    status_json,
                     run.started_at.to_rfc3339(),
                     run.ended_at.map(|t| t.to_rfc3339()),
                     run.exit_code,
@@ -407,19 +429,25 @@ impl TraceStore for SqliteStore {
     async fn update_run(&self, run: &Run) -> anyhow::Result<()> {
         let run = run.clone();
         {
-            let conn = self.lock()?;
+            let conn = self.lock();
+            let command_json =
+                serde_json::to_string(&run.command).context("failed to serialize command")?;
+            let tags_json =
+                serde_json::to_string(&run.tags).context("failed to serialize tags")?;
+            let status_json =
+                serde_json::to_string(&run.status).context("failed to serialize status")?;
             conn.execute(
                 "UPDATE runs SET name=?2, command=?3, cwd=?4, project_dir=?5, tags=?6, notes=?7, status=?8, started_at=?9, ended_at=?10, exit_code=?11, parent_run_id=?12, next_sequence=?13
                  WHERE id=?1",
                 params![
                     run.id,
                     run.name,
-                    serde_json::to_string(&run.command).unwrap_or_default(),
+                    command_json,
                     run.cwd,
                     run.project_dir,
-                    serde_json::to_string(&run.tags).unwrap_or_default(),
+                    tags_json,
                     run.notes,
-                    serde_json::to_string(&run.status).unwrap_or_default(),
+                    status_json,
                     run.started_at.to_rfc3339(),
                     run.ended_at.map(|t| t.to_rfc3339()),
                     run.exit_code,
@@ -436,7 +464,7 @@ impl TraceStore for SqliteStore {
     async fn get_run(&self, run_id: &str) -> anyhow::Result<Option<Run>> {
         let run_id = run_id.to_string();
         let result = {
-            let conn = self.lock()?;
+            let conn = self.lock();
             let mut stmt = conn.prepare(
                 "SELECT id, name, command, cwd, project_dir, tags, notes, status, started_at, ended_at, exit_code, parent_run_id, next_sequence
                  FROM runs WHERE id = ?1",
@@ -453,7 +481,7 @@ impl TraceStore for SqliteStore {
 
     async fn list_runs(&self) -> anyhow::Result<Vec<Run>> {
         let result = {
-            let conn = self.lock()?;
+            let conn = self.lock();
             let mut stmt = conn.prepare(
                 "SELECT id, name, command, cwd, project_dir, tags, notes, status, started_at, ended_at, exit_code, parent_run_id, next_sequence
                  FROM runs ORDER BY started_at DESC",
@@ -470,19 +498,22 @@ impl TraceStore for SqliteStore {
     async fn delete_run(&self, run_id: &str) -> anyhow::Result<bool> {
         let run_id = run_id.to_string();
         let deleted = {
-            let conn = self.lock()?;
+            let conn = self.lock();
+            let tx = conn.unchecked_transaction()
+                .context("failed to start transaction for delete_run")?;
             // FK order: events and checkpoints before runs
-            let _ = conn.execute("DELETE FROM events_fts WHERE run_id = ?1", params![run_id]);
-            conn.execute("DELETE FROM events WHERE run_id = ?1", params![run_id])
+            let _ = tx.execute("DELETE FROM events_fts WHERE run_id = ?1", params![run_id]);
+            tx.execute("DELETE FROM events WHERE run_id = ?1", params![run_id])
                 .context("failed to delete events")?;
-            conn.execute(
+            tx.execute(
                 "DELETE FROM checkpoints WHERE run_id = ?1",
                 params![run_id],
             )
             .context("failed to delete checkpoints")?;
-            let n = conn
+            let n = tx
                 .execute("DELETE FROM runs WHERE id = ?1", params![run_id])
                 .context("failed to delete run")?;
+            tx.commit().context("failed to commit delete_run")?;
             n > 0
         };
         tokio::task::yield_now().await;
@@ -492,7 +523,7 @@ impl TraceStore for SqliteStore {
     async fn insert_event(&self, event: &TraceEvent) -> anyhow::Result<()> {
         let event = event.clone();
         {
-            let conn = self.lock()?;
+            let conn = self.lock();
             conn.execute(
                 "INSERT INTO events (id, run_id, parent_event_id, sequence, source, kind, started_at, ended_at, duration_ms, status, side_effect, input_blob, output_blob, error_blob, metadata)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
@@ -525,7 +556,7 @@ impl TraceStore for SqliteStore {
     async fn get_events(&self, run_id: &str) -> anyhow::Result<Vec<TraceEvent>> {
         let run_id = run_id.to_string();
         let result = {
-            let conn = self.lock()?;
+            let conn = self.lock();
             let mut stmt = conn.prepare(
                 "SELECT id, run_id, parent_event_id, sequence, source, kind, started_at, ended_at, duration_ms, status, side_effect, input_blob, output_blob, error_blob, metadata
                  FROM events WHERE run_id = ?1 ORDER BY sequence",
@@ -542,7 +573,7 @@ impl TraceStore for SqliteStore {
     async fn get_event(&self, event_id: &str) -> anyhow::Result<Option<TraceEvent>> {
         let event_id = event_id.to_string();
         let result = {
-            let conn = self.lock()?;
+            let conn = self.lock();
             let mut stmt = conn.prepare(
                 "SELECT id, run_id, parent_event_id, sequence, source, kind, started_at, ended_at, duration_ms, status, side_effect, input_blob, output_blob, error_blob, metadata
                  FROM events WHERE id = ?1",
@@ -560,7 +591,7 @@ impl TraceStore for SqliteStore {
     async fn update_event(&self, event: &TraceEvent) -> anyhow::Result<()> {
         let event = event.clone();
         {
-            let conn = self.lock()?;
+            let conn = self.lock();
             let n = conn.execute(
                 "UPDATE events SET run_id=?2, parent_event_id=?3, sequence=?4, source=?5, kind=?6,
                  started_at=?7, ended_at=?8, duration_ms=?9, status=?10, side_effect=?11,
@@ -605,7 +636,7 @@ impl TraceStore for SqliteStore {
         }
         let limit = limit.max(1) as i64;
         let result = {
-            let conn = self.lock()?;
+            let conn = self.lock();
             let mut stmt = match conn.prepare(
                 "SELECT event_id, run_id, rank
                  FROM events_fts
@@ -637,7 +668,7 @@ impl TraceStore for SqliteStore {
     async fn insert_checkpoint(&self, cp: &Checkpoint) -> anyhow::Result<()> {
         let cp = cp.clone();
         {
-            let conn = self.lock()?;
+            let conn = self.lock();
             conn.execute(
                 "INSERT INTO checkpoints (id, run_id, event_id, git_commit, git_diff_blob, filesystem_manifest_blob, cwd, environment_blob, transcript_blob, harness_session_id, created_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
@@ -664,7 +695,7 @@ impl TraceStore for SqliteStore {
     async fn get_checkpoints(&self, run_id: &str) -> anyhow::Result<Vec<Checkpoint>> {
         let run_id = run_id.to_string();
         let result = {
-            let conn = self.lock()?;
+            let conn = self.lock();
             let mut stmt = conn.prepare(
                 "SELECT id, run_id, event_id, git_commit, git_diff_blob, filesystem_manifest_blob, cwd, environment_blob, transcript_blob, harness_session_id, created_at
                  FROM checkpoints WHERE run_id = ?1",
@@ -709,7 +740,7 @@ impl TraceStore for SqliteStore {
 
         // Insert metadata into SQLite (no data column — data lives on disk)
         {
-            let conn = self.lock()?;
+            let conn = self.lock();
             conn.execute(
                 "INSERT OR IGNORE INTO blobs (key, size, compressed, content_type)
                  VALUES (?1, ?2, 0, NULL)",
@@ -730,17 +761,60 @@ impl TraceStore for SqliteStore {
         })
         .await?
     }
-}
+
+    async fn move_blob(
+        &self,
+        from_key: &str,
+        to_key: &str,
+    ) -> anyhow::Result<()> {
+        // Move the file on disk
+        {
+            let blob_dir = self.blob_dir.clone();
+            let fk = from_key.to_string();
+            let tk = to_key.to_string();
+            task::spawn_blocking(move || -> anyhow::Result<()> {
+                let from = blob_dir.join(&fk);
+                let to = blob_dir.join(&tk);
+                if from.exists() && !to.exists() {
+                    std::fs::rename(&from, &to)
+                        .context("failed to rename blob file")?;
+                }
+                Ok(())
+            })
+            .await??;
+        }
+        // Update SQLite metadata: move the row from old key to new key
+        {
+            let conn = self.lock();
+            let meta: (i64, bool, Option<String>) = conn
+                .query_row(
+                    "SELECT size, compressed, content_type FROM blobs WHERE key = ?1",
+                    params![from_key],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .unwrap_or((0, false, None));
+            conn.execute("DELETE FROM blobs WHERE key = ?1", params![from_key])?;
+            conn.execute(
+                "INSERT OR IGNORE INTO blobs (key, size, compressed, content_type)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![to_key, meta.0, meta.1, meta.2],
+            )?;
+        }
+        Ok(())
+    }
+ }
 
 // ── FTS helpers ───────────────────────────────────────────────────
 
 fn event_search_body(event: &TraceEvent) -> String {
-    let mut body = format!(
-        "{} {:?} {:?}",
-        event.kind, event.source, event.status
-    );
+    // Only include metadata values in the body column; kind, source, and
+    // status are separate FTS columns and indexing them in body too would
+    // double-count them during ranking.
+    let mut body = String::new();
     for (k, v) in &event.metadata {
-        body.push(' ');
+        if !body.is_empty() {
+            body.push(' ');
+        }
         body.push_str(k);
         body.push(' ');
         match v {
@@ -752,12 +826,15 @@ fn event_search_body(event: &TraceEvent) -> String {
 }
 
 fn fts_upsert(conn: &Connection, event: &TraceEvent) -> anyhow::Result<()> {
+    let tx = conn.unchecked_transaction()
+        .context("failed to start transaction for FTS upsert")?;
     // Replace existing row for this event_id
-    let _ = conn.execute(
+    tx.execute(
         "DELETE FROM events_fts WHERE event_id = ?1",
         params![event.id],
-    );
-    conn.execute(
+    )
+    .context("failed to delete existing FTS row for upsert")?;
+    tx.execute(
         "INSERT INTO events_fts(event_id, run_id, kind, source, status, body)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         params![
@@ -770,6 +847,7 @@ fn fts_upsert(conn: &Connection, event: &TraceEvent) -> anyhow::Result<()> {
         ],
     )
     .context("failed to upsert events_fts")?;
+    tx.commit().context("failed to commit FTS upsert")?;
     Ok(())
 }
 
@@ -964,5 +1042,90 @@ mod tests {
         let hits = store.fts_event_ids("WebSearch", 10).await.unwrap().unwrap();
         assert!(!hits.is_empty());
         assert_eq!(hits[0].0, ev.id);
+    }
+
+    #[test]
+    fn parking_lot_mutex_no_poisoning() {
+        // With parking_lot, mutex lock() returns the guard directly —
+        // no poisoning, no Result to unwrap.
+        let store = SqliteStore::open_memory().unwrap();
+        let guard = store.lock();
+        // The guard dereferences to a Connection
+        let _ = guard.execute_batch("SELECT 1;");
+        drop(guard);
+        // Lock is usable again after drop
+        let guard2 = store.lock();
+        let _ = guard2.execute_batch("SELECT 1;");
+    }
+
+    #[test]
+    fn transactional_migrate_rollback_on_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let blob_dir = dir.path().join("blobs");
+        std::fs::create_dir_all(&blob_dir).unwrap();
+
+        // Open once to run migrations through v3
+        {
+            let _store =
+                SqliteStore::open_with_blobs(&db_path, &blob_dir).unwrap();
+        }
+
+        // Verify schema_version has all 3 versions recorded
+        let conn = Connection::open(&db_path).unwrap();
+        let count: i32 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM schema_version WHERE version IN (1,2,3)",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 3, "all 3 migration versions should be recorded");
+
+        // Re-opening should be a no-op (already at current version)
+        let store =
+            SqliteStore::open_with_blobs(&db_path, &blob_dir).unwrap();
+        let run = Run::new(vec!["echo".into()], "/tmp".into());
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(store.insert_run(&run))
+            .unwrap();
+        drop(store);
+
+        // Still exactly 3 versions — no extra rows from re-open
+        let count2: i32 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM schema_version WHERE version IN (1,2,3)",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count2, 3);
+    }
+
+    #[test]
+    fn delete_run_is_transactional() {
+        let store = SqliteStore::open_memory().unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let run = Run::new(vec!["true".into()], "/tmp".into());
+        rt.block_on(store.insert_run(&run)).unwrap();
+
+        let mut ev =
+            TraceEvent::new(&run.id, EventSource::System, "test.event");
+        ev.status = EventStatus::Success;
+        rt.block_on(store.insert_event(&ev)).unwrap();
+
+        let cp = Checkpoint::new(&run.id, &ev.id, &run.cwd);
+        rt.block_on(store.insert_checkpoint(&cp)).unwrap();
+
+        // delete_run should remove everything atomically
+        assert!(rt.block_on(store.delete_run(&run.id)).unwrap());
+        assert!(rt.block_on(store.get_run(&run.id)).unwrap().is_none());
+        assert!(rt.block_on(store.get_events(&run.id)).unwrap().is_empty());
+        assert!(
+            rt.block_on(store.get_checkpoints(&run.id))
+                .unwrap()
+                .is_empty()
+        );
     }
 }

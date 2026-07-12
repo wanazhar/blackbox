@@ -138,4 +138,16 @@ impl TraceStore for InMemoryStore {
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("blob not found: {}", reference.key))
     }
-}
+
+    async fn move_blob(
+        &self,
+        from_key: &str,
+        to_key: &str,
+    ) -> anyhow::Result<()> {
+        let mut blobs = self.blobs.write().await;
+        if let Some(data) = blobs.remove(from_key) {
+            blobs.entry(to_key.to_string()).or_insert(data);
+        }
+        Ok(())
+    }
+ }

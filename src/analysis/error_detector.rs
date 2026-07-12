@@ -49,15 +49,17 @@ impl ErrorDetector {
         // Rust compiler errors: "error[E0xxx]: message"
         let lines: Vec<&str> = output.lines().collect();
         for (i, line) in lines.iter().enumerate() {
-            let trimmed = line.trim();
-            if let Some(idx) = trimmed.find("error[E") {
-                let rest = &trimmed[idx..];
+            // error[E must appear at the start of a diagnostic line (after
+            // optional whitespace), not in the middle of a warning message.
+            if line.trim().starts_with("error[E") {
+                let trimmed_line = line.trim();
+                let rest = trimmed_line;
                 if let Some(colon) = rest.find(": ") {
                     let code = &rest[6..colon - 1]; // skip "error[E", exclude trailing "]"
                     let message = &rest[colon + 2..];
                     // Location may be on the same line or the next line (Rust style)
-                    let (file, line_num, col) = if self.parse_file_location(trimmed).0.is_some() {
-                        self.parse_file_location(trimmed)
+                    let (file, line_num, col) = if self.parse_file_location(trimmed_line).0.is_some() {
+                        self.parse_file_location(trimmed_line)
                     } else {
                         lines.get(i + 1).map(|next| self.parse_file_location(next)).unwrap_or((None, None, None))
                     };

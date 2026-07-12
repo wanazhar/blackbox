@@ -105,10 +105,10 @@ impl SandboxReplay {
             if matches!(name.as_str(), "bash" | "shell" | "run" | "execute" | "cmd") {
                 if let Some(input) = event.metadata.get("input") {
                     if let Some(cmd) = input.get("command").and_then(|c| c.as_str()) {
-                        return Some(vec!["sh".into(), "-c".into(), cmd.to_string()]);
+                        return Some(shell_split(cmd));
                     }
                     if let Some(cmd) = input.get("cmd").and_then(|c| c.as_str()) {
-                        return Some(vec!["sh".into(), "-c".into(), cmd.to_string()]);
+                        return Some(shell_split(cmd));
                     }
                 }
             }
@@ -151,6 +151,44 @@ impl Default for SandboxReplay {
 fn shell_split(s: &str) -> Vec<String> {
     s.split_whitespace().map(String::from).collect()
 }
+/// Guard that removes a temporary directory on drop (panic-safe).
+/// Call `disarm()` on the success path to prevent cleanup.
+struct TempDirGuard {
+    path: Option<PathBuf>,
+}
+
+impl TempDirGuard {
+    fn none() -> Self {
+        Self { path: None }
+    }
+
+    fn new(path: PathBuf) -> Self {
+        Self { path: Some(path) }
+    }
+
+    /// Prevent cleanup on drop (used on success path).
+    fn disarm(&mut self) {
+        self.path = None;
+    }
+}
+
+impl Drop for TempDirGuard {
+    fn drop(&mut self) {
+        if let Some(p) = self.path.take() {
+            let _ = std::fs::remove_dir_all(&p);
+            tracing::debug!("cleaned up temp sandbox dir: {}", p.display());
+        }
+    }
+}
+
+/// Sanitize a run ID for safe use in filesystem paths.
+fn sanitize_run_id(id: &str) -> String {
+    id.chars()
+        .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+        .take(8)
+        .collect::<String>()
+}
+
 
 #[async_trait::async_trait]
 impl ReplayEngine for SandboxReplay {
@@ -166,16 +204,18 @@ impl ReplayEngine for SandboxReplay {
     ) -> anyhow::Result<ReplayOutcome> {
         let slice = events_from(events, from_event_id);
 
+        let mut cleanup_guard = TempDirGuard::none();
         // Create or use workspace
-        let workspace = if let Some(ref ws) = self.workspace {
+        let workspace = if let Some(ws) = &self.workspace {
             std::fs::create_dir_all(ws)?;
             ws.clone()
         } else {
             let dir = std::env::temp_dir().join(format!(
                 "blackbox-sandbox-{}",
-                &run.id[..8.min(run.id.len())]
+                sanitize_run_id(&run.id)
             ));
             std::fs::create_dir_all(&dir)?;
+            cleanup_guard = TempDirGuard::new(dir.clone());
             dir
         };
 
@@ -284,6 +324,8 @@ impl ReplayEngine for SandboxReplay {
             workspace.display()
         );
         println!("─── {} ───", summary);
+        cleanup_guard.disarm();
+
 
         Ok(ReplayOutcome::Sandboxed {
             executed,
@@ -379,7 +421,7 @@ fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
         s.to_string()
     } else {
-        format!("{}…", &s[..max])
+        format!("{}…", &s[..s.floor_char_boundary(max)])
     }
 }
 

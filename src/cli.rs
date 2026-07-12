@@ -264,9 +264,8 @@ pub struct TimelineArgs {
     pub run_id: String,
 
     /// Hide bookkeeping events (pty/fs observer start/stop, etc.)
-    #[arg(long)]
+    #[arg(long, default_value_t = true)]
     pub semantic: bool,
-
     /// Only show events whose kind contains this substring (repeatable)
     #[arg(long)]
     pub kind: Vec<String>,
@@ -1398,6 +1397,14 @@ async fn cmd_sync(cli: &Cli, args: &SyncArgs) -> anyhow::Result<()> {
 }
 
 async fn cmd_replay(cli: &Cli, args: &ReplayArgs) -> anyhow::Result<()> {
+    // Validate mutually exclusive replay mode flags.
+    let mode_count = args.mock_tools as u8 + args.sandbox as u8 + args.live as u8;
+    if mode_count > 1 {
+        anyhow::bail!(
+            "conflicting replay flags: --mock-tools, --sandbox, and --live are mutually exclusive"
+        );
+    }
+
     use crate::replay::mock::MockReplay;
     use crate::replay::sandbox::SandboxReplay;
     use crate::replay::timeline::TimelineReplay;
@@ -1639,7 +1646,7 @@ async fn cmd_scrub(cli: &Cli, args: &ScrubArgs) -> anyhow::Result<()> {
         println!("Scrubbing store for secrets at rest…");
     }
 
-    let report = scrub_store(store.clone(), args.dry_run, filter).await?;
+    let report = scrub_store(store.clone(), args.dry_run, filter, None).await?;
     println!("{}", format_report(&report));
 
     if args.gc {

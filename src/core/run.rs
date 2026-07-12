@@ -57,6 +57,35 @@ pub struct Run {
 
     /// Event sequence counter — incremented atomically per new event
     pub next_sequence: u64,
+
+    // ── Schema v6 metrics (optional; portable import uses defaults) ──
+    /// Wall-clock duration in milliseconds
+    #[serde(default)]
+    pub duration_ms: Option<u64>,
+
+    /// Detected harness adapter id (claude, codex, generic, …)
+    #[serde(default)]
+    pub adapter: Option<String>,
+
+    /// Harness session id when known
+    #[serde(default)]
+    pub session_id: Option<String>,
+
+    #[serde(default)]
+    pub input_tokens: Option<u64>,
+
+    #[serde(default)]
+    pub output_tokens: Option<u64>,
+
+    #[serde(default)]
+    pub total_tokens: Option<u64>,
+
+    /// Always None unless explicit pricing config (K15)
+    #[serde(default)]
+    pub estimated_cost_usd: Option<f64>,
+
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 impl Run {
@@ -77,6 +106,14 @@ impl Run {
             exit_code: None,
             parent_run_id: None,
             next_sequence: 0,
+            duration_ms: None,
+            adapter: None,
+            session_id: None,
+            input_tokens: None,
+            output_tokens: None,
+            total_tokens: None,
+            estimated_cost_usd: None,
+            model: None,
         }
     }
 
@@ -89,13 +126,54 @@ impl Run {
 
     /// Mark the run as finished.
     pub fn finish(&mut self, exit_code: i32) {
-        self.ended_at = Some(Utc::now());
+        let ended = Utc::now();
+        self.ended_at = Some(ended);
         self.exit_code = Some(exit_code);
         self.status = if exit_code == 0 {
             RunStatus::Succeeded
         } else {
             RunStatus::Failed
         };
+        let ms = (ended - self.started_at).num_milliseconds();
+        self.duration_ms = Some(if ms < 0 { 0 } else { ms as u64 });
+    }
+
+    /// Apply last-wins usage from harness.usage events.
+    pub fn apply_usage_from_events(&mut self, events: &[crate::core::event::TraceEvent]) {
+        for ev in events.iter().rev() {
+            if ev.kind != "harness.usage" {
+                continue;
+            }
+            if let Some(v) = ev.metadata.get("input_tokens").and_then(|x| x.as_u64()) {
+                self.input_tokens = Some(v);
+            }
+            if let Some(v) = ev.metadata.get("output_tokens").and_then(|x| x.as_u64()) {
+                self.output_tokens = Some(v);
+            }
+            if let Some(v) = ev.metadata.get("total_tokens").and_then(|x| x.as_u64()) {
+                self.total_tokens = Some(v);
+            } else if self.total_tokens.is_none() {
+                if let (Some(i), Some(o)) = (self.input_tokens, self.output_tokens) {
+                    self.total_tokens = Some(i.saturating_add(o));
+                }
+            }
+            if let Some(m) = ev.metadata.get("model").and_then(|x| x.as_str()) {
+                self.model = Some(m.to_string());
+            }
+            break; // last (most recent in reverse) wins
+        }
+        // Prefer scanning chronological last: reverse then first match = last in time
+        // Also pick up session_id from harness.session if missing
+        if self.session_id.is_none() {
+            for ev in events.iter().rev() {
+                if ev.kind == "harness.session" {
+                    if let Some(sid) = ev.metadata.get("session_id").and_then(|v| v.as_str()) {
+                        self.session_id = Some(sid.to_string());
+                        break;
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -128,6 +206,8 @@ mod tests {
         assert!(r.name.is_none());
         assert!(r.notes.is_none());
         assert!(r.tags.is_empty());
+        assert!(r.duration_ms.is_none());
+        assert!(r.input_tokens.is_none());
     }
 
     #[test]
@@ -146,6 +226,7 @@ mod tests {
         assert_eq!(r.status, RunStatus::Succeeded);
         assert_eq!(r.exit_code, Some(0));
         assert!(r.ended_at.is_some());
+        assert!(r.duration_ms.is_some());
     }
 
     #[test]
@@ -177,6 +258,7 @@ mod tests {
         r.exit_code = Some(0);
         r.tags = vec!["test".into(), "demo".into()];
         r.name = Some("demo-run".into());
+        r.input_tokens = Some(10);
         let json = serde_json::to_string(&r).unwrap();
         let de: Run = serde_json::from_str(&json).unwrap();
         assert_eq!(de.id, r.id);
@@ -184,6 +266,15 @@ mod tests {
         assert_eq!(de.tags, r.tags);
         assert_eq!(de.name, r.name);
         assert_eq!(de.status, r.status);
+        assert_eq!(de.input_tokens, Some(10));
+    }
+
+    #[test]
+    fn serde_defaults_missing_v6_fields() {
+        let json = r#"{"id":"x","command":["a"],"cwd":"/","project_dir":"/","tags":[],"status":"Pending","started_at":"2026-01-01T00:00:00Z","next_sequence":0}"#;
+        let de: Run = serde_json::from_str(json).unwrap();
+        assert!(de.duration_ms.is_none());
+        assert!(de.model.is_none());
     }
 
     #[test]

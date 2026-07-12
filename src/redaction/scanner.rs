@@ -83,11 +83,10 @@ static BASE_PATTERNS: LazyLock<Vec<(RedactionReason, Regex)>> = LazyLock::new(||
         RedactionReason::ApiKey,
         r"\bnpm_[A-Za-z0-9]{36}\b",
     );
-    add(
-        &mut patterns,
-        RedactionReason::SshKey,
-        r"^[A-Za-z0-9+/]{40,}={0,2}$",
-    );
+    // Intentionally NO whole-string base64/hex pattern (e.g. `^[A-Za-z0-9+/]{40,}={0,2}$`).
+    // That class matched git SHAs, content-addressed blob keys, and other structural
+    // identifiers. PEM private keys are covered by the BEGIN PRIVATE KEY header pattern.
+    // Export-time structure is further protected by ExportRedactor's path-aware allowlist.
 
     patterns
 });
@@ -714,5 +713,92 @@ mod tests {
             reasons.contains(&&RedactionReason::CloudCredential),
             "should find AWS key"
         );
+    }
+
+    // --- Structural identifiers must NOT match (false-positive regression) ---
+
+    #[test]
+    fn does_not_redact_git_sha1() {
+        let s = default_scanner();
+        let sha = "ea950d8180f520d808274579577db86bc6365a7a";
+        assert_eq!(s.redact(sha), sha);
+        assert!(s.scan(sha, "git.commit", None).is_empty());
+    }
+
+    #[test]
+    fn does_not_redact_sha256_blob_key() {
+        let s = default_scanner();
+        let key = "22c8e61f11fd0f02da754f5b2fa912f842c7ed27a056f5b38f882f820baf37d5";
+        assert_eq!(s.redact(key), key);
+        assert!(s.scan(key, "output_blob", None).is_empty());
+    }
+
+    #[test]
+    fn does_not_redact_uuid() {
+        let s = default_scanner();
+        let id = "939b2397-08b7-43c8-8850-41fedb4f001a";
+        assert_eq!(s.redact(id), id);
+    }
+
+    /// Golden matrix: each BASE_PATTERNS family still fires on a representative secret.
+    #[test]
+    fn base_patterns_golden_matrix_still_redacts_secrets() {
+        let s = default_scanner();
+        let cases: &[(&str, &str)] = &[
+            ("bearer", "Authorization: Bearer abcdefghijklmnopqrstuvwxyz012345"),
+            ("api_key", "api_key=abcdefghijklmnopqrstuvwxyz012345"),
+            ("password", "password=supersecretvalue"),
+            (
+                "ghp",
+                "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgh12",
+            ),
+            ("sk", "sk-abcdefghijklmnopqrstuvwxyz012345"),
+            (
+                "sk-ant",
+                "sk-ant-api03-abcdefghijklmnopqrstuvwxyz123456",
+            ),
+            ("akia", "AKIAIOSFODNN7EXAMPLE"),
+            (
+                "slack",
+                concat!(
+                    "xox",
+                    "b-123456789012-1234567890123-AbCdEfGhIjKlMnOpQrStUvWx"
+                ),
+            ),
+            (
+                "jwt",
+                "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
+            ),
+            ("pem", "-----BEGIN RSA PRIVATE KEY-----"),
+            (
+                "postgres",
+                "postgres://admin:s3cret@db.example.com:5432/mydb",
+            ),
+            (
+                "google",
+                // Pattern: AIza + exactly 35 [0-9A-Za-z\-_]
+                "AIzaSyAabcdefghijklmnopqrstuvwxyz012345",
+            ),
+            (
+                "stripe",
+                // Pattern requires 24+ alnum after sk_live_ — split for GitHub push protection
+                concat!("sk_live_", "abcdefghijklmnopqrstuvwx"),
+            ),
+            (
+                "npm",
+                "npm_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij",
+            ),
+        ];
+        for (name, secret) in cases {
+            let out = s.redact(secret);
+            assert!(
+                out.contains("[REDACTED]"),
+                "BASE pattern family '{name}' should redact sample; got {out:?}"
+            );
+            assert!(
+                out != *secret || secret.contains("[REDACTED]"),
+                "BASE pattern family '{name}' left secret intact"
+            );
+        }
     }
 }

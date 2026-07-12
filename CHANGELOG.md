@@ -2,6 +2,39 @@
 
 All notable changes to **blackbox** are documented here.
 
+## [Unreleased]
+
+## [0.3.0] — 2026-07-12
+
+Single product release: daily-driver capture **and** agent feedback loop (one version, one story).
+
+### Trust
+- Fix export redaction destroying git SHAs and content-addressed blob keys
+- Path-aware structural allowlist in `ExportRedactor`; secrets in free-form still redacted
+
+### Zero-friction capture
+- Ancestor-aware project/store discovery (monorepo subdirs share one store)
+- `.blackbox/config.toml` (`enabled`, wrap list, retention)
+- `blackbox enable` / `disable` + fish/bash shell wrapper snippets
+- `blackbox maybe-run` with nest guard (`BLACKBOX_ACTIVE_RUN`) and `BLACKBOX_OFF`
+
+### Agent-native inspect
+- Global `--json` envelope (`blackbox.cli/v1`) for runs, show, timeline, inspect, analyze, search, stats, doctor, postmortem, enable/disable, gc, diff, context
+- Shared view types in `src/views.rs`
+- `blackbox postmortem` / `summary` with SQL-limited event scan
+- `blackbox gc` retention dry-run/apply; `purge --policy-from-config`
+
+### Agent feedback
+- Schema v6 run metrics: `duration_ms`, `adapter`, `session_id`, token fields, `model`
+- Parse `harness.usage` + blackbox stream protocol v1 (`tool_call`, `usage`, `session`, `message`)
+- `blackbox diff --trajectory` / `--json` ordered alignment (greedy LCP)
+- `blackbox context <run> --for-resume --json` bounded resume packs
+- `docs/agent-api.md`
+
+## [0.2.0] — 2026-07-12
+
+Intermediate tag (daily-driver floor only). Prefer **0.3.0** for the full product surface.
+
 ## [0.1.0] — 2026-07-12
 
 First solid release candidate: a flight recorder you’d actually run on a machine with secrets.

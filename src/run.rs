@@ -147,6 +147,16 @@ impl RunSupervisor {
             .await
             .context("failed to persist run record")?;
 
+        // Nest guard for maybe-run / shell wrappers (K13)
+        std::env::set_var(crate::maybe_run::ENV_ACTIVE_RUN, &run.id);
+        struct ClearActiveRun;
+        impl Drop for ClearActiveRun {
+            fn drop(&mut self) {
+                std::env::remove_var(crate::maybe_run::ENV_ACTIVE_RUN);
+            }
+        }
+        let _clear_active = ClearActiveRun;
+
         let writer = Arc::new(EventWriter::new(self.store.clone(), run.id.clone()));
 
         // ── Capture and redact environment variables ───────────────
@@ -836,12 +846,25 @@ impl RunSupervisor {
         run.finish(exit_status.exit_code() as i32);
         run.next_sequence = writer.next_sequence();
         if let Some(sid) = session_id {
+            run.session_id = Some(sid.clone());
             let note = run.notes.take().unwrap_or_default();
             run.notes = Some(if note.is_empty() {
                 format!("session:{}", sid)
             } else {
                 format!("{}; session:{}", note, sid)
             });
+        }
+        // Adapter + usage rollup (schema v6)
+        if let Some(notes) = run.notes.as_deref() {
+            if let Some(a) = notes
+                .split(';')
+                .find_map(|p| p.trim().strip_prefix("adapter:"))
+            {
+                run.adapter = Some(a.to_string());
+            }
+        }
+        if let Ok(events) = self.store.get_events(&run.id).await {
+            run.apply_usage_from_events(&events);
         }
         self.store
             .update_run(run)

@@ -303,21 +303,16 @@ mod tests {
     use std::sync::Arc;
 
     fn make_run() -> Run {
-        Run {
-            id: "run-port001".into(),
-            name: None,
-            command: vec!["echo".into(), "hello".into()],
-            cwd: "/home/user/project".into(),
-            project_dir: "/home/user/project".into(),
-            tags: vec![],
-            notes: None,
-            status: crate::core::run::RunStatus::Succeeded,
-            started_at: Utc::now(),
-            ended_at: Some(Utc::now()),
-            exit_code: Some(0),
-            parent_run_id: None,
-            next_sequence: 1,
-        }
+        let mut r = Run::new(
+            vec!["echo".into(), "hello".into()],
+            "/home/user/project".into(),
+        );
+        r.id = "run-port001".into();
+        r.status = crate::core::run::RunStatus::Succeeded;
+        r.ended_at = Some(Utc::now());
+        r.exit_code = Some(0);
+        r.next_sequence = 1;
+        r
     }
 
     fn make_event(seq: u64) -> TraceEvent {

@@ -215,6 +215,7 @@ pub fn parse_claude_json_line(run_id: &str, line: &str) -> Vec<TraceEvent> {
             let id = val
                 .get("tool_use_id")
                 .or_else(|| val.get("call_id"))
+                .or_else(|| val.get("id"))
                 .and_then(|i| i.as_str());
             let is_error = val
                 .get("is_error")
@@ -242,12 +243,82 @@ pub fn parse_claude_json_line(run_id: &str, line: &str) -> Vec<TraceEvent> {
             if let Some(r) = val.get("result") {
                 ev.metadata.insert("result".to_string(), r.clone());
             }
+            // Usage often nested on result messages
+            if let Some(usage) = val.get("usage") {
+                events.push(usage_event_from_json(run_id, usage));
+            }
             events.push(ev);
         }
-        _ => {}
+        "usage" => {
+            events.push(usage_event_from_json(run_id, &val));
+        }
+        // blackbox stream protocol v1 (generic adapters)
+        "tool_call" => {
+            let name = val
+                .get("name")
+                .and_then(|n| n.as_str())
+                .unwrap_or("unknown");
+            let id = val.get("id").and_then(|i| i.as_str());
+            let input = val.get("input").cloned();
+            events.push(tool_call_event(run_id, name, input, id));
+        }
+        "session" => {
+            if let Some(sid) = val.get("session_id").and_then(|s| s.as_str()) {
+                events.push(session_event(run_id, sid, "blackbox"));
+            }
+        }
+        "message" => {
+            if let Some(text) = val.get("text").and_then(|t| t.as_str()) {
+                if !text.trim().is_empty() {
+                    events.push(assistant_event(run_id, text));
+                }
+            }
+        }
+        _ => {
+            // Nested usage object on any type
+            if let Some(usage) = val.get("usage") {
+                events.push(usage_event_from_json(run_id, usage));
+            }
+        }
     }
 
     events
+}
+
+/// Build harness.usage from a JSON object with token fields.
+pub fn usage_event_from_json(run_id: &str, val: &serde_json::Value) -> TraceEvent {
+    let mut ev = TraceEvent::new(run_id, EventSource::Harness, "harness.usage");
+    ev.status = EventStatus::Success;
+    ev.side_effect = SideEffect::None;
+    for key in [
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "cache_read_input_tokens",
+        "cache_creation_input_tokens",
+    ] {
+        if let Some(n) = val.get(key).and_then(|v| v.as_u64()) {
+            ev.metadata.insert(key.to_string(), serde_json::json!(n));
+        }
+    }
+    // Also accept input/output short keys when canonical keys missing
+    if !ev.metadata.contains_key("input_tokens") {
+        if let Some(n) = val.get("input").and_then(|v| v.as_u64()) {
+            ev.metadata
+                .insert("input_tokens".to_string(), serde_json::json!(n));
+        }
+    }
+    if !ev.metadata.contains_key("output_tokens") {
+        if let Some(n) = val.get("output").and_then(|v| v.as_u64()) {
+            ev.metadata
+                .insert("output_tokens".to_string(), serde_json::json!(n));
+        }
+    }
+    if let Some(m) = val.get("model").and_then(|v| v.as_str()) {
+        ev.metadata
+            .insert("model".to_string(), serde_json::json!(m));
+    }
+    ev
 }
 
 /// Try to parse one NDJSON line into events (Codex-style).
@@ -316,6 +387,29 @@ mod tests {
             Some("Read")
         );
         assert_eq!(events[0].side_effect, SideEffect::Read);
+    }
+
+    #[test]
+    fn parse_blackbox_protocol_usage_and_tool_call() {
+        let usage = r#"{"type":"usage","input_tokens":10,"output_tokens":5,"model":"m"}"#;
+        let events = parse_claude_json_line("r", usage);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, "harness.usage");
+        assert_eq!(
+            events[0]
+                .metadata
+                .get("input_tokens")
+                .and_then(|v| v.as_u64()),
+            Some(10)
+        );
+
+        let call = r#"{"type":"tool_call","id":"1","name":"Bash","input":{"command":"ls"}}"#;
+        let events = parse_claude_json_line("r", call);
+        assert_eq!(events[0].kind, "tool.call");
+        assert_eq!(
+            events[0].metadata.get("tool_name").and_then(|v| v.as_str()),
+            Some("Bash")
+        );
     }
 
     #[test]

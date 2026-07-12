@@ -61,21 +61,14 @@ mod tests {
 
     #[test]
     fn jsonl_export_basic() {
-        let run = Run {
-            id: "test-123".to_string(),
-            name: Some("test run".to_string()),
-            command: vec!["echo".to_string(), "hello".to_string()],
-            cwd: "/tmp/test".to_string(),
-            project_dir: "/tmp/test".to_string(),
-            tags: vec!["ci".to_string()],
-            notes: None,
-            status: crate::core::run::RunStatus::Succeeded,
-            started_at: Utc::now(),
-            ended_at: Some(Utc::now()),
-            exit_code: Some(0),
-            parent_run_id: None,
-            next_sequence: 1,
-        };
+        let mut run = Run::new(vec!["echo".into(), "hello".into()], "/tmp/test".into());
+        run.id = "test-123".into();
+        run.name = Some("test run".into());
+        run.tags = vec!["ci".into()];
+        run.status = crate::core::run::RunStatus::Succeeded;
+        run.ended_at = Some(Utc::now());
+        run.exit_code = Some(0);
+        run.next_sequence = 1;
 
         let mut event = TraceEvent::new("test-123", EventSource::Terminal, "terminal.output");
         event.status = EventStatus::Success;
@@ -95,21 +88,11 @@ mod tests {
 
     #[test]
     fn jsonl_export_redacted() {
-        let run = Run {
-            id: "test-456".to_string(),
-            name: None,
-            command: vec!["bash".to_string()],
-            cwd: "/home/user/project/src".to_string(),
-            project_dir: "/home/user/project".to_string(),
-            tags: vec![],
-            notes: None,
-            status: crate::core::run::RunStatus::Succeeded,
-            started_at: Utc::now(),
-            ended_at: None,
-            exit_code: Some(0),
-            parent_run_id: None,
-            next_sequence: 0,
-        };
+        let mut run = Run::new(vec!["bash".into()], "/home/user/project/src".into());
+        run.id = "test-456".into();
+        run.project_dir = "/home/user/project".into();
+        run.status = crate::core::run::RunStatus::Succeeded;
+        run.exit_code = Some(0);
 
         let output = export_jsonl(&run, &[], true).unwrap();
         let run_val: serde_json::Value = serde_json::from_str(output.trim()).unwrap();

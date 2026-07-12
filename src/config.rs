@@ -143,6 +143,234 @@ impl Default for CapturePolicy {
     }
 }
 
+// ── Project config (`.blackbox/config.toml`) ──────────────────────
+
+/// Project-local blackbox configuration (daily-driver 0.2).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BlackboxConfig {
+    /// When true, `maybe-run` may record matching harnesses under this project.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub capture: CaptureConfig,
+    #[serde(default)]
+    pub retention: RetentionConfig,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for BlackboxConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            capture: CaptureConfig::default(),
+            retention: RetentionConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CaptureConfig {
+    /// Basenames of commands auto-wrapped by shell functions / maybe-run.
+    #[serde(default = "default_wrap")]
+    pub wrap: Vec<String>,
+    /// Tags applied to ambient (maybe-run) captures.
+    #[serde(default = "default_auto_tags")]
+    pub default_tags: Vec<String>,
+}
+
+fn default_wrap() -> Vec<String> {
+    vec!["claude".into(), "codex".into()]
+}
+
+fn default_auto_tags() -> Vec<String> {
+    vec!["auto".into()]
+}
+
+impl Default for CaptureConfig {
+    fn default() -> Self {
+        Self {
+            wrap: default_wrap(),
+            default_tags: default_auto_tags(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RetentionConfig {
+    #[serde(default = "default_keep_runs")]
+    pub keep_runs: u32,
+    pub max_age_days: Option<u32>,
+    #[serde(default = "default_true")]
+    pub auto_gc_blobs: bool,
+    /// When true, apply retention automatically after runs (0.4; off for 0.2).
+    #[serde(default)]
+    pub auto_apply: bool,
+}
+
+fn default_keep_runs() -> u32 {
+    50
+}
+
+impl Default for RetentionConfig {
+    fn default() -> Self {
+        Self {
+            keep_runs: 50,
+            max_age_days: Some(30),
+            auto_gc_blobs: true,
+            auto_apply: false,
+        }
+    }
+}
+
+impl BlackboxConfig {
+    /// Load config from a TOML file. Missing file → `None`.
+    pub fn load_from_path(path: &Path) -> anyhow::Result<Option<Self>> {
+        if !path.exists() {
+            return Ok(None);
+        }
+        let text = std::fs::read_to_string(path)?;
+        let cfg: BlackboxConfig = toml::from_str(&text)?;
+        Ok(Some(cfg))
+    }
+
+    /// Write config atomically (best-effort).
+    pub fn write_to_path(&self, path: &Path) -> anyhow::Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let text = toml::to_string_pretty(self)?;
+        std::fs::write(path, text)?;
+        Ok(())
+    }
+}
+
+/// Result of shared project + store discovery (K21).
+#[derive(Debug, Clone)]
+pub struct ProjectDiscovery {
+    /// Project root directory (repo root or cwd fallback).
+    pub project_root: PathBuf,
+    /// Resolved store paths under that project (or override).
+    pub paths: BlackboxPaths,
+    /// Loaded config when `.blackbox/config.toml` was found.
+    pub config: Option<BlackboxConfig>,
+}
+
+/// Discover project root, store paths, and optional config.
+///
+/// Algorithm (daily-driver 0.2):
+/// 1. `--store` / `BLACKBOX_DB` override → paths only; project_root = cwd
+/// 2. Walk ancestors from `cwd`:
+///    - legacy `./blackbox.db` wins (isolated project)
+///    - `.blackbox/config.toml` → project store at that root
+///    - `.blackbox/blackbox.db` without config → that store
+/// 3. Else default `cwd/.blackbox/`
+pub fn discover_project(
+    cwd: &Path,
+    db_override: Option<&Path>,
+) -> anyhow::Result<ProjectDiscovery> {
+    // Explicit CLI --store
+    if let Some(db) = db_override {
+        let paths = BlackboxPaths::from_db_path(db.to_path_buf());
+        let project_root = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+        let config = BlackboxConfig::load_from_path(&paths.root.join("config.toml"))?;
+        return Ok(ProjectDiscovery {
+            project_root,
+            paths,
+            config,
+        });
+    }
+
+    // BLACKBOX_DB env (same rules as BlackboxPaths::resolve)
+    if let Ok(env_db) = std::env::var("BLACKBOX_DB") {
+        if !env_db.is_empty() {
+            let env_path = PathBuf::from(&env_db);
+            if env_path.is_dir() {
+                anyhow::bail!("BLACKBOX_DB points to a directory, not a file: {}", env_db);
+            }
+            if env_path.exists() && !is_readable(&env_path) {
+                anyhow::bail!("BLACKBOX_DB is not readable: {}", env_db);
+            }
+            let paths = BlackboxPaths::from_db_path(env_path);
+            let project_root = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+            let config = BlackboxConfig::load_from_path(&paths.root.join("config.toml"))?;
+            return Ok(ProjectDiscovery {
+                project_root,
+                paths,
+                config,
+            });
+        }
+    }
+
+    let mut dir = if cwd.exists() {
+        cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf())
+    } else {
+        cwd.to_path_buf()
+    };
+
+    loop {
+        // Legacy root blackbox.db
+        let legacy = dir.join("blackbox.db");
+        if legacy.exists() {
+            return Ok(ProjectDiscovery {
+                project_root: dir.clone(),
+                paths: BlackboxPaths::from_db_path(legacy),
+                config: BlackboxConfig::load_from_path(&dir.join(".blackbox").join("config.toml"))?,
+            });
+        }
+
+        let bb = dir.join(".blackbox");
+        let config_path = bb.join("config.toml");
+        let db_path = bb.join("blackbox.db");
+
+        if config_path.exists() {
+            let config = BlackboxConfig::load_from_path(&config_path)?;
+            return Ok(ProjectDiscovery {
+                project_root: dir.clone(),
+                paths: BlackboxPaths {
+                    root: bb.clone(),
+                    db_path,
+                    blob_dir: bb.join("blobs"),
+                },
+                config,
+            });
+        }
+
+        if db_path.exists() {
+            return Ok(ProjectDiscovery {
+                project_root: dir.clone(),
+                paths: BlackboxPaths {
+                    root: bb.clone(),
+                    db_path,
+                    blob_dir: bb.join("blobs"),
+                },
+                config: None,
+            });
+        }
+
+        // Ascend
+        match dir.parent() {
+            Some(parent) if parent != dir => dir = parent.to_path_buf(),
+            _ => break,
+        }
+    }
+
+    // Fallback: cwd default layout
+    let project_root = if cwd.exists() {
+        cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf())
+    } else {
+        cwd.to_path_buf()
+    };
+    let paths = BlackboxPaths::resolve(Some(&project_root), None)?;
+    Ok(ProjectDiscovery {
+        project_root,
+        paths,
+        config: None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,5 +430,69 @@ mod tests {
         let paths = BlackboxPaths::resolve(Some(&proj), None).unwrap();
         assert_eq!(paths.db_path, proj.join(".blackbox").join("blackbox.db"));
         assert_eq!(paths.blob_dir, proj.join(".blackbox").join("blobs"));
+    }
+
+    #[test]
+    fn discover_finds_config_in_ancestor() {
+        let root = tempfile::tempdir().unwrap();
+        let proj = root.path();
+        let child = proj.join("packages").join("api");
+        fs::create_dir_all(&child).unwrap();
+        let bb = proj.join(".blackbox");
+        fs::create_dir_all(&bb).unwrap();
+        let cfg = BlackboxConfig::default();
+        cfg.write_to_path(&bb.join("config.toml")).unwrap();
+
+        // Clear BLACKBOX_DB so it does not hijack discovery
+        let prev = std::env::var("BLACKBOX_DB").ok();
+        std::env::remove_var("BLACKBOX_DB");
+
+        let d = discover_project(&child, None).unwrap();
+        assert_eq!(d.project_root, proj.canonicalize().unwrap());
+        assert_eq!(d.paths.db_path, bb.join("blackbox.db"));
+        assert!(d.config.as_ref().is_some_and(|c| c.enabled));
+
+        if let Some(v) = prev {
+            std::env::set_var("BLACKBOX_DB", v);
+        }
+    }
+
+    #[test]
+    fn discover_legacy_subdir_isolates() {
+        let root = tempfile::tempdir().unwrap();
+        let proj = root.path();
+        let child = proj.join("nested");
+        fs::create_dir_all(&child).unwrap();
+        // Parent has config
+        let bb = proj.join(".blackbox");
+        fs::create_dir_all(&bb).unwrap();
+        BlackboxConfig::default()
+            .write_to_path(&bb.join("config.toml"))
+            .unwrap();
+        // Child has legacy db — wins
+        fs::write(child.join("blackbox.db"), b"").unwrap();
+
+        let prev = std::env::var("BLACKBOX_DB").ok();
+        std::env::remove_var("BLACKBOX_DB");
+
+        let d = discover_project(&child, None).unwrap();
+        assert_eq!(d.project_root, child.canonicalize().unwrap());
+        assert_eq!(d.paths.db_path, child.join("blackbox.db"));
+
+        if let Some(v) = prev {
+            std::env::set_var("BLACKBOX_DB", v);
+        }
+    }
+
+    #[test]
+    fn config_round_trip_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut cfg = BlackboxConfig::default();
+        cfg.capture.wrap = vec!["claude".into()];
+        cfg.write_to_path(&path).unwrap();
+        let loaded = BlackboxConfig::load_from_path(&path).unwrap().unwrap();
+        assert_eq!(loaded.capture.wrap, vec!["claude".to_string()]);
+        assert!(loaded.enabled);
     }
 }

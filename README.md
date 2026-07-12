@@ -7,7 +7,7 @@
 | **CLI / lib name** | `blackbox` |
 | **crates.io package** | [`blackbox-recorder`](https://crates.io/crates/blackbox-recorder) |
 | **License** | MIT OR Apache-2.0 |
-| **Status** | **0.1.0** — usable end-to-end recorder (capture → inspect → export → sync) |
+| **Status** | **0.3.0** — local flight recorder: enable → capture → postmortem → `--json` → trajectory / resume packs |
 
 ## Why use it
 
@@ -122,6 +122,31 @@ blackbox run -- codex exec "..."
 blackbox fork latest --launch
 ```
 
+### Daily-driver ambient capture (0.2)
+
+```bash
+# Once per project
+blackbox enable
+# Paste the printed fish/bash functions into your shell rc
+
+# After a failure — one-command postmortem (also --json)
+blackbox postmortem latest
+blackbox postmortem latest --json
+
+# Machine-readable inspect for agents
+blackbox runs --json
+blackbox show latest --json
+blackbox doctor --json
+
+# Retention dry-run from .blackbox/config.toml
+blackbox gc
+blackbox gc --apply --yes   # destructive
+
+# Agent feedback (0.3)
+blackbox diff runA runB --trajectory
+blackbox context latest --for-resume --json --max-tokens 4000
+```
+
 ### Shell completions
 
 ```bash
@@ -173,6 +198,10 @@ Export and sync push are **redacted by default**. Pass `--no-redact` only for pr
 | Command | Purpose |
 |---|---|
 | `run` | Supervise a command; capture events |
+| `maybe-run` | Project-gated ambient capture (shell wrappers) |
+| `enable` / `disable` | Opt-in project ambient capture + shell snippets |
+| `postmortem` / `summary` | One-command failure/success postmortem |
+| `gc` | Retention dry-run / apply from config |
 | `runs` | List runs (`--tag`, `--status`, `--limit`) |
 | `show` | Run summary (`--tui`, `--transcript`, `--tools`) |
 | `timeline` | Event list (`--semantic`, `--kind`, `--source`) |

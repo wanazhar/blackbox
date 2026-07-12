@@ -17,7 +17,8 @@ use crate::core::run::Run;
 use crate::storage::TraceStore;
 
 /// Current schema version. Bump when migrations change.
-const SCHEMA_VERSION: i32 = 5;
+/// Current on-disk schema version (also reported by `doctor --json`).
+pub const SCHEMA_VERSION: i32 = 6;
 
 /// Default scanner for redacting secrets in FTS index content.
 static FTS_SCANNER: LazyLock<SecretScanner> =
@@ -245,6 +246,15 @@ impl SqliteStore {
                 .context("failed to record v5 version")?;
             tx.commit().context("failed to commit v5 migration")?;
         }
+        if current < 6 {
+            let tx = conn
+                .unchecked_transaction()
+                .context("failed to start transaction for v6 migration")?;
+            Self::migrate_v6(&tx)?;
+            tx.execute("INSERT INTO schema_version (version) VALUES (6)", [])
+                .context("failed to record v6 version")?;
+            tx.commit().context("failed to commit v6 migration")?;
+        }
 
         // Ensure we never claim a higher version than we support
         let applied: i32 = conn
@@ -446,6 +456,38 @@ impl SqliteStore {
         Ok(())
     }
 
+    /// V6: run-level metrics (duration, adapter, tokens, model).
+    fn migrate_v6(conn: &Connection) -> anyhow::Result<()> {
+        // SQLite ALTER ADD COLUMN is idempotent enough if we check; use IF NOT EXISTS pattern
+        // via try each column (ignore duplicate column errors for re-runs in tests).
+        let cols = [
+            "ALTER TABLE runs ADD COLUMN duration_ms INTEGER",
+            "ALTER TABLE runs ADD COLUMN adapter TEXT",
+            "ALTER TABLE runs ADD COLUMN session_id TEXT",
+            "ALTER TABLE runs ADD COLUMN input_tokens INTEGER",
+            "ALTER TABLE runs ADD COLUMN output_tokens INTEGER",
+            "ALTER TABLE runs ADD COLUMN total_tokens INTEGER",
+            "ALTER TABLE runs ADD COLUMN estimated_cost_usd REAL",
+            "ALTER TABLE runs ADD COLUMN model TEXT",
+        ];
+        for sql in cols {
+            match conn.execute(sql, []) {
+                Ok(_) => {}
+                Err(e) if e.to_string().contains("duplicate column") => {}
+                Err(e) => return Err(e).context("v6 ALTER TABLE runs")?,
+            }
+        }
+        // Best-effort duration backfill from timestamps (seconds precision via julianday)
+        let _ = conn.execute(
+            "UPDATE runs SET duration_ms = CAST(
+                (julianday(ended_at) - julianday(started_at)) * 86400000 AS INTEGER
+             ) WHERE ended_at IS NOT NULL AND duration_ms IS NULL",
+            [],
+        );
+        tracing::info!("v6: runs metrics columns (duration/adapter/tokens/model)");
+        Ok(())
+    }
+
     /// V1: core tables (runs, events, checkpoints, blobs metadata).
     fn migrate_v1(conn: &Connection) -> anyhow::Result<()> {
         conn.execute_batch(
@@ -604,8 +646,9 @@ impl TraceStore for SqliteStore {
             let status_json =
                 serde_json::to_string(&run.status).context("failed to serialize status")?;
             conn.execute(
-                "INSERT INTO runs (id, name, command, cwd, project_dir, tags, notes, status, started_at, ended_at, exit_code, parent_run_id, next_sequence)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                "INSERT INTO runs (id, name, command, cwd, project_dir, tags, notes, status, started_at, ended_at, exit_code, parent_run_id, next_sequence,
+                 duration_ms, adapter, session_id, input_tokens, output_tokens, total_tokens, estimated_cost_usd, model)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
                 params![
                     run.id,
                     run.name,
@@ -620,6 +663,14 @@ impl TraceStore for SqliteStore {
                     run.exit_code,
                     run.parent_run_id,
                     run.next_sequence as i64,
+                    run.duration_ms.map(|v| v as i64),
+                    run.adapter,
+                    run.session_id,
+                    run.input_tokens.map(|v| v as i64),
+                    run.output_tokens.map(|v| v as i64),
+                    run.total_tokens.map(|v| v as i64),
+                    run.estimated_cost_usd,
+                    run.model,
                 ],
             )
             .context("failed to insert run")?;
@@ -638,7 +689,8 @@ impl TraceStore for SqliteStore {
             let status_json =
                 serde_json::to_string(&run.status).context("failed to serialize status")?;
             conn.execute(
-                "UPDATE runs SET name=?2, command=?3, cwd=?4, project_dir=?5, tags=?6, notes=?7, status=?8, started_at=?9, ended_at=?10, exit_code=?11, parent_run_id=?12, next_sequence=?13
+                "UPDATE runs SET name=?2, command=?3, cwd=?4, project_dir=?5, tags=?6, notes=?7, status=?8, started_at=?9, ended_at=?10, exit_code=?11, parent_run_id=?12, next_sequence=?13,
+                 duration_ms=?14, adapter=?15, session_id=?16, input_tokens=?17, output_tokens=?18, total_tokens=?19, estimated_cost_usd=?20, model=?21
                  WHERE id=?1",
                 params![
                     run.id,
@@ -654,6 +706,14 @@ impl TraceStore for SqliteStore {
                     run.exit_code,
                     run.parent_run_id,
                     run.next_sequence as i64,
+                    run.duration_ms.map(|v| v as i64),
+                    run.adapter,
+                    run.session_id,
+                    run.input_tokens.map(|v| v as i64),
+                    run.output_tokens.map(|v| v as i64),
+                    run.total_tokens.map(|v| v as i64),
+                    run.estimated_cost_usd,
+                    run.model,
                 ],
             )
             .context("failed to update run")?;
@@ -667,7 +727,8 @@ impl TraceStore for SqliteStore {
         let result = {
             let conn = self.lock();
             let mut stmt = conn.prepare(
-                "SELECT id, name, command, cwd, project_dir, tags, notes, status, started_at, ended_at, exit_code, parent_run_id, next_sequence
+                "SELECT id, name, command, cwd, project_dir, tags, notes, status, started_at, ended_at, exit_code, parent_run_id, next_sequence,
+                 duration_ms, adapter, session_id, input_tokens, output_tokens, total_tokens, estimated_cost_usd, model
                  FROM runs WHERE id = ?1",
             )?;
             match stmt.query_row(params![run_id], run_from_row) {
@@ -684,7 +745,8 @@ impl TraceStore for SqliteStore {
         let result = {
             let conn = self.lock();
             let mut stmt = conn.prepare(
-                "SELECT id, name, command, cwd, project_dir, tags, notes, status, started_at, ended_at, exit_code, parent_run_id, next_sequence
+                "SELECT id, name, command, cwd, project_dir, tags, notes, status, started_at, ended_at, exit_code, parent_run_id, next_sequence,
+                 duration_ms, adapter, session_id, input_tokens, output_tokens, total_tokens, estimated_cost_usd, model
                  FROM runs ORDER BY started_at DESC",
             )?;
             let runs = stmt
@@ -784,6 +846,54 @@ impl TraceStore for SqliteStore {
                 .query_map(params![run_id], event_from_row)?
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(events)
+        };
+        tokio::task::yield_now().await;
+        result
+    }
+
+    async fn get_events_limited(
+        &self,
+        run_id: &str,
+        limit: usize,
+    ) -> anyhow::Result<(Vec<TraceEvent>, bool)> {
+        if limit == 0 {
+            return Ok((Vec::new(), false));
+        }
+        let run_id = run_id.to_string();
+        let result = {
+            let conn = self.lock();
+            let total: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM events WHERE run_id = ?1",
+                params![run_id],
+                |row| row.get(0),
+            )?;
+            let total = total as usize;
+            // Fetch last `limit` by sequence DESC then reverse to ascending.
+            let mut stmt = conn.prepare(
+                "SELECT id, run_id, parent_event_id, sequence, source, kind, started_at, ended_at, duration_ms, status, side_effect, input_blob, output_blob, error_blob, metadata
+                 FROM events WHERE run_id = ?1 ORDER BY sequence DESC LIMIT ?2",
+            )?;
+            let mut events = stmt
+                .query_map(params![run_id, limit as i64], event_from_row)?
+                .collect::<Result<Vec<_>, _>>()?;
+            events.reverse();
+            let truncated = total > events.len();
+            Ok((events, truncated))
+        };
+        tokio::task::yield_now().await;
+        result
+    }
+
+    async fn count_events(&self, run_id: &str) -> anyhow::Result<usize> {
+        let run_id = run_id.to_string();
+        let result = {
+            let conn = self.lock();
+            let n: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM events WHERE run_id = ?1",
+                params![run_id],
+                |row| row.get(0),
+            )?;
+            Ok(n as usize)
         };
         tokio::task::yield_now().await;
         result
@@ -1293,6 +1403,14 @@ fn run_from_row(row: &rusqlite::Row) -> rusqlite::Result<Run> {
         exit_code: row.get(10)?,
         parent_run_id: row.get(11)?,
         next_sequence: row.get::<_, i64>(12)? as u64,
+        duration_ms: row.get::<_, Option<i64>>(13)?.map(|v| v.max(0) as u64),
+        adapter: row.get(14)?,
+        session_id: row.get(15)?,
+        input_tokens: row.get::<_, Option<i64>>(16)?.map(|v| v.max(0) as u64),
+        output_tokens: row.get::<_, Option<i64>>(17)?.map(|v| v.max(0) as u64),
+        total_tokens: row.get::<_, Option<i64>>(18)?.map(|v| v.max(0) as u64),
+        estimated_cost_usd: row.get(19)?,
+        model: row.get(20)?,
     })
 }
 

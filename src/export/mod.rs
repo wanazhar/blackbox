@@ -13,8 +13,10 @@ use crate::storage::TraceStore;
 /// Export a run and its events in the requested format.
 ///
 /// When `redact` is true, format-specific redaction runs first, then
-/// `ExportRedactor` scans every string field for known secret patterns.
-/// Portable format embeds blobs and requires a store handle.
+/// `ExportRedactor` path-aware-scans string fields (structural ids/refs skipped;
+/// free-form content still secret-scanned). Portable format embeds blobs and
+/// requires a store handle; the top-level `blobs` map keys are restored around
+/// the JSON walk so content-addressed refs stay importable.
 pub async fn export_run(
     store: &dyn TraceStore,
     run: &Run,

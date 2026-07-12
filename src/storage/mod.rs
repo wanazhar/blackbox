@@ -39,6 +39,30 @@ pub trait TraceStore: Send + Sync + 'static {
     /// Load events for a run in sequence order.
     async fn get_events(&self, run_id: &str) -> anyhow::Result<Vec<TraceEvent>>;
 
+    /// Load at most `limit` events (ascending sequence). Returns `(events, truncated)`.
+    ///
+    /// Default implementation loads all events then truncates (backends SHOULD
+    /// override with SQL LIMIT). Prefer newest-first SQL + reverse for large runs.
+    async fn get_events_limited(
+        &self,
+        run_id: &str,
+        limit: usize,
+    ) -> anyhow::Result<(Vec<TraceEvent>, bool)> {
+        let all = self.get_events(run_id).await?;
+        if all.len() <= limit {
+            Ok((all, false))
+        } else {
+            // Prefer the *last* N events (tail of the run) for postmortem signal.
+            let start = all.len() - limit;
+            Ok((all[start..].to_vec(), true))
+        }
+    }
+
+    /// Count events for a run. Default: full load length.
+    async fn count_events(&self, run_id: &str) -> anyhow::Result<usize> {
+        Ok(self.get_events(run_id).await?.len())
+    }
+
     /// Load a single event by ID.
     async fn get_event(&self, event_id: &str) -> anyhow::Result<Option<TraceEvent>>;
 

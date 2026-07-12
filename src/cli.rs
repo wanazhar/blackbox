@@ -4,9 +4,11 @@ use std::sync::Arc;
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
 
-use crate::config::{BlackboxPaths, CapturePolicy};
+use crate::config::{discover_project, CapturePolicy};
+use crate::output::{self, OutputMode};
 use crate::storage::sqlite::SqliteStore;
 use crate::storage::TraceStore;
+use crate::views;
 
 /// Default bind address for `blackbox serve`.
 #[allow(dead_code)] // documented constant — clap requires a string literal for default_value
@@ -20,8 +22,18 @@ pub struct Cli {
     #[arg(long, global = true, env = "BLACKBOX_DB")]
     pub store: Option<PathBuf>,
 
+    /// Machine-readable JSON envelope on stdout (`blackbox.cli/v1`)
+    #[arg(long, global = true)]
+    pub json: bool,
+
     #[command(subcommand)]
     pub command: Command,
+}
+
+impl Cli {
+    pub fn output_mode(&self) -> OutputMode {
+        OutputMode::from_flag(self.json)
+    }
 }
 
 #[derive(Subcommand)]
@@ -72,6 +84,38 @@ pub enum Command {
     Serve(ServeArgs),
     /// Sync runs with a shared directory (push/pull portable archives)
     Sync(SyncArgs),
+    /// Project-gated ambient capture (used by shell wrappers)
+    MaybeRun(MaybeRunArgs),
+    /// Enable ambient capture for this project
+    Enable(EnableArgs),
+    /// Disable ambient capture for this project
+    Disable,
+    /// One-command postmortem of a run
+    Postmortem(SummaryArgs),
+    /// Alias for postmortem
+    Summary(SummaryArgs),
+    /// Policy retention dry-run / apply (alias: purge --policy-from-config)
+    Gc(GcArgs),
+    /// Bounded resume context pack for agents
+    Context(ContextArgs),
+}
+
+#[derive(Args)]
+pub struct ContextArgs {
+    /// Run ID, prefix, or "latest"
+    pub run_id: String,
+
+    /// Emit a pack suitable for pasting into a resume prompt
+    #[arg(long)]
+    pub for_resume: bool,
+
+    /// Approximate max tokens for the pack (chars/4)
+    #[arg(long, default_value_t = 4000)]
+    pub max_tokens: usize,
+
+    /// Omit terminal transcript tail
+    #[arg(long)]
+    pub no_transcript: bool,
 }
 
 #[derive(Args)]
@@ -313,6 +357,61 @@ pub struct PurgeArgs {
     /// Required: confirm destructive purge
     #[arg(long)]
     pub yes: bool,
+
+    /// Apply retention from `.blackbox/config.toml` (dry-run unless --yes)
+    #[arg(long)]
+    pub policy_from_config: bool,
+}
+
+#[derive(Args)]
+pub struct MaybeRunArgs {
+    /// Optional label
+    #[arg(long)]
+    pub name: Option<String>,
+
+    /// Command after `--`
+    #[arg(last = true, required = true)]
+    pub command: Vec<String>,
+}
+
+#[derive(Args, Default)]
+pub struct EnableArgs {
+    /// Also print shell functions to install (default always prints snippets)
+    #[arg(long)]
+    pub install_shell: bool,
+
+    /// Shell for snippets: fish, bash, zsh (default: detect / bash)
+    #[arg(long)]
+    pub shell: Option<String>,
+}
+
+#[derive(Args)]
+pub struct SummaryArgs {
+    /// Run ID, prefix, or "latest"
+    pub run_id: String,
+
+    /// Smaller event window (fast path)
+    #[arg(long)]
+    pub short: bool,
+
+    /// Larger SQL limit for big runs
+    #[arg(long)]
+    pub full: bool,
+}
+
+#[derive(Args)]
+pub struct GcArgs {
+    /// Apply deletions (requires --yes)
+    #[arg(long)]
+    pub apply: bool,
+
+    /// Confirm apply
+    #[arg(long)]
+    pub yes: bool,
+
+    /// Also GC orphan blobs after delete
+    #[arg(long)]
+    pub gc: bool,
 }
 
 #[derive(Args)]
@@ -329,6 +428,10 @@ pub struct DiffArgs {
     pub run_a: String,
     /// Second run ID, prefix, or "latest"
     pub run_b: String,
+
+    /// Ordered tool/event trajectory alignment (greedy LCP)
+    #[arg(long)]
+    pub trajectory: bool,
 }
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -461,18 +564,36 @@ impl Cli {
             Command::Completions(args) => cmd_completions(args),
             Command::Serve(args) => cmd_serve(self, args).await,
             Command::Sync(args) => cmd_sync(self, args).await,
+            Command::MaybeRun(args) => cmd_maybe_run(self, args).await,
+            Command::Enable(args) => cmd_enable(self, args).await,
+            Command::Disable => cmd_disable(self).await,
+            Command::Postmortem(args) | Command::Summary(args) => cmd_summary(self, args).await,
+            Command::Gc(args) => cmd_gc(self, args).await,
+            Command::Context(args) => cmd_context(self, args).await,
         }
     }
 }
 
 // ── Shared helpers ────────────────────────────────────────────────
 
+/// Open the project store using ancestor-aware discovery (K21).
 fn open_store(cli: &Cli) -> anyhow::Result<SqliteStore> {
-    let project = std::env::current_dir().ok();
-    let paths = BlackboxPaths::resolve(project.as_deref(), cli.store.as_deref())?;
-    paths.ensure_dirs()?;
-    tracing::debug!(db = %paths.db_path.display(), blobs = %paths.blob_dir.display(), "opening store");
-    SqliteStore::open_with_blobs(&paths.db_path, &paths.blob_dir)
+    let cwd = std::env::current_dir()?;
+    let discovery = discover_project(&cwd, cli.store.as_deref())?;
+    discovery.paths.ensure_dirs()?;
+    tracing::debug!(
+        db = %discovery.paths.db_path.display(),
+        blobs = %discovery.paths.blob_dir.display(),
+        project = %discovery.project_root.display(),
+        "opening store"
+    );
+    SqliteStore::open_with_blobs(&discovery.paths.db_path, &discovery.paths.blob_dir)
+}
+
+/// Discover project without opening the DB (doctor, enable, etc.).
+fn discover(cli: &Cli) -> anyhow::Result<crate::config::ProjectDiscovery> {
+    let cwd = std::env::current_dir()?;
+    discover_project(&cwd, cli.store.as_deref())
 }
 
 /// Resolve a run id: `"latest"`, full UUID, or unique prefix.
@@ -640,6 +761,16 @@ async fn cmd_runs(cli: &Cli, args: &RunsArgs) -> anyhow::Result<()> {
             .iter()
             .any(|v| v.contains(&s) || s.contains(v))
         {
+            if cli.json {
+                return output::emit_err(
+                    "runs",
+                    output::CliErrorCode::InvalidArgs,
+                    format!(
+                        "unknown status {:?}; valid values: Pending, Running, Succeeded, Failed, Cancelled, Unknown",
+                        status
+                    ),
+                );
+            }
             anyhow::bail!(
                 "unknown status {:?}; valid values: Pending, Running, Succeeded, Failed, Cancelled, Unknown",
                 status
@@ -649,6 +780,13 @@ async fn cmd_runs(cli: &Cli, args: &RunsArgs) -> anyhow::Result<()> {
     }
     if let Some(limit) = args.limit {
         runs.truncate(limit);
+    }
+
+    if cli.json {
+        let view = views::RunsView {
+            runs: runs.iter().map(views::RunSummaryView::from_run).collect(),
+        };
+        return output::emit_ok("runs", &view);
     }
 
     println!("Store: {}", store.db_path().display());
@@ -795,9 +933,6 @@ async fn cmd_stats(cli: &Cli, args: &StatsArgs) -> anyhow::Result<()> {
 
     let store = open_store(cli)?;
     let runs = store.list_runs().await?;
-    println!("Store: {}", store.db_path().display());
-    println!("Blobs: {}", store.blob_dir().display());
-    println!();
 
     let mut by_status: HashMap<String, usize> = HashMap::new();
     let mut by_adapter: HashMap<String, usize> = HashMap::new();
@@ -815,22 +950,7 @@ async fn cmd_stats(cli: &Cli, args: &StatsArgs) -> anyhow::Result<()> {
         *by_adapter.entry(adapter.to_string()).or_insert(0) += 1;
     }
 
-    println!("Runs: {} ({} tagged)", runs.len(), tagged);
-    println!("  by status:");
-    let mut statuses: Vec<_> = by_status.into_iter().collect();
-    statuses.sort_by_key(|b| std::cmp::Reverse(b.1));
-    for (s, n) in statuses {
-        println!("    {:<12} {}", s, n);
-    }
-    println!("  by adapter:");
-    let mut adapters: Vec<_> = by_adapter.into_iter().collect();
-    adapters.sort_by_key(|b| std::cmp::Reverse(b.1));
-    for (a, n) in adapters {
-        println!("    {:<12} {}", a, n);
-    }
-
-    // Sample recent runs for event / tool / error counts
-    let sample: Vec<_> = runs.into_iter().take(args.max_runs).collect();
+    let sample: Vec<_> = runs.iter().take(args.max_runs).cloned().collect();
     let mut total_events = 0usize;
     let mut total_tools = 0usize;
     let mut total_errors = 0usize;
@@ -849,20 +969,9 @@ async fn cmd_stats(cli: &Cli, args: &StatsArgs) -> anyhow::Result<()> {
         }
     }
 
-    println!();
-    println!(
-        "Events (last {} runs): {} total, {} tool.call, {} errors",
-        sample.len(),
-        total_events,
-        total_tools,
-        total_errors
-    );
     let mut kinds: Vec<_> = kind_counts.into_iter().collect();
     kinds.sort_by_key(|b| std::cmp::Reverse(b.1));
-    println!("  top kinds:");
-    for (k, n) in kinds.into_iter().take(12) {
-        println!("    {:<28} {}", k, n);
-    }
+    let top_kinds: Vec<_> = kinds.into_iter().take(12).collect();
 
     let blob_files = std::fs::read_dir(store.blob_dir())
         .map(|rd| rd.filter_map(|e| e.ok()).count())
@@ -875,6 +984,56 @@ async fn cmd_stats(cli: &Cli, args: &StatsArgs) -> anyhow::Result<()> {
                 .sum()
         })
         .unwrap_or(0);
+
+    if cli.json {
+        let view = views::StatsView {
+            db_path: store.db_path().display().to_string(),
+            blob_dir: store.blob_dir().display().to_string(),
+            run_count: runs.len(),
+            tagged_run_count: tagged,
+            by_status: by_status.clone(),
+            by_adapter: by_adapter.clone(),
+            sample_run_count: sample.len(),
+            total_events,
+            total_tool_calls: total_tools,
+            total_errors,
+            top_kinds: top_kinds.clone(),
+            blob_files,
+            blob_bytes,
+        };
+        return output::emit_ok("stats", &view);
+    }
+
+    println!("Store: {}", store.db_path().display());
+    println!("Blobs: {}", store.blob_dir().display());
+    println!();
+    println!("Runs: {} ({} tagged)", runs.len(), tagged);
+    println!("  by status:");
+    let mut statuses: Vec<_> = by_status.into_iter().collect();
+    statuses.sort_by_key(|b| std::cmp::Reverse(b.1));
+    for (s, n) in statuses {
+        println!("    {:<12} {}", s, n);
+    }
+    println!("  by adapter:");
+    let mut adapters: Vec<_> = by_adapter.into_iter().collect();
+    adapters.sort_by_key(|b| std::cmp::Reverse(b.1));
+    for (a, n) in adapters {
+        println!("    {:<12} {}", a, n);
+    }
+
+    println!();
+    println!(
+        "Events (last {} runs): {} total, {} tool.call, {} errors",
+        sample.len(),
+        total_events,
+        total_tools,
+        total_errors
+    );
+    println!("  top kinds:");
+    for (k, n) in top_kinds {
+        println!("    {:<28} {}", k, n);
+    }
+
     println!();
     println!(
         "Blobs: {} files, {:.1} MiB",
@@ -907,6 +1066,86 @@ async fn cmd_show(cli: &Cli, args: &ShowArgs) -> anyhow::Result<()> {
     let events = store.get_events(&run_id).await?;
     let checkpoints = store.get_checkpoints(&run_id).await?;
 
+    let tools: Vec<_> = events.iter().filter(|e| e.kind == "tool.call").collect();
+    let errors: Vec<_> = events
+        .iter()
+        .filter(|e| matches!(e.status, crate::core::event::EventStatus::Error))
+        .collect();
+    let fs_live: Vec<_> = events
+        .iter()
+        .filter(|e| e.kind.starts_with("filesystem.") && e.kind != "filesystem.snapshot")
+        .filter(|e| !e.kind.contains("observer"))
+        .collect();
+
+    // Quick analysis summary
+    let detector = crate::analysis::error_detector::ErrorDetector::new();
+    let mut structured = 0usize;
+    for ev in &events {
+        structured += detector.extract_errors(ev).len();
+    }
+
+    let resume_cmd = crate::resume::resume_command(&run, &events, &checkpoints);
+    let tool_tx = if args.tools || cli.json {
+        Some(crate::transcript::rebuild_tool_transcript(&events))
+    } else {
+        None
+    };
+    let terminal_tx = if args.transcript {
+        match crate::transcript::rebuild_terminal_transcript(&store, &events).await {
+            Ok(text) => Some(text),
+            Err(e) => {
+                if !cli.json {
+                    eprintln!("failed to rebuild transcript: {e}");
+                }
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    if cli.json {
+        let tool_calls: Vec<_> = tools
+            .iter()
+            .map(|t| views::ToolCallSummary {
+                sequence: t.sequence,
+                tool_name: t
+                    .metadata
+                    .get("tool_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("?")
+                    .to_string(),
+            })
+            .collect();
+        let mut hints = vec![
+            format!("blackbox timeline {} --semantic", short_id(&run.id)),
+            format!("blackbox show {} --transcript", short_id(&run.id)),
+        ];
+        if matches!(
+            run.status,
+            crate::core::run::RunStatus::Failed | crate::core::run::RunStatus::Cancelled
+        ) {
+            hints.push(format!("blackbox postmortem {}", short_id(&run.id)));
+        }
+        let view = views::ShowView {
+            run: run.clone(),
+            event_count: events.len(),
+            checkpoint_count: checkpoints.len(),
+            tool_calls,
+            error_event_count: errors.len(),
+            structured_error_count: structured,
+            filesystem_event_count: fs_live.len(),
+            resume: views::ResumeView {
+                available: resume_cmd.is_some(),
+                command: resume_cmd.clone(),
+            },
+            hints,
+            tool_transcript: if args.tools { tool_tx.clone() } else { None },
+            terminal_transcript: terminal_tx.clone(),
+        };
+        return output::emit_ok("show", &view);
+    }
+
     println!("Run {}", run.id);
     println!("  Status:   {:?}", run.status);
     println!("  Exit:     {:?}", run.exit_code);
@@ -921,17 +1160,6 @@ async fn cmd_show(cli: &Cli, args: &ShowArgs) -> anyhow::Result<()> {
     }
     println!("  Events:   {}", events.len());
     println!("  Checkpts: {}", checkpoints.len());
-
-    let tools: Vec<_> = events.iter().filter(|e| e.kind == "tool.call").collect();
-    let errors: Vec<_> = events
-        .iter()
-        .filter(|e| matches!(e.status, crate::core::event::EventStatus::Error))
-        .collect();
-    let fs_live: Vec<_> = events
-        .iter()
-        .filter(|e| e.kind.starts_with("filesystem.") && e.kind != "filesystem.snapshot")
-        .filter(|e| !e.kind.contains("observer"))
-        .collect();
 
     if !tools.is_empty() {
         println!();
@@ -962,12 +1190,6 @@ async fn cmd_show(cli: &Cli, args: &ShowArgs) -> anyhow::Result<()> {
         println!("Filesystem events: {}", fs_live.len());
     }
 
-    // Quick analysis summary
-    let detector = crate::analysis::error_detector::ErrorDetector::new();
-    let mut structured = 0usize;
-    for ev in &events {
-        structured += detector.extract_errors(ev).len();
-    }
     if structured > 0 {
         println!();
         println!(
@@ -977,10 +1199,9 @@ async fn cmd_show(cli: &Cli, args: &ShowArgs) -> anyhow::Result<()> {
         );
     }
 
-    // Resume hint
-    if let Some(cmd) = crate::resume::resume_command(&run, &events, &checkpoints) {
+    if let Some(ref cmd) = resume_cmd {
         println!();
-        println!("Resume: {}", crate::resume::format_command(&cmd));
+        println!("Resume: {}", crate::resume::format_command(cmd));
         println!(
             "  blackbox fork {} --launch   # fork + relaunch under observation",
             short_id(&run.id)
@@ -990,7 +1211,7 @@ async fn cmd_show(cli: &Cli, args: &ShowArgs) -> anyhow::Result<()> {
     if args.tools {
         println!();
         println!("── tool transcript ──");
-        let tools_tx = crate::transcript::rebuild_tool_transcript(&events);
+        let tools_tx = tool_tx.unwrap_or_default();
         if tools_tx.is_empty() {
             println!("(no tool.call events)");
         } else {
@@ -1001,10 +1222,9 @@ async fn cmd_show(cli: &Cli, args: &ShowArgs) -> anyhow::Result<()> {
     if args.transcript {
         println!();
         println!("── terminal transcript ──");
-        match crate::transcript::rebuild_terminal_transcript(&store, &events).await {
-            Ok(text) if text.trim().is_empty() => println!("(empty)"),
-            Ok(text) => {
-                // Cap display for huge traces
+        match terminal_tx {
+            Some(text) if text.trim().is_empty() => println!("(empty)"),
+            Some(text) => {
                 if text.len() > 50_000 {
                     let end = text.floor_char_boundary(50_000);
                     print!("{}", &text[..end]);
@@ -1016,7 +1236,7 @@ async fn cmd_show(cli: &Cli, args: &ShowArgs) -> anyhow::Result<()> {
                     }
                 }
             }
-            Err(e) => eprintln!("failed to rebuild transcript: {e}"),
+            None => {}
         }
     }
 
@@ -1055,6 +1275,20 @@ async fn cmd_timeline(cli: &Cli, args: &TimelineArgs) -> anyhow::Result<()> {
             true
         })
         .collect();
+
+    if cli.json {
+        let view = views::TimelineView {
+            run_id: run_id.clone(),
+            semantic: args.semantic,
+            total_matched: events.len(),
+            truncated: false,
+            events: events
+                .iter()
+                .map(|ev| views::TimelineEventView::from_event(ev, event_detail_line(ev)))
+                .collect(),
+        };
+        return output::emit_ok("timeline", &view);
+    }
 
     if events.is_empty() {
         println!("No events recorded for run {}.", short_id(&run_id));
@@ -1135,12 +1369,36 @@ async fn cmd_inspect(cli: &Cli, args: &InspectArgs) -> anyhow::Result<()> {
     let run_id = resolve_run_id(&store, &args.run_id).await?;
     let event = resolve_event_id(&store, &args.event_id, Some(&run_id)).await?;
 
-    if event.run_id != run_id {
+    if event.run_id != run_id && !cli.json {
         eprintln!(
             "warning: event belongs to run {}, not {}",
             short_id(&event.run_id),
             short_id(&run_id)
         );
+    }
+
+    let mut blob_text = None;
+    if let Some(ref b) = event.output_blob {
+        if let Some(bref) = crate::core::blob::BlobReference::try_new(b.clone(), 0) {
+            if let Ok(data) = store.load_blob(&bref).await {
+                let text = String::from_utf8_lossy(&data);
+                blob_text = Some(if text.len() > 2000 {
+                    let end = text.floor_char_boundary(2000);
+                    format!("{}…\n  ({} bytes total)", &text[..end], data.len())
+                } else {
+                    text.to_string()
+                });
+            }
+        }
+    }
+
+    if cli.json {
+        let view = views::InspectView {
+            run_id: run_id.clone(),
+            event: event.clone(),
+            blob_text,
+        };
+        return output::emit_ok("inspect", &view);
     }
 
     println!("Event: {}", event.id);
@@ -1159,19 +1417,9 @@ async fn cmd_inspect(cli: &Cli, args: &InspectArgs) -> anyhow::Result<()> {
     println!("  Side Eff:  {:?}", event.side_effect);
     if let Some(ref b) = event.output_blob {
         println!("  Out blob:  {}", b);
-        // Try load and show preview
-        if let Some(bref) = crate::core::blob::BlobReference::try_new(b.clone(), 0) {
-            if let Ok(data) = store.load_blob(&bref).await {
-                let text = String::from_utf8_lossy(&data);
-                let show = if text.len() > 2000 {
-                    let end = text.floor_char_boundary(2000);
-                    format!("{}…\n  ({} bytes total)", &text[..end], data.len())
-                } else {
-                    text.to_string()
-                };
-                println!("  ── blob content ──");
-                println!("{}", show);
-            }
+        if let Some(ref show) = blob_text {
+            println!("  ── blob content ──");
+            println!("{}", show);
         }
     }
     if let Some(ref b) = event.input_blob {
@@ -1219,6 +1467,45 @@ async fn cmd_diff(cli: &Cli, args: &DiffArgs) -> anyhow::Result<()> {
 
     let events_a = store.get_events(&id_a).await?;
     let events_b = store.get_events(&id_b).await?;
+
+    if args.trajectory || cli.json {
+        let traj = crate::trajectory::diff_trajectories(&id_a, &events_a, &id_b, &events_b);
+        if cli.json {
+            return output::emit_ok("diff", &traj);
+        }
+        if args.trajectory {
+            println!(
+                "Trajectory diff {} vs {}  common_prefix={}",
+                short_id(&id_a),
+                short_id(&id_b),
+                traj.common_prefix_len
+            );
+            if let Some(div) = &traj.first_divergence {
+                println!("  first divergence at index {}", div.index);
+                if let Some(a) = &div.a {
+                    println!("    A: seq={} {}", a.sequence, a.label);
+                }
+                if let Some(b) = &div.b {
+                    println!("    B: seq={} {}", b.sequence, b.label);
+                }
+            } else {
+                println!("  trajectories identical (semantic)");
+            }
+            if !traj.only_a.is_empty() {
+                println!("  only in A ({}):", traj.only_a.len());
+                for s in traj.only_a.iter().take(15) {
+                    println!("    seq={} {}", s.sequence, s.label);
+                }
+            }
+            if !traj.only_b.is_empty() {
+                println!("  only in B ({}):", traj.only_b.len());
+                for s in traj.only_b.iter().take(15) {
+                    println!("    seq={} {}", s.sequence, s.label);
+                }
+            }
+            return Ok(());
+        }
+    }
 
     println!("Comparing runs:");
     println!(
@@ -1579,15 +1866,28 @@ async fn cmd_analyze(cli: &Cli, args: &AnalyzeArgs) -> anyhow::Result<()> {
     let events = store.get_events(&run_id).await?;
 
     if events.is_empty() {
+        if cli.json {
+            let view = views::AnalyzeView {
+                run_id: run_id.clone(),
+                derived_count: 0,
+                structured_errors: vec![],
+                by_kind: Default::default(),
+                samples: vec![],
+                persisted: false,
+            };
+            return output::emit_ok("analyze", &view);
+        }
         println!("No events to analyze for run {}.", short_id(&run_id));
         return Ok(());
     }
 
-    println!(
-        "Analyzing run {} ({} events)…",
-        short_id(&run_id),
-        events.len()
-    );
+    if !cli.json {
+        println!(
+            "Analyzing run {} ({} events)…",
+            short_id(&run_id),
+            events.len()
+        );
+    }
 
     let detector = ErrorDetector::new();
     let classifier = SideEffectClassifier::new();
@@ -1598,31 +1898,79 @@ async fn cmd_analyze(cli: &Cli, args: &AnalyzeArgs) -> anyhow::Result<()> {
     derived.extend(classifier.analyze(&events).await?);
     derived.extend(correlator.analyze(&events).await?);
 
-    // Also print structured errors inline
+    // Structured errors + optional text print
+    let mut structured_errors = Vec::new();
     let mut error_count = 0usize;
     for ev in &events {
         for err in detector.extract_errors(ev) {
             error_count += 1;
-            println!(
-                "  error  seq={} type={} {}{}{}",
-                ev.sequence,
-                err.error_type,
-                err.message.chars().take(80).collect::<String>(),
-                err.file
-                    .as_ref()
-                    .map(|f| format!(" @{}", f))
-                    .unwrap_or_default(),
-                err.line.map(|l| format!(":{}", l)).unwrap_or_default(),
-            );
+            structured_errors.push(views::StructuredErrorView {
+                sequence: ev.sequence,
+                error_type: err.error_type.clone(),
+                message: err.message.clone(),
+                file: err.file.clone(),
+                line: err.line,
+            });
+            if !cli.json {
+                println!(
+                    "  error  seq={} type={} {}{}{}",
+                    ev.sequence,
+                    err.error_type,
+                    err.message.chars().take(80).collect::<String>(),
+                    err.file
+                        .as_ref()
+                        .map(|f| format!(" @{}", f))
+                        .unwrap_or_default(),
+                    err.line.map(|l| format!(":{}", l)).unwrap_or_default(),
+                );
+            }
         }
     }
 
     // Quiet summary: counts by kind, sample of high-signal events
     use std::collections::HashMap;
-    let mut by_kind: HashMap<&str, usize> = HashMap::new();
+    let mut by_kind: HashMap<String, usize> = HashMap::new();
     for d in &derived {
-        *by_kind.entry(d.kind.as_str()).or_insert(0) += 1;
+        *by_kind.entry(d.kind.clone()).or_insert(0) += 1;
     }
+
+    if cli.json {
+        let samples: Vec<_> = derived
+            .iter()
+            .filter(|d| d.kind == "analysis.side_effect" || d.kind.starts_with("analysis.error"))
+            .take(15)
+            .map(|d| views::DerivedSampleView {
+                kind: d.kind.clone(),
+                sequence: d.sequence,
+                side_effect: d.side_effect.clone(),
+                detail: event_detail_line(d),
+            })
+            .collect();
+        let mut persisted = false;
+        if args.persist && !derived.is_empty() {
+            let max_seq = events.iter().map(|e| e.sequence).max().unwrap_or(0);
+            let n = derived.len();
+            for (i, d) in derived.iter_mut().enumerate() {
+                d.sequence = max_seq + 1 + i as u64;
+            }
+            store.insert_events_batch(&derived).await?;
+            if let Ok(Some(mut run)) = store.get_run(&run_id).await {
+                run.next_sequence = max_seq + 1 + n as u64;
+                let _ = store.update_run(&run).await;
+            }
+            persisted = true;
+        }
+        let view = views::AnalyzeView {
+            run_id: run_id.clone(),
+            derived_count: derived.len(),
+            structured_errors,
+            by_kind,
+            samples,
+            persisted,
+        };
+        return output::emit_ok("analyze", &view);
+    }
+
     println!();
     println!(
         "Derived events: {}  (structured errors: {})",
@@ -1747,6 +2095,30 @@ async fn cmd_search(cli: &Cli, args: &SearchArgs) -> anyhow::Result<()> {
 
     let store = open_store(cli)?;
     let hits = search_store(&store, &args.query, args.max_runs, args.limit).await?;
+    let backend = hits.first().map(|h| h.backend).unwrap_or("scan");
+
+    if cli.json {
+        let view = views::SearchView {
+            query: args.query.clone(),
+            truncated: hits.len() as u32 >= args.limit as u32,
+            backend: backend.to_string(),
+            max_runs_scanned: args.max_runs,
+            hits: hits
+                .iter()
+                .map(|h| views::SearchHitView {
+                    run_id: h.run_id.clone(),
+                    short_run_id: short_id(&h.run_id).to_string(),
+                    event_id: h.event_id.clone(),
+                    score: h.score as f64,
+                    kind: h.kind.clone(),
+                    sequence: h.sequence,
+                    snippet: h.snippet.clone(),
+                })
+                .collect(),
+        };
+        return output::emit_ok("search", &view);
+    }
+
     if hits.is_empty() {
         println!("No hits for {:?}.", args.query);
         return Ok(());
@@ -1757,7 +2129,6 @@ async fn cmd_search(cli: &Cli, args: &SearchArgs) -> anyhow::Result<()> {
         hits.len(),
         args.max_runs
     );
-    let backend = hits.first().map(|h| h.backend).unwrap_or("scan");
     println!(
         "{:<10} {:<8} {:<22} {:<6} SNIPPET  [{}]",
         "RUN", "SCORE", "KIND", "SEQ", backend
@@ -1933,6 +2304,10 @@ async fn cmd_rm(cli: &Cli, args: &RmArgs) -> anyhow::Result<()> {
 async fn cmd_purge(cli: &Cli, args: &PurgeArgs) -> anyhow::Result<()> {
     use crate::scrub::gc_unreferenced_blobs;
 
+    if args.policy_from_config {
+        return cmd_retention_policy(cli, args.yes, args.gc, false).await;
+    }
+
     if !args.yes {
         anyhow::bail!("purge is destructive; pass --yes to confirm");
     }
@@ -1940,7 +2315,9 @@ async fn cmd_purge(cli: &Cli, args: &PurgeArgs) -> anyhow::Result<()> {
         anyhow::bail!("--keep 0 would delete ALL runs; refusing (use --keep N with N >= 1)");
     }
     if args.keep.is_none() && !args.pending && !args.failed {
-        anyhow::bail!("specify at least one of --keep N, --pending, --failed");
+        anyhow::bail!(
+            "specify at least one of --keep N, --pending, --failed, or --policy-from-config"
+        );
     }
 
     let store = open_store(cli)?;
@@ -1988,32 +2365,396 @@ async fn cmd_purge(cli: &Cli, args: &PurgeArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn cmd_gc(cli: &Cli, args: &GcArgs) -> anyhow::Result<()> {
+    let apply = args.apply && args.yes;
+    if args.apply && !args.yes {
+        anyhow::bail!("gc --apply requires --yes");
+    }
+    cmd_retention_policy(cli, apply, args.gc, !apply).await
+}
+
+/// Retention policy from config (dry-run by default).
+async fn cmd_retention_policy(
+    cli: &Cli,
+    apply: bool,
+    do_blob_gc: bool,
+    force_dry_run: bool,
+) -> anyhow::Result<()> {
+    use crate::retention::plan_deletions;
+    use crate::scrub::gc_unreferenced_blobs;
+
+    let discovery = discover(cli)?;
+    let cfg = discovery
+        .config
+        .as_ref()
+        .ok_or_else(|| {
+            anyhow::anyhow!("no .blackbox/config.toml found; run `blackbox enable` first")
+        })?
+        .retention
+        .clone();
+
+    let store = open_store(cli)?;
+    let blob_dir = store.blob_dir().to_path_buf();
+    let store: Arc<dyn TraceStore> = Arc::new(store);
+    let runs = store.list_runs().await?;
+    let candidates = plan_deletions(&runs, &cfg);
+
+    let dry = force_dry_run || !apply;
+    let cand_json: Vec<_> = candidates
+        .iter()
+        .map(|c| {
+            serde_json::json!({
+                "id": c.id,
+                "short_id": short_id(&c.id),
+                "reason": c.reason,
+            })
+        })
+        .collect();
+
+    if dry {
+        if cli.json {
+            #[derive(serde::Serialize)]
+            struct RetView {
+                dry_run: bool,
+                would_delete: usize,
+                candidates: Vec<serde_json::Value>,
+            }
+            return output::emit_ok(
+                "gc",
+                &RetView {
+                    dry_run: true,
+                    would_delete: candidates.len(),
+                    candidates: cand_json,
+                },
+            );
+        }
+        if candidates.is_empty() {
+            println!("Retention dry-run: nothing to delete.");
+        } else {
+            println!(
+                "Retention dry-run: would delete {} run(s) (keep={}, max_age_days={:?})",
+                candidates.len(),
+                cfg.keep_runs,
+                cfg.max_age_days
+            );
+            for c in &candidates {
+                println!("  {}  {}", short_id(&c.id), c.reason);
+            }
+            println!("Re-run with: blackbox gc --apply --yes");
+        }
+        return Ok(());
+    }
+
+    let mut deleted = 0usize;
+    for c in &candidates {
+        if store.delete_run(&c.id).await? {
+            deleted += 1;
+        }
+    }
+    let mut files = 0usize;
+    let mut meta = 0usize;
+    if do_blob_gc || cfg.auto_gc_blobs {
+        let r = gc_unreferenced_blobs(store.as_ref(), &blob_dir, false).await?;
+        files = r.0;
+        meta = r.1;
+    }
+    if cli.json {
+        #[derive(serde::Serialize)]
+        struct RetView {
+            dry_run: bool,
+            deleted: usize,
+            candidates: Vec<serde_json::Value>,
+            blob_files_removed: usize,
+            blob_meta_removed: usize,
+        }
+        return output::emit_ok(
+            "gc",
+            &RetView {
+                dry_run: false,
+                deleted,
+                candidates: cand_json,
+                blob_files_removed: files,
+                blob_meta_removed: meta,
+            },
+        );
+    }
+    println!("Deleted {deleted} run(s) by retention policy.");
+    if do_blob_gc || cfg.auto_gc_blobs {
+        println!("gc: removed {files} orphan blob file(s), {meta} metadata row(s)");
+    }
+    Ok(())
+}
+
+async fn cmd_maybe_run(cli: &Cli, args: &MaybeRunArgs) -> anyhow::Result<()> {
+    use crate::maybe_run::{
+        decide, exec_passthrough, run_args_for_record, ENV_ACTIVE_RUN, ENV_OFF,
+    };
+
+    let cwd = std::env::current_dir()?;
+    let off = std::env::var_os(ENV_OFF).is_some();
+    let active = std::env::var_os(ENV_ACTIVE_RUN).is_some();
+    let action = decide(&args.command, &cwd, cli.store.as_deref(), off, active)?;
+
+    match action {
+        crate::maybe_run::MaybeRunAction::Passthrough { reason } => {
+            tracing::debug!(%reason, "maybe-run passthrough");
+            exec_passthrough(&args.command)
+        }
+        crate::maybe_run::MaybeRunAction::Record { project_root, tags } => {
+            let run_args =
+                run_args_for_record(args.command.clone(), project_root, tags, args.name.clone());
+            cmd_run(cli, &run_args).await
+        }
+    }
+}
+
+async fn cmd_enable(cli: &Cli, args: &EnableArgs) -> anyhow::Result<()> {
+    use crate::config::BlackboxConfig;
+    use crate::maybe_run::{default_enable_config, shell_snippet_bash, shell_snippet_fish};
+
+    let cwd = std::env::current_dir()?;
+    // Prefer existing project root if any; else cwd
+    let discovery = discover_project(&cwd, cli.store.as_deref())?;
+    let project_root = if discovery.config.is_some()
+        || discovery.paths.db_path.exists()
+        || discovery.paths.root.join("config.toml").exists()
+    {
+        discovery.project_root
+    } else {
+        cwd.canonicalize().unwrap_or(cwd)
+    };
+
+    let bb = project_root.join(".blackbox");
+    std::fs::create_dir_all(&bb)?;
+    let config_path = bb.join("config.toml");
+
+    let mut cfg = if let Some(existing) = BlackboxConfig::load_from_path(&config_path)? {
+        let mut c = existing;
+        c.enabled = true;
+        c
+    } else {
+        default_enable_config()
+    };
+    cfg.enabled = true;
+    cfg.write_to_path(&config_path)?;
+    // Ensure dirs for store
+    discovery.paths.ensure_dirs().ok();
+    let paths = crate::config::BlackboxPaths {
+        root: bb.clone(),
+        db_path: bb.join("blackbox.db"),
+        blob_dir: bb.join("blobs"),
+    };
+    paths.ensure_dirs()?;
+
+    let wrap = cfg.capture.wrap.clone();
+    let shell = if let Some(ref s) = args.shell {
+        s.as_str()
+    } else if std::env::var("SHELL").unwrap_or_default().contains("fish") {
+        "fish"
+    } else {
+        "bash"
+    };
+
+    if cli.json {
+        #[derive(serde::Serialize)]
+        struct En {
+            enabled: bool,
+            project_root: String,
+            config_path: String,
+            wrap: Vec<String>,
+        }
+        return output::emit_ok(
+            "enable",
+            &En {
+                enabled: true,
+                project_root: project_root.display().to_string(),
+                config_path: config_path.display().to_string(),
+                wrap: wrap.clone(),
+            },
+        );
+    }
+
+    println!("Enabled blackbox for {}", project_root.display());
+    println!("  config: {}", config_path.display());
+    println!("  wrap:   {}", wrap.join(", "));
+    println!();
+    println!("Add shell wrappers (paste into your rc file):");
+    println!();
+    if shell == "fish" {
+        print!("{}", shell_snippet_fish(&wrap));
+    } else {
+        print!("{}", shell_snippet_bash(&wrap));
+    }
+    if args.install_shell {
+        println!("# --install-shell: auto-edit of shell rc is not performed in 0.2; paste above.");
+    }
+    println!("Disable with: blackbox disable");
+    println!("Record only when enabled + basename in wrap list.");
+    Ok(())
+}
+
+async fn cmd_disable(cli: &Cli) -> anyhow::Result<()> {
+    use crate::config::BlackboxConfig;
+
+    let discovery = discover(cli)?;
+    let config_path = discovery.paths.root.join("config.toml");
+    let mut cfg = BlackboxConfig::load_from_path(&config_path)?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "no config at {}; run blackbox enable first",
+            config_path.display()
+        )
+    })?;
+    cfg.enabled = false;
+    cfg.write_to_path(&config_path)?;
+
+    if cli.json {
+        #[derive(serde::Serialize)]
+        struct D {
+            enabled: bool,
+            config_path: String,
+        }
+        return output::emit_ok(
+            "disable",
+            &D {
+                enabled: false,
+                config_path: config_path.display().to_string(),
+            },
+        );
+    }
+    println!("Disabled ambient capture ({})", config_path.display());
+    println!("Shell functions may remain; maybe-run will passthrough.");
+    Ok(())
+}
+
+async fn cmd_context(cli: &Cli, args: &ContextArgs) -> anyhow::Result<()> {
+    use crate::context::{build_context_pack, ContextOptions};
+
+    if !args.for_resume {
+        anyhow::bail!("specify --for-resume (only mode in 0.3)");
+    }
+    let store = open_store(cli)?;
+    let run_id = resolve_run_id(&store, &args.run_id).await?;
+    let run = store
+        .get_run(&run_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("run not found"))?;
+
+    let pack = build_context_pack(
+        &store,
+        &run,
+        ContextOptions {
+            max_tokens: args.max_tokens,
+            include_transcript: !args.no_transcript,
+        },
+    )
+    .await?;
+
+    if cli.json {
+        return output::emit_ok("context", &pack);
+    }
+    println!(
+        "Context pack {} (≈{} tokens{})",
+        pack.short_id,
+        pack.approx_tokens,
+        if pack.truncated { ", truncated" } else { "" }
+    );
+    println!(
+        "  status={:?} exit={:?} tools={} errors={}",
+        pack.summary.status,
+        pack.summary.exit_code,
+        pack.summary.tools.total,
+        pack.summary.errors.len()
+    );
+    if !pack.last_tools.is_empty() {
+        println!("  last tools: {}", pack.last_tools.join(", "));
+    }
+    if !pack.failed_tools.is_empty() {
+        println!("  failed tools:");
+        for t in &pack.failed_tools {
+            println!("    seq={} {} {}", t.sequence, t.name, t.detail);
+        }
+    }
+    if let Some(ref cmd) = pack.resume_command {
+        println!("  resume: {}", cmd.join(" "));
+    }
+    if let Some(ref tail) = pack.transcript_tail {
+        println!("  ── transcript tail ──");
+        println!("{}", tail);
+    }
+    println!(
+        "  tip: blackbox context {} --for-resume --json",
+        pack.short_id
+    );
+    Ok(())
+}
+
+async fn cmd_summary(cli: &Cli, args: &SummaryArgs) -> anyhow::Result<()> {
+    use crate::summary::{build_summary, format_summary_text, SummaryOptions};
+
+    let store = open_store(cli)?;
+    let run_id = resolve_run_id(&store, &args.run_id).await?;
+    let run = store
+        .get_run(&run_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("run not found"))?;
+
+    // Design: default SQL-capped; --short smaller; --full larger still limited
+    let opts = if args.full {
+        SummaryOptions {
+            short: false,
+            full: true,
+        }
+    } else if args.short {
+        SummaryOptions {
+            short: true,
+            full: false,
+        }
+    } else {
+        SummaryOptions::default()
+    };
+
+    let view = build_summary(&store, &run, opts).await?;
+    if cli.json {
+        return output::emit_ok("postmortem", &view);
+    }
+    print!("{}", format_summary_text(&view));
+    Ok(())
+}
+
 async fn cmd_doctor(cli: &Cli, args: &DoctorArgs) -> anyhow::Result<()> {
     use crate::redaction::scanner::SecretScanner;
     use crate::redaction::RedactionConfig;
+    use crate::storage::sqlite::SCHEMA_VERSION;
 
-    println!("blackbox doctor");
-    println!("{}", "─".repeat(48));
-
+    let discovery = discover(cli)?;
+    let paths = &discovery.paths;
     let project = std::env::current_dir().ok();
-    let paths = BlackboxPaths::resolve(project.as_deref(), cli.store.as_deref())?;
-    println!(
-        "cwd:        {}",
-        project
-            .as_ref()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "?".into())
-    );
-    println!("db path:    {}", paths.db_path.display());
-    println!("blob dir:   {}", paths.blob_dir.display());
-    println!("db exists:  {}", paths.db_path.exists());
-    println!("blobs dir:  {}", paths.blob_dir.exists());
+    let on_path = std::process::Command::new("sh")
+        .arg("-c")
+        .arg("command -v blackbox >/dev/null 2>&1")
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    let mut run_count = None;
+    let mut running_count = None;
+    let mut fts5 = "unopened".to_string();
+    let mut secrets_clean = None;
+    let mut store_size_bytes = None;
 
     if let Ok(store) = open_store(cli) {
         if args.reindex {
             match store.reindex_fts() {
-                Ok(n) => println!("fts reindex: {n} events"),
-                Err(e) => println!("fts reindex: failed ({e})"),
+                Ok(n) => {
+                    if !cli.json {
+                        println!("fts reindex: {n} events");
+                    }
+                }
+                Err(e) => {
+                    if !cli.json {
+                        println!("fts reindex: failed ({e})");
+                    }
+                }
             }
         }
 
@@ -2022,17 +2763,13 @@ async fn cmd_doctor(cli: &Cli, args: &DoctorArgs) -> anyhow::Result<()> {
             .iter()
             .filter(|r| matches!(r.status, crate::core::run::RunStatus::Running))
             .count();
-        println!("runs:       {} (running/orphan: {})", runs.len(), running);
-        let blob_count = std::fs::read_dir(store.blob_dir())
-            .map(|rd| rd.filter_map(|e| e.ok()).count())
-            .unwrap_or(0);
-        println!("blob files: {}", blob_count);
+        run_count = Some(runs.len());
+        running_count = Some(running);
 
-        // Probe FTS
         match store.fts_event_ids("tool", 1).await {
-            Ok(Some(_)) => println!("fts5:       available"),
-            Ok(None) => println!("fts5:       unavailable"),
-            Err(e) => println!("fts5:       error ({e})"),
+            Ok(Some(_)) => fts5 = "available".into(),
+            Ok(None) => fts5 = "unavailable".into(),
+            Err(e) => fts5 = format!("error ({e})"),
         }
 
         let scanner = SecretScanner::new(RedactionConfig::default());
@@ -2043,14 +2780,88 @@ async fn cmd_doctor(cli: &Cli, args: &DoctorArgs) -> anyhow::Result<()> {
                 dirty += 1;
             }
         }
-        if dirty > 0 {
-            println!("warning:    {dirty} recent run command(s) still match secret patterns");
-            println!("            run: blackbox scrub");
-        } else {
-            println!("secrets:    no secret patterns in recent run argv");
+        secrets_clean = Some(dirty == 0);
+
+        if let Ok(meta) = std::fs::metadata(store.db_path()) {
+            store_size_bytes = Some(meta.len());
         }
+    }
+
+    let config_view = match &discovery.config {
+        Some(c) => views::DoctorConfigView {
+            present: true,
+            enabled: Some(c.enabled),
+            wrap: Some(c.capture.wrap.clone()),
+            retention: Some(views::DoctorRetentionView {
+                keep_runs: c.retention.keep_runs,
+                max_age_days: c.retention.max_age_days,
+            }),
+        },
+        None => views::DoctorConfigView {
+            present: false,
+            enabled: None,
+            wrap: None,
+            retention: None,
+        },
+    };
+
+    if cli.json {
+        let view = views::DoctorView {
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            schema_version: SCHEMA_VERSION as u32,
+            db_path: paths.db_path.display().to_string(),
+            blob_dir: paths.blob_dir.display().to_string(),
+            db_exists: paths.db_path.exists(),
+            blob_dir_exists: paths.blob_dir.exists(),
+            project_root: discovery.project_root.display().to_string(),
+            store_size_bytes,
+            run_count,
+            running_count,
+            fts5,
+            secrets_clean,
+            config: config_view,
+            shell_integration_hint:
+                "functions call maybe-run; install via blackbox enable --install-shell (0.2)".into(),
+            blackbox_on_path: on_path,
+        };
+        return output::emit_ok("doctor", &view);
+    }
+
+    println!("blackbox doctor");
+    println!("{}", "─".repeat(48));
+    println!(
+        "cwd:        {}",
+        project
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "?".into())
+    );
+    println!("project:    {}", discovery.project_root.display());
+    println!("db path:    {}", paths.db_path.display());
+    println!("blob dir:   {}", paths.blob_dir.display());
+    println!("db exists:  {}", paths.db_path.exists());
+    println!("blobs dir:  {}", paths.blob_dir.exists());
+    println!(
+        "config:     {}",
+        if config_view.present { "yes" } else { "no" }
+    );
+    if let Some(n) = run_count {
+        println!(
+            "runs:       {} (running/orphan: {})",
+            n,
+            running_count.unwrap_or(0)
+        );
     } else {
         println!("store:      could not open (will be created on first run)");
+    }
+    println!("fts5:       {}", fts5);
+    match secrets_clean {
+        Some(true) => println!("secrets:    no secret patterns in recent run argv"),
+        Some(false) => {
+            println!("warning:    recent run command(s) still match secret patterns");
+            println!("            run: blackbox scrub");
+        }
+        None => {}
     }
 
     println!();
@@ -2123,6 +2934,13 @@ mod tests {
             "completions",
             "serve",
             "sync",
+            "maybe-run",
+            "enable",
+            "disable",
+            "postmortem",
+            "summary",
+            "gc",
+            "context",
         ];
         for sub in all_subs {
             let result = Cli::command().try_get_matches_from(["blackbox", sub, "--help"]);

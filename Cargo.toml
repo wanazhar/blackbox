@@ -22,9 +22,8 @@ exclude = [
     "*.db-shm",
 ]
 
-# Set repository/homepage when a public git remote is available.
-# repository = "https://github.com/OWNER/blackbox"
-# homepage = "https://github.com/OWNER/blackbox"
+repository = "https://github.com/wanazhar/blackbox"
+homepage = "https://github.com/wanazhar/blackbox"
 
 [lib]
 name = "blackbox"

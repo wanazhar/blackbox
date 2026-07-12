@@ -1,6 +1,8 @@
 use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
+
+use anyhow::Context;
 use tracing;
 
 use crate::capture::CaptureLayer;
@@ -9,14 +11,40 @@ use crate::core::run::Run;
 use crate::storage::TraceStore;
 use async_trait::async_trait;
 use tokio::sync::mpsc;
+use tokio::task;
 /// Maximum bytes allowed for captured diffs. Diffs exceeding this are
 /// truncated to avoid unbounded memory allocation on large repositories.
 const MAX_DIFF_BYTES: usize = 1024 * 1024; // 1 MiB
-// TODO(R2-M19): All synchronous `Command::new("git")` calls below block the
-// async runtime. They should be wrapped in `tokio::task::spawn_blocking` to
-// avoid starving the tokio executor. This is a larger refactor deferred to
-// a dedicated pass because it changes the call-site signatures (sync → async)
-// and requires careful handling of the Result types.
+
+/// Run a git command synchronously inside `spawn_blocking` so it doesn't
+/// starve the tokio async runtime. Returns (stdout, stderr) on success.
+///
+/// This replaces all direct `Command::new("git")` calls that previously
+/// blocked the async executor (R2-M19).
+async fn git_run(args: &[&str], cwd: &Path) -> anyhow::Result<(String, String)> {
+    let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+    let cwd = cwd.to_path_buf();
+    task::spawn_blocking(move || {
+        let output = Command::new("git")
+            .args(&args)
+            .current_dir(&cwd)
+            .output()
+            .with_context(|| format!("failed to execute git {}", args.join(" ")))?;
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        if !output.status.success() {
+            anyhow::bail!(
+                "git {} failed (exit {}): {}",
+                args.join(" "),
+                output.status.code().unwrap_or(-1),
+                stderr.trim()
+            );
+        }
+        Ok((stdout, stderr))
+    })
+    .await
+    .context("spawn_blocking panicked for git command")?
+}
 
 /// Git-aware change tracker.
 ///
@@ -99,75 +127,44 @@ impl GitCapture {
     }
 
     /// Check if the given directory is inside a git repository.
-    pub fn is_git_repo(path: &Path) -> bool {
-        Command::new("git")
-            .args(["rev-parse", "--is-inside-work-tree"])
-            .current_dir(path)
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+    pub async fn is_git_repo(path: &Path) -> bool {
+        git_run(&["rev-parse", "--is-inside-work-tree"], path).await.is_ok()
     }
 
     /// Get the current commit hash (HEAD).
-    fn get_commit_hash(cwd: &str) -> Option<String> {
-        Command::new("git")
-            .args(["rev-parse", "HEAD"])
-            .current_dir(cwd)
-            .output()
+    async fn get_commit_hash(cwd: &str) -> Option<String> {
+        git_run(&["rev-parse", "HEAD"], Path::new(cwd))
+            .await
             .ok()
-            .and_then(|o| {
-                if o.status.success() {
-                    String::from_utf8(o.stdout)
-                        .ok()
-                        .map(|s| s.trim().to_string())
-                } else {
-                    None
-                }
-            })
+            .map(|(stdout, _)| stdout.trim().to_string())
     }
 
     /// Get the working tree diff (unstaged changes).
-    fn get_diff(cwd: &str) -> Option<String> {
-        Command::new("git")
-            .args(["diff", "--submodule=short"])
-            .current_dir(cwd)
-            .output()
+    async fn get_diff(cwd: &str) -> Option<String> {
+        git_run(&["diff", "--submodule=short"], Path::new(cwd))
+            .await
             .ok()
-            .and_then(|o| {
-                let stdout = String::from_utf8_lossy(&o.stdout).to_string();
-                if stdout.is_empty() {
-                    None
-                } else {
-                    Some(stdout)
-                }
-            })
+            .map(|(stdout, _)| stdout)
+            .filter(|s| !s.is_empty())
     }
 
     /// Get the staged diff.
-    fn get_diff_cached(cwd: &str) -> Option<String> {
-        Command::new("git")
-            .args(["diff", "--cached", "--submodule=short"])
-            .current_dir(cwd)
-            .output()
+    async fn get_diff_cached(cwd: &str) -> Option<String> {
+        git_run(&["diff", "--cached", "--submodule=short"], Path::new(cwd))
+            .await
             .ok()
-            .and_then(|o| {
-                let stdout = String::from_utf8_lossy(&o.stdout).to_string();
-                if stdout.is_empty() {
-                    None
-                } else {
-                    Some(stdout)
-                }
-            })
+            .map(|(stdout, _)| stdout)
+            .filter(|s| !s.is_empty())
     }
 
     /// Capture the full diff snapshot (unstaged + staged).
-    fn capture_diff(cwd: &str) -> Option<String> {
+    async fn capture_diff(cwd: &str) -> Option<String> {
         let mut parts = Vec::new();
 
-        if let Some(diff) = Self::get_diff(cwd) {
+        if let Some(diff) = Self::get_diff(cwd).await {
             parts.push(format!("--- Unstaged Changes ---\n{}", diff));
         }
-        if let Some(diff) = Self::get_diff_cached(cwd) {
+        if let Some(diff) = Self::get_diff_cached(cwd).await {
             parts.push(format!("--- Staged Changes ---\n{}", diff));
         }
 
@@ -277,7 +274,7 @@ impl CaptureLayer for GitCapture {
         self.run_id = Some(run.id.clone());
         self.active_cwd = Some(cwd.clone());
 
-        if !Self::is_git_repo(Path::new(&cwd)) {
+        if !Self::is_git_repo(Path::new(&cwd)).await {
             tracing::debug!(cwd = %cwd, "not a git repository, using filesystem manifest");
             let mut ev = TraceEvent::new(&run.id, EventSource::Git, "git.not_a_repo");
             ev.status = EventStatus::Success;
@@ -324,7 +321,7 @@ impl CaptureLayer for GitCapture {
         }
 
         // Capture initial commit hash
-        if let Some(hash) = Self::get_commit_hash(&cwd) {
+        if let Some(hash) = Self::get_commit_hash(&cwd).await {
             let mut ev = TraceEvent::new(&run.id, EventSource::Git, "git.commit");
             ev.status = EventStatus::Success;
             ev.metadata
@@ -336,7 +333,7 @@ impl CaptureLayer for GitCapture {
         }
 
         // Capture initial diff snapshot (before the run starts producing changes)
-        if let Some(diff) = Self::capture_diff(&cwd) {
+        if let Some(diff) = Self::capture_diff(&cwd).await {
             self.before_diff_blob = self
                 .emit_diff_event(&run.id, "git.diff", &diff, &tx)
                 .await;
@@ -356,9 +353,9 @@ impl CaptureLayer for GitCapture {
             _ => return Ok(()),
         };
 
-        if Self::is_git_repo(Path::new(&cwd)) {
+        if Self::is_git_repo(Path::new(&cwd)).await {
             // After-run diff snapshot
-            if let Some(diff) = Self::capture_diff(&cwd) {
+            if let Some(diff) = Self::capture_diff(&cwd).await {
                 self.after_diff_blob = self
                     .emit_diff_event(&run_id, "git.diff.after", &diff, &tx)
                     .await;
@@ -375,7 +372,7 @@ impl CaptureLayer for GitCapture {
             }
 
             // Capture final commit (may have changed if commits were made)
-            if let Some(hash) = Self::get_commit_hash(&cwd) {
+            if let Some(hash) = Self::get_commit_hash(&cwd).await {
                 let mut ev = TraceEvent::new(&run_id, EventSource::Git, "git.commit.after");
                 ev.status = EventStatus::Success;
                 ev.metadata

@@ -431,6 +431,10 @@ pub struct ScrubArgs {
     /// Delete unreferenced blob files after scrub
     #[arg(long)]
     pub gc: bool,
+
+    /// Skip redaction (dangerous: leaves secrets at rest)
+    #[arg(long)]
+    pub no_redact: bool,
 }
 
 impl Cli {
@@ -1693,7 +1697,16 @@ async fn cmd_scrub(cli: &Cli, args: &ScrubArgs) -> anyhow::Result<()> {
         println!("Scrubbing store for secrets at rest…");
     }
 
-    let report = scrub_store(store.clone(), args.dry_run, filter, None).await?;
+    let report = scrub_store(
+        store.clone(),
+        args.dry_run,
+        filter,
+        Some(crate::redaction::RedactionConfig {
+            enabled: !args.no_redact,
+            ..Default::default()
+        }),
+    )
+    .await?;
     println!("{}", format_report(&report));
 
     if args.gc {

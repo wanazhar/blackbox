@@ -231,6 +231,22 @@ pub async fn sync_pull_http(
                 continue;
             }
         };
+
+        // Verify SHA-256 checksum against manifest entry if available.
+        if let Some(entry) = remote.runs.get(run_id) {
+            if !entry.sha256.is_empty() {
+                let actual = sha256_hex(json.as_bytes());
+                if actual != entry.sha256 {
+                    report.errors.push(format!(
+                        "{}: checksum mismatch (expected {}, got {})",
+                        short(run_id),
+                        entry.sha256,
+                        actual
+                    ));
+                    continue;
+                }
+            }
+        }
         match import_with_fallback(store, &json).await {
             Ok(()) => {
                 report.pulled += 1;
@@ -602,11 +618,35 @@ pub async fn manifest_from_store(store: &dyn TraceStore) -> anyhow::Result<SyncM
         runs: HashMap::new(),
     };
     for run in runs {
+        let events = store.get_events(&run.id).await?;
+        let json = match export_portable(store, &run, &events, true).await {
+            Ok(j) => j,
+            Err(e) => {
+                tracing::warn!(run_id = %run.id, error = %e, "manifest: export failed, skipping sha256");
+                // Insert entry without SHA-256; pull will skip checksum verification
+                man.runs.insert(
+                    run.id.clone(),
+                    SyncRunEntry {
+                        file: format!("runs/{}.json", run.id),
+                        sha256: String::new(),
+                        exported_at: run
+                            .ended_at
+                            .unwrap_or(run.started_at)
+                            .to_rfc3339(),
+                        name: run.name.clone(),
+                        command: run.command.clone(),
+                        status: format!("{:?}", run.status),
+                    },
+                );
+                continue;
+            }
+        };
+        let hash = sha256_hex(json.as_bytes());
         man.runs.insert(
             run.id.clone(),
             SyncRunEntry {
                 file: format!("runs/{}.json", run.id),
-                sha256: String::new(),
+                sha256: hash,
                 exported_at: run
                     .ended_at
                     .unwrap_or(run.started_at)

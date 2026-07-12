@@ -604,12 +604,16 @@ mod tests {
 
     #[test]
     fn resolve_env_db_takes_priority_over_legacy() {
+        let prev = std::env::var("BLACKBOX_DB").ok();
         let (_dir, proj) = make_project(true);
         let env_db = proj.join("env.db");
         std::env::set_var("BLACKBOX_DB", &env_db);
         let paths = BlackboxPaths::resolve(Some(&proj), None).unwrap();
         assert_eq!(paths.db_path, env_db);
         std::env::remove_var("BLACKBOX_DB");
+        if let Some(val) = prev {
+            std::env::set_var("BLACKBOX_DB", val);
+        }
     }
 
     #[test]
@@ -621,10 +625,16 @@ mod tests {
 
     #[test]
     fn resolve_default_when_nothing_exists() {
+        // Guard against BLACKBOX_DB leakage from parallel tests
+        let prev = std::env::var("BLACKBOX_DB").ok();
+        std::env::remove_var("BLACKBOX_DB");
         let (_dir, proj) = make_project(false);
         let paths = BlackboxPaths::resolve(Some(&proj), None).unwrap();
         assert_eq!(paths.db_path, proj.join(".blackbox").join("blackbox.db"));
         assert_eq!(paths.blob_dir, proj.join(".blackbox").join("blobs"));
+        if let Some(val) = prev {
+            std::env::set_var("BLACKBOX_DB", val);
+        }
     }
 
     #[test]

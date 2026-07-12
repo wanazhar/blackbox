@@ -172,12 +172,18 @@ impl ErrorDetector {
     }
 
     /// Extract output text from event metadata.
+    ///
+    /// Prefers full text fields; falls back to short previews.
+    /// (Blob payloads require a store handle — use `inspect` for those.)
     fn get_output_text(&self, event: &TraceEvent) -> String {
-        // Try "normalized" first, then "raw", then "output"
-        for key in &["normalized", "raw", "output"] {
+        for key in &["output_full", "normalized", "preview", "output", "raw"] {
             if let Some(val) = event.metadata.get(*key) {
                 if let Some(s) = val.as_str() {
                     return s.to_string();
+                }
+                // output may be a JSON value
+                if *key == "output" {
+                    return val.to_string();
                 }
             }
         }

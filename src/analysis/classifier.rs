@@ -123,12 +123,26 @@ impl SideEffectClassifier {
                 }
                 return SideEffect::LocalWrite;
             }
-            EventSource::Terminal | EventSource::Process => {
-                // Try command from metadata
+            EventSource::Terminal | EventSource::Process | EventSource::Tool => {
+                // Try command from metadata (string or array join)
+                if let Some(cmd) = event.metadata.get("command").and_then(|v| {
+                    v.as_str().map(String::from).or_else(|| {
+                        v.as_array().map(|a| {
+                            a.iter()
+                                .filter_map(|x| x.as_str())
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                        })
+                    })
+                }) {
+                    return self.classify_command(&cmd);
+                }
+                // Tool input.command for Bash-like tools
                 if let Some(cmd) = event
                     .metadata
-                    .get("command")
-                    .and_then(|v| v.as_str())
+                    .get("input")
+                    .and_then(|i| i.get("command").or_else(|| i.get("cmd")))
+                    .and_then(|c| c.as_str())
                 {
                     return self.classify_command(cmd);
                 }
@@ -172,8 +186,25 @@ impl AnalysisPass for SideEffectClassifier {
     async fn analyze(&self, events: &[TraceEvent]) -> anyhow::Result<Vec<TraceEvent>> {
         let mut derived = Vec::new();
         for event in events {
+            // Skip bookkeeping noise and analysis events themselves
+            if event.kind.starts_with("analysis.")
+                || event.kind.ends_with(".started")
+                || event.kind.ends_with(".stopped")
+                || event.kind == "environment.captured"
+                || event.kind == "terminal.recording"
+            {
+                continue;
+            }
+
             let classification = self.classify_event(event);
-            if classification != SideEffect::Unknown
+            // Only emit for interesting reclassifications — not every Read.
+            // Quiet by default: LocalWrite / ExternalWrite / Destructive only.
+            let interesting = matches!(
+                classification,
+                SideEffect::LocalWrite | SideEffect::ExternalWrite | SideEffect::Destructive
+            );
+            if interesting
+                && classification != SideEffect::Unknown
                 && classification != event.side_effect
             {
                 let mut meta = std::collections::HashMap::new();
@@ -236,14 +267,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn analyze_emits_derived() {
+    async fn analyze_skips_read_noise() {
         let c = SideEffectClassifier::new();
         let mut ev = TraceEvent::new("run-1", EventSource::Process, "process.spawned");
         ev.metadata
             .insert("command".to_string(), serde_json::json!("ls -la"));
         let derived = c.analyze(&[ev]).await.unwrap();
+        // Read reclassifications are quiet — no derived event
+        assert!(derived.is_empty());
+    }
+
+    #[tokio::test]
+    async fn analyze_emits_destructive() {
+        let c = SideEffectClassifier::new();
+        let mut ev = TraceEvent::new("run-1", EventSource::Tool, "tool.call");
+        ev.side_effect = SideEffect::Unknown;
+        ev.metadata
+            .insert("tool_name".to_string(), serde_json::json!("Bash"));
+        ev.metadata.insert(
+            "input".to_string(),
+            serde_json::json!({"command": "rm -rf /tmp/x"}),
+        );
+        // classify_event may use tool name → Unknown for Bash; put command on event
+        ev.metadata
+            .insert("command".to_string(), serde_json::json!("rm -rf /tmp/x"));
+        let derived = c.analyze(&[ev]).await.unwrap();
         assert_eq!(derived.len(), 1);
-        assert_eq!(derived[0].side_effect, SideEffect::Read);
-        assert_eq!(derived[0].kind, "analysis.side_effect");
+        assert_eq!(derived[0].side_effect, SideEffect::Destructive);
     }
 }

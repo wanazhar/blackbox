@@ -45,8 +45,16 @@ impl HarnessAdapter for ClaudeAdapter {
         command: &[String],
         context: &LaunchContext,
     ) -> Option<PreparedLaunch> {
+        let prepared = crate::adapters::launch::prepare_claude_command(command);
+        if prepared != command {
+            tracing::info!(
+                original = ?command,
+                prepared = ?prepared,
+                "claude adapter: injected machine-readable flags"
+            );
+        }
         Some(PreparedLaunch {
-            command: command.to_vec(),
+            command: prepared,
             environment: context.environment.clone(),
             cwd: context.project_dir.clone(),
         })
@@ -88,10 +96,12 @@ impl HarnessAdapter for ClaudeAdapter {
                     return Some(sid.to_string());
                 }
             }
-            // Fallback: search terminal output
-            if let Some(raw) = ev.metadata.get("normalized").and_then(|v| v.as_str()) {
-                if let Some(sid) = crate::adapters::parse::extract_session_id(raw) {
-                    return Some(sid);
+            // Fallback: search terminal previews / legacy text
+            for key in ["preview", "normalized", "raw"] {
+                if let Some(text) = ev.metadata.get(key).and_then(|v| v.as_str()) {
+                    if let Some(sid) = crate::adapters::parse::extract_session_id(text) {
+                        return Some(sid);
+                    }
                 }
             }
         }
@@ -107,14 +117,10 @@ impl HarnessAdapter for ClaudeAdapter {
     }
 
     fn locate_native_logs(&self, context: &RunContext) -> Vec<String> {
-        let path = std::path::Path::new(&context.project_dir)
-            .join(".claude")
-            .join("logs");
-        if path.exists() {
-            vec![path.to_string_lossy().to_string()]
-        } else {
-            Vec::new()
-        }
+        crate::adapters::native_logs::discover_log_roots("claude", &context.project_dir)
+            .into_iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect()
     }
 }
 
@@ -153,6 +159,23 @@ mod tests {
         let a = ClaudeAdapter::new();
         let cmd = a.build_resume_command("sess-99").unwrap();
         assert_eq!(cmd, vec!["claude", "--resume", "sess-99"]);
+    }
+
+    #[test]
+    fn prepare_print_injects_stream_json() {
+        let a = ClaudeAdapter::new();
+        let ctx = LaunchContext {
+            project_dir: "/tmp".into(),
+            environment: Default::default(),
+            run_id: "r1".into(),
+        };
+        let prepared = a
+            .prepare_launch(&["claude".into(), "-p".into(), "hi".into()], &ctx)
+            .unwrap();
+        assert!(prepared
+            .command
+            .iter()
+            .any(|c| c == "stream-json"));
     }
 
     #[test]

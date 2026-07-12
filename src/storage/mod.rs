@@ -37,6 +37,9 @@ pub trait TraceStore: Send + Sync + 'static {
     /// Load a single event by ID.
     async fn get_event(&self, event_id: &str) -> anyhow::Result<Option<TraceEvent>>;
 
+    /// Replace an existing event (same id) with an updated version.
+    async fn update_event(&self, event: &TraceEvent) -> anyhow::Result<()>;
+
     // ── Checkpoints ──
 
     /// Insert a checkpoint.

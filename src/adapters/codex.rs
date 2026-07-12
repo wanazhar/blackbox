@@ -43,8 +43,16 @@ impl HarnessAdapter for CodexAdapter {
         command: &[String],
         context: &LaunchContext,
     ) -> Option<PreparedLaunch> {
+        let prepared = crate::adapters::launch::prepare_codex_command(command);
+        if prepared != command {
+            tracing::info!(
+                original = ?command,
+                prepared = ?prepared,
+                "codex adapter: injected machine-readable flags"
+            );
+        }
         Some(PreparedLaunch {
-            command: command.to_vec(),
+            command: prepared,
             environment: context.environment.clone(),
             cwd: context.project_dir.clone(),
         })
@@ -84,9 +92,11 @@ impl HarnessAdapter for CodexAdapter {
                     return Some(sid.to_string());
                 }
             }
-            if let Some(raw) = ev.metadata.get("normalized").and_then(|v| v.as_str()) {
-                if let Some(sid) = crate::adapters::parse::extract_session_id(raw) {
-                    return Some(sid);
+            for key in ["preview", "normalized", "raw"] {
+                if let Some(text) = ev.metadata.get(key).and_then(|v| v.as_str()) {
+                    if let Some(sid) = crate::adapters::parse::extract_session_id(text) {
+                        return Some(sid);
+                    }
                 }
             }
         }
@@ -103,14 +113,10 @@ impl HarnessAdapter for CodexAdapter {
     }
 
     fn locate_native_logs(&self, context: &RunContext) -> Vec<String> {
-        let path = std::path::Path::new(&context.project_dir)
-            .join(".codex")
-            .join("logs");
-        if path.exists() {
-            vec![path.to_string_lossy().to_string()]
-        } else {
-            Vec::new()
-        }
+        crate::adapters::native_logs::discover_log_roots("codex", &context.project_dir)
+            .into_iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect()
     }
 }
 
@@ -140,5 +146,19 @@ mod tests {
         let cmd = a.build_resume_command("thread-1").unwrap();
         assert_eq!(cmd[0], "codex");
         assert!(cmd.contains(&"thread-1".to_string()));
+    }
+
+    #[test]
+    fn prepare_exec_injects_json() {
+        let a = CodexAdapter::new();
+        let ctx = LaunchContext {
+            project_dir: "/tmp".into(),
+            environment: Default::default(),
+            run_id: "r1".into(),
+        };
+        let prepared = a
+            .prepare_launch(&["codex".into(), "exec".into(), "hi".into()], &ctx)
+            .unwrap();
+        assert!(prepared.command.iter().any(|c| c == "--json"));
     }
 }

@@ -111,7 +111,25 @@ impl AnalysisPass for EventCorrelator {
         let mut derived = Vec::new();
 
         for event in events {
+            // Skip noise layers that create weak sequential chains
+            if event.kind.starts_with("analysis.")
+                || event.kind.ends_with(".started")
+                || event.kind.ends_with(".stopped")
+                || event.kind == "environment.captured"
+                || event.kind == "pty.started"
+                || event.kind == "pty.stopped"
+            {
+                continue;
+            }
+
             if let Some((parent_id, confidence)) = self.find_parent(event, events) {
+                // Quiet: only Confirmed / StronglyCorrelated (drop Weakly)
+                if !matches!(
+                    confidence,
+                    Confidence::Confirmed | Confidence::StronglyCorrelated
+                ) {
+                    continue;
+                }
                 let mut meta = std::collections::HashMap::new();
                 meta.insert(
                     "parent_event_id".to_string(),
@@ -170,11 +188,11 @@ mod tests {
     async fn analyze_emits_correlations() {
         let corr = EventCorrelator::new();
         let t0 = Utc::now();
-        let mut e1 = TraceEvent::new("run-1", EventSource::System, "environment.captured");
+        let mut e1 = TraceEvent::new("run-1", EventSource::Process, "process.spawned");
         e1.started_at = t0;
-        let mut e2 = TraceEvent::new("run-1", EventSource::Terminal, "pty.started");
+        let mut e2 = TraceEvent::new("run-1", EventSource::Filesystem, "filesystem.created");
         e2.started_at = t0 + Duration::milliseconds(50);
-        let mut e3 = TraceEvent::new("run-1", EventSource::Terminal, "terminal.output");
+        let mut e3 = TraceEvent::new("run-1", EventSource::Git, "git.diff.after");
         e3.started_at = t0 + Duration::milliseconds(100);
 
         let derived = corr.analyze(&[e1, e2, e3]).await.unwrap();

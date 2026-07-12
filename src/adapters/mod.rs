@@ -1,7 +1,9 @@
-pub mod harness;
-pub mod codex;
 pub mod claude;
+pub mod codex;
 pub mod generic;
+pub mod harness;
+pub mod launch;
+pub mod native_logs;
 pub mod parse;
 
 use std::collections::HashMap;

@@ -300,13 +300,26 @@ fn render_layout(frame: &mut Frame, app: &App) {
         .style(detail_style);
     let detail_text = match app.events.get(app.selected_event_idx) {
         Some(ev) => {
+            let preview = ev
+                .metadata
+                .get("preview")
+                .and_then(|v| v.as_str())
+                .or_else(|| {
+                    ev.metadata
+                        .get("tool_name")
+                        .and_then(|v| v.as_str())
+                })
+                .unwrap_or("");
+            let blob = ev.output_blob.as_deref().unwrap_or("—");
             format!(
-                "ID:     {}\nKind:   {}\nSource: {:?}\nStatus: {:?}\nStart:  {}",
+                "ID:     {}\nKind:   {}\nSource: {:?}\nStatus: {:?}\nStart:  {}\nBlob:   {}\n\n{}",
                 ev.id,
                 ev.kind,
                 ev.source,
                 ev.status,
                 ev.started_at.format("%H:%M:%S.%3f"),
+                blob,
+                preview,
             )
         }
         None => "Select an event to inspect".to_string(),
@@ -315,11 +328,19 @@ fn render_layout(frame: &mut Frame, app: &App) {
     frame.render_widget(detail_para, chunks[1]);
 }
 
-/// Run the TUI event loop.
+/// Run the TUI event loop, opening the default store path.
 ///
 /// `run_id` may be a full UUID, a prefix, `"latest"`, or `None`.
 pub async fn run_tui(run_id: Option<&str>) -> anyhow::Result<()> {
-    // Initialize terminal
+    let paths = crate::config::BlackboxPaths::resolve(None, None)?;
+    paths.ensure_dirs()?;
+    let store = SqliteStore::open_with_blobs(&paths.db_path, &paths.blob_dir)
+        .context("failed to open database")?;
+    run_tui_with_store(store, run_id).await
+}
+
+/// Run the TUI with an already-opened store.
+pub async fn run_tui_with_store(store: SqliteStore, run_id: Option<&str>) -> anyhow::Result<()> {
     enable_raw_mode().context("failed to enable raw mode")?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen).context("failed to enter alternate screen")?;
@@ -327,34 +348,34 @@ pub async fn run_tui(run_id: Option<&str>) -> anyhow::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend).context("failed to create terminal")?;
 
-    // Load data from store, focusing the requested run
-    let store = SqliteStore::open("blackbox.db")
-        .context("failed to open database")?;
     let mut app = App::load(store, run_id).await?;
 
-    // Main loop
     let tick_rate = Duration::from_millis(100);
-    loop {
-        terminal.draw(|frame| render_layout(frame, &app))?;
+    let result = async {
+        loop {
+            terminal.draw(|frame| render_layout(frame, &app))?;
 
-        if event::poll(tick_rate)? {
-            if let Event::Key(key) = event::read()? {
-                // Ctrl+C to quit
-                if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL)
-                {
-                    break;
-                }
-                if !app.handle_key(key).await {
-                    break;
+            if event::poll(tick_rate)? {
+                if let Event::Key(key) = event::read()? {
+                    if key.code == KeyCode::Char('c')
+                        && key.modifiers.contains(KeyModifiers::CONTROL)
+                    {
+                        break;
+                    }
+                    if !app.handle_key(key).await {
+                        break;
+                    }
                 }
             }
         }
+        Ok::<(), anyhow::Error>(())
     }
+    .await;
 
-    // Restore terminal
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    terminal.show_cursor()?;
+    // Always restore terminal
+    let _ = disable_raw_mode();
+    let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
+    let _ = terminal.show_cursor();
 
-    Ok(())
+    result
 }

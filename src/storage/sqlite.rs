@@ -18,23 +18,36 @@ const SCHEMA_VERSION: i32 = 2;
 /// SQLite-backed trace store with content-addressed blob storage.
 ///
 /// Metadata lives in SQLite; large payloads (blobs) are stored as
-/// files in a content-addressed directory (`<blob_dir>/<sha256>`).
+/// files in a content-addressed directory (`blob_dir/<sha256>`).
 ///
 /// A single `Mutex<Connection>` serializes access and avoids
 /// SQLITE_BUSY races from concurrent open-per-call connections.
 pub struct SqliteStore {
     conn: Mutex<Connection>,
     blob_dir: PathBuf,
+    db_path: PathBuf,
 }
 
 impl SqliteStore {
     /// Open or create a SQLite database at the given path.
     ///
-    /// Blobs are stored in `<db_dir>/.blackbox/blobs/` where `db_dir`
-    /// is the parent directory of the database file.
+    /// Blob directory is derived via [`crate::config::BlackboxPaths`].
     pub fn open(path: impl AsRef<Path>) -> anyhow::Result<Self> {
-        let path = path.as_ref().to_path_buf();
-        let conn = Connection::open(&path).context("failed to open SQLite database")?;
+        let paths = crate::config::BlackboxPaths::from_db_path(path.as_ref().to_path_buf());
+        Self::open_with_blobs(&paths.db_path, &paths.blob_dir)
+    }
+
+    /// Open with an explicit blob directory (used by path resolver / tests).
+    pub fn open_with_blobs(db_path: impl AsRef<Path>, blob_dir: impl AsRef<Path>) -> anyhow::Result<Self> {
+        let db_path = db_path.as_ref().to_path_buf();
+        let blob_dir = blob_dir.as_ref().to_path_buf();
+
+        if let Some(parent) = db_path.parent() {
+            std::fs::create_dir_all(parent).context("failed to create database directory")?;
+        }
+        std::fs::create_dir_all(&blob_dir).context("failed to create blob directory")?;
+
+        let conn = Connection::open(&db_path).context("failed to open SQLite database")?;
 
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
@@ -43,19 +56,52 @@ impl SqliteStore {
         )
         .context("failed to set pragmas")?;
 
-        let blob_dir = path
-            .parent()
-            .unwrap_or(Path::new("."))
-            .join(".blackbox")
-            .join("blobs");
-        std::fs::create_dir_all(&blob_dir).context("failed to create blob directory")?;
-
         let store = Self {
             conn: Mutex::new(conn),
             blob_dir,
+            db_path,
         };
         store.migrate()?;
+        store.recover_stale_runs()?;
         Ok(store)
+    }
+
+    /// Path to the SQLite file.
+    pub fn db_path(&self) -> &Path {
+        &self.db_path
+    }
+
+    /// Path to the blob directory.
+    pub fn blob_dir(&self) -> &Path {
+        &self.blob_dir
+    }
+
+    /// Mark abandoned `Running` runs as `Failed`.
+    ///
+    /// Called on open so a killed supervisor does not leave ghost sessions.
+    fn recover_stale_runs(&self) -> anyhow::Result<()> {
+        let conn = self.lock()?;
+        let now = chrono::Utc::now().to_rfc3339();
+        let n = conn.execute(
+            "UPDATE runs
+             SET status = ?1,
+                 ended_at = COALESCE(ended_at, ?2),
+                 notes = CASE
+                     WHEN notes IS NULL OR notes = '' THEN 'recovered: process exited while status=Running'
+                     WHEN notes LIKE '%recovered:%' THEN notes
+                     ELSE notes || '; recovered: process exited while status=Running'
+                 END
+             WHERE status = ?3",
+            params![
+                serde_json::to_string(&crate::core::run::RunStatus::Failed).unwrap_or_else(|_| "\"Failed\"".into()),
+                now,
+                serde_json::to_string(&crate::core::run::RunStatus::Running).unwrap_or_else(|_| "\"Running\"".into()),
+            ],
+        )?;
+        if n > 0 {
+            tracing::warn!(count = n, "recovered abandoned Running runs");
+        }
+        Ok(())
     }
 
     /// Open an in-memory SQLite database (for testing).
@@ -74,6 +120,7 @@ impl SqliteStore {
         let store = Self {
             conn: Mutex::new(conn),
             blob_dir,
+            db_path: PathBuf::from(":memory:"),
         };
         store.migrate()?;
         Ok(store)
@@ -422,6 +469,42 @@ impl TraceStore for SqliteStore {
         };
         tokio::task::yield_now().await;
         result
+    }
+
+    async fn update_event(&self, event: &TraceEvent) -> anyhow::Result<()> {
+        let event = event.clone();
+        {
+            let conn = self.lock()?;
+            let n = conn.execute(
+                "UPDATE events SET run_id=?2, parent_event_id=?3, sequence=?4, source=?5, kind=?6,
+                 started_at=?7, ended_at=?8, duration_ms=?9, status=?10, side_effect=?11,
+                 input_blob=?12, output_blob=?13, error_blob=?14, metadata=?15
+                 WHERE id=?1",
+                params![
+                    event.id,
+                    event.run_id,
+                    event.parent_event_id,
+                    event.sequence as i64,
+                    serde_json::to_string(&event.source).unwrap_or_default(),
+                    event.kind,
+                    event.started_at.to_rfc3339(),
+                    event.ended_at.map(|t| t.to_rfc3339()),
+                    event.duration_ms.map(|d| d as i64),
+                    serde_json::to_string(&event.status).unwrap_or_default(),
+                    serde_json::to_string(&event.side_effect).unwrap_or_default(),
+                    event.input_blob,
+                    event.output_blob,
+                    event.error_blob,
+                    serde_json::to_string(&event.metadata).unwrap_or_default(),
+                ],
+            )
+            .context("failed to update event")?;
+            if n == 0 {
+                anyhow::bail!("event not found for update: {}", event.id);
+            }
+        }
+        tokio::task::yield_now().await;
+        Ok(())
     }
 
     async fn insert_checkpoint(&self, cp: &Checkpoint) -> anyhow::Result<()> {

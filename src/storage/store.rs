@@ -74,6 +74,24 @@ impl TraceStore for InMemoryStore {
         Ok(None)
     }
 
+    async fn update_event(&self, event: &TraceEvent) -> anyhow::Result<()> {
+        let mut events = self.events.write().await;
+        if let Some(evts) = events.get_mut(&event.run_id) {
+            if let Some(slot) = evts.iter_mut().find(|e| e.id == event.id) {
+                *slot = event.clone();
+                return Ok(());
+            }
+        }
+        // Fallback: search all runs
+        for evts in events.values_mut() {
+            if let Some(slot) = evts.iter_mut().find(|e| e.id == event.id) {
+                *slot = event.clone();
+                return Ok(());
+            }
+        }
+        anyhow::bail!("event not found for update: {}", event.id)
+    }
+
     async fn insert_checkpoint(&self, cp: &Checkpoint) -> anyhow::Result<()> {
         self.checkpoints
             .write()

@@ -19,7 +19,7 @@ pub struct RedactionRecord {
 }
 
 /// Reason for redaction, matching PRD section 17.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RedactionReason {
     /// Environment variable containing a secret
     EnvironmentSecret,

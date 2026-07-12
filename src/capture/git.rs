@@ -30,8 +30,12 @@ pub struct GitCapture {
     active_cwd: Option<String>,
     /// Diff blob key from the before-run snapshot (for checkpoint wiring)
     before_diff_blob: Option<String>,
+    /// Diff blob key from the after-run snapshot
+    after_diff_blob: Option<String>,
     /// Commit hash at start
     commit_hash: Option<String>,
+    /// Commit hash after the run
+    after_commit_hash: Option<String>,
 }
 
 impl GitCapture {
@@ -43,7 +47,9 @@ impl GitCapture {
             run_id: None,
             active_cwd: None,
             before_diff_blob: None,
+            after_diff_blob: None,
             commit_hash: None,
+            after_commit_hash: None,
         }
     }
 
@@ -58,9 +64,23 @@ impl GitCapture {
         self.before_diff_blob.as_deref()
     }
 
+    /// Blob key of the after-run diff, if any.
+    pub fn after_diff_blob_key(&self) -> Option<&str> {
+        self.after_diff_blob
+            .as_deref()
+            .or(self.before_diff_blob.as_deref())
+    }
+
     /// Commit hash captured at start, if any.
     pub fn commit_hash(&self) -> Option<&str> {
         self.commit_hash.as_deref()
+    }
+
+    /// Commit hash after the run (falls back to start hash).
+    pub fn after_commit_hash(&self) -> Option<&str> {
+        self.after_commit_hash
+            .as_deref()
+            .or(self.commit_hash.as_deref())
     }
 
     /// Check if the given directory is inside a git repository.
@@ -299,7 +319,7 @@ impl CaptureLayer for GitCapture {
         if Self::is_git_repo(Path::new(&cwd)) {
             // After-run diff snapshot
             if let Some(diff) = Self::capture_diff(&cwd) {
-                let _ = self
+                self.after_diff_blob = self
                     .emit_diff_event(&run_id, "git.diff.after", &diff, &tx)
                     .await;
             } else {
@@ -318,6 +338,7 @@ impl CaptureLayer for GitCapture {
                 ev.status = EventStatus::Success;
                 ev.metadata
                     .insert("commit".to_string(), serde_json::json!(hash));
+                self.after_commit_hash = Some(hash);
                 let _ = tx.send(ev).await;
             }
         } else {
@@ -331,6 +352,7 @@ impl CaptureLayer for GitCapture {
                         "filesystem_manifest_blob".to_string(),
                         serde_json::json!(reference.key),
                     );
+                    self.after_diff_blob = Some(reference.key);
                 }
             }
             let _ = tx.send(ev).await;

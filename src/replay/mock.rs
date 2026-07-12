@@ -30,11 +30,15 @@ impl MockReplay {
     }
 
     fn output_preview(event: &TraceEvent) -> String {
-        if let Some(blob) = event.output_blob.as_deref() {
-            return truncate(blob, 200);
+        if let Some(full) = event.metadata.get("output_full").and_then(|v| v.as_str()) {
+            return truncate(full, 200);
         }
         if let Some(out) = event.metadata.get("output") {
             return truncate(&out.to_string(), 200);
+        }
+        // output_blob is a content-addressed key, not inline text
+        if event.output_blob.is_some() {
+            return "(output in blob store)".to_string();
         }
         "(no output recorded)".to_string()
     }
@@ -187,7 +191,10 @@ mod tests {
         ev.status = EventStatus::Success;
         ev.metadata
             .insert("tool_use_id".into(), serde_json::json!(id));
-        ev.output_blob = Some(body.to_string());
+        ev.metadata
+            .insert("output".into(), serde_json::json!(body));
+        ev.metadata
+            .insert("output_full".into(), serde_json::json!(body));
         ev
     }
 

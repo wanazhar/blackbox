@@ -84,7 +84,8 @@ pub fn tool_result_event(
             .insert("tool_use_id".to_string(), serde_json::json!(id));
     }
     if let Some(output) = output {
-        // Store a truncated preview in metadata; full body may be large
+        // Preview only in metadata. `output_blob` is reserved for content-addressed
+        // keys (set by the capture pipeline when payloads are large).
         let preview = match &output {
             serde_json::Value::String(s) if s.len() > 500 => {
                 serde_json::json!(format!("{}...", &s[..500]))
@@ -92,19 +93,15 @@ pub fn tool_result_event(
             other => other.clone(),
         };
         ev.metadata.insert("output".to_string(), preview);
-        // Also stash a compact form on output_blob field as inline marker
-        // (real blob storage is optional; string preview is enough for mock)
+        // Full string body for mock replay (bounded) — NOT a blob key.
         if let Some(s) = output.as_str() {
-            if s.len() <= 2000 {
-                ev.output_blob = Some(s.to_string());
+            let body = if s.len() <= 8000 {
+                s.to_string()
             } else {
-                ev.output_blob = Some(format!("{}…", &s[..2000]));
-            }
-        } else {
-            let s = output.to_string();
-            if s.len() <= 2000 {
-                ev.output_blob = Some(s);
-            }
+                format!("{}…", &s[..8000])
+            };
+            ev.metadata
+                .insert("output_full".to_string(), serde_json::json!(body));
         }
     }
     ev
@@ -319,7 +316,9 @@ mod tests {
         let events = parse_claude_json_line("run-1", line);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].kind, "tool.result");
-        assert!(events[0].output_blob.is_some());
+        assert!(events[0].metadata.get("output").is_some()
+            || events[0].metadata.get("output_full").is_some());
+        assert!(events[0].output_blob.is_none()); // blob keys assigned by capture pipeline only
     }
 
     #[test]

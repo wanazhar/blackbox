@@ -15,9 +15,30 @@ This tool is worth running on a machine that holds secrets when **all** of the f
 9. **Docs match the binary** — README + AGENTS.md describe real behavior.
 10. **Agent-native inspect** — global `--json` envelope; resume packs; MCP; handoff.
 
-## Current product (1.0.0)
+### Adoption bar (1.1 — leave it on)
 
-Leave it on for Linux/macOS agent work:
+Capability is not enough. Ambient capture stays enabled only when:
+
+| # | Criterion | Target |
+|---|---|---|
+| **A1** | Ambient shell contract | Install/uninstall/OFF/nest/wrap tested; wrappers never hard-fail if binary missing |
+| **A2** | Redaction regression gate | Structural IDs (SHA, blob keys, UUIDs) never scar; secrets still die; CI-blocking suite |
+| **A3** | Resume-pack quality | Actionable headline + next action; budget held; failures beat raw transcript for agents |
+| **A4** | Cost visibility | doctor/stats report DB + blob sizes + retention; soft warnings |
+| **A5** | Docs match adoption reality | README/ROADMAP/CHANGELOG describe 1.1 bar honestly |
+| **A6** | Capture overhead smoke | Soft wall-time budget for supervising `true` |
+| **A7** | Broader adapters | First-class aider/gemini/cursor/opencode/grok (not only wrap+generic) |
+
+Design source of truth: [`docs/plan/adoption-1.1.md`](plan/adoption-1.1.md).
+
+## Current product
+
+| Version | Story |
+|---|---|
+| **1.0.0** | Capability daily-driver: enable → capture → fail → handoff / MCP / auto-resume |
+| **1.1.0** | Adoption bar **plus** former post-1.0 backlog (adapters, CI/eval, pricing opt-in, sandbox restore, shell soak, Windows soft kill) |
+
+### 1.0 shipped (capability)
 
 | Area | Status |
 |---|---|
@@ -32,17 +53,36 @@ Leave it on for Linux/macOS agent work:
 | Dashboard `/status` `/handoff` + API | **shipped** |
 | Binary install script + release workflow | **shipped** |
 | Retention auto_apply + opportunistic GC | **shipped** |
-| Replay sandbox / fork | **mostly shipped** (restore still best-effort) |
+| Replay sandbox / fork | **mostly shipped** |
 
-## Backlog (post-1.0)
+### 1.1 work (adoption + former backlog)
 
-| Theme | Notes |
+| Theme | Status |
 |---|---|
-| Deeper harness adapters | First-class Cursor/Aider/Gemini parsers beyond wrap + generic |
-| Sandbox workspace restore | git checkout of checkpoint; not full FS guarantee |
-| Windows PTY/signal parity | Non-blocking |
-| Pricing table for `estimated_cost_usd` | Off by default (never invent prices) |
-| CI/eval mode polish | exit codes + artifact export conventions |
+| A1 Ambient shell contract | **done** |
+| A2 Redaction structural gate | **done** |
+| A3 Resume-pack quality | **done** |
+| A4 Cost visibility (doctor/stats) | **done** |
+| A5 Docs for adoption bar | **done** |
+| A6 Overhead smoke | **done** (`tests/overhead_smoke.rs`) |
+| A7 Deeper adapters | **done** (`src/adapters/agents.rs`, `detect.rs`) |
+| Pricing table + config file | **done** — opt-in; `BLACKBOX_PRICING` / `.blackbox/pricing.toml` |
+| Sandbox git restore + diff | **done** — `git archive` + apply `git_diff_blob` |
+| CI/eval polish | **done** — `run --ci --artifact-dir`, `postmortem --fail-on-failure` |
+| Real-shell soak | **done** — `tests/shell_soak.rs` (bash install → wrap → record) |
+| Richer native log pollers | **done** — per-harness roots/filters + plaintext for aider |
+| Windows signal / PowerShell install | **done** — taskkill soft/hard; `powershell` shell kind |
+| 1.1.0 version bump + publish | **this release** |
+
+## Backlog (post-1.1)
+
+Residual polish only (core items folded into 1.1):
+
+| Priority | Theme | Notes |
+|---|---|---|
+| Low | Sandbox: 3-way merge / conflict UX when `git apply` fails | Best-effort apply already shipped |
+| Low | Full Windows interactive TUI parity | Soft/hard kill + PowerShell install shipped; PTY edge cases remain |
+| Low | Per-harness session file format docs | Poller heuristics shipped; document vendor layouts as they stabilize |
 
 ## Non-goals
 
@@ -50,6 +90,7 @@ Leave it on for Linux/macOS agent work:
 - Replacing the harness’s own session UI
 - Perfect Windows parity as a release blocker
 - Guaranteeing every interactive TUI agent emits machine-readable tool events
+- Inventing `estimated_cost_usd` when cost estimation is off or model unknown
 
 ## Design decisions (locked)
 
@@ -63,3 +104,6 @@ Leave it on for Linux/macOS agent work:
 | Package name | `blackbox-recorder` on crates.io | `blackbox` is taken; binary/lib stay `blackbox` |
 | Ambient capture | Project-scoped enable + maybe-run | No silent global recording |
 | Versioning | One product release at a time | Intermediate version trains confuse ship truth |
+| 1.1 theme | Adoption + folded backlog | Avoid a hollow “leave it on” then immediate feature chase |
+| Cost estimates | Opt-in only | Never invent prices |
+| JSON compatibility | Additive fields only in 1.1 | Existing agent parsers must keep working |

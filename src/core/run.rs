@@ -174,6 +174,14 @@ impl Run {
                 }
             }
         }
+        // Optional cost estimate (BLACKBOX_ESTIMATE_COST=1); never invent when off/unknown.
+        if self.estimated_cost_usd.is_none() {
+            self.estimated_cost_usd = crate::pricing::maybe_estimate(
+                self.model.as_deref(),
+                self.input_tokens,
+                self.output_tokens,
+            );
+        }
     }
 }
 

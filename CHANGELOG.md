@@ -4,6 +4,69 @@ All notable changes to **blackbox** are documented here.
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-07-12
+
+Adoption bar (“leave it on”) plus folded post-1.0 backlog.
+Design: `docs/plan/adoption-1.1.md`.
+
+#### A1 Ambient shell contract
+- Permanent integration suite: `tests/ambient_contract.rs`
+- Normative contract: `docs/ambient-contract.md`
+- Covers OFF / nest / wrap / enable record path / shell install idempotency / missing-binary fallback
+
+#### A2 Redaction regression gate
+- Permanent suite: `tests/redaction_gate.rs`
+- Structural IDs (SHA, blob keys, UUIDs, enums) must survive capture + export redaction
+- Known secrets in free-form still die
+
+#### A3 Resume-pack quality
+- `context --for-resume` packs gain additive fields: `headline`, `next_action`, `attention_reason`, `errors_top`
+- Failed tool detail prefers error/output over raw input dump
+- Budget shrink drops transcript before structured failure signal
+- Auto-resume preamble uses headline + next action
+
+#### A4 Cost visibility
+- `doctor` / `stats` report db + blob sizes, total storage, soft warnings, retention `auto_apply`
+
+#### A6 Capture overhead
+- `tests/overhead_smoke.rs` — soft wall-time budget for supervising `true`
+
+#### A7 Deeper harness adapters
+- First-class adapters: `aider`, `gemini`, `cursor`/`cursor-agent`, `opencode`, `grok`
+- Central detection in `src/adapters/detect.rs`
+- Aider “Running:” / “Applied edit” lines → tool events; Cursor `functionCall` JSON
+
+#### Pricing (opt-in)
+- `src/pricing.rs` builtin model rates; set `BLACKBOX_ESTIMATE_COST=1` to fill `estimated_cost_usd`
+- Never invents a price when disabled or model unknown
+
+#### Sandbox git restore
+- When a checkpoint has `git_commit`, sandbox uses `git archive <sha> | tar` into the workspace
+- Falls back to cwd seed copy when restore fails
+
+#### CI / eval
+- `blackbox run --ci` propagates child exit code
+- `blackbox run --artifact-dir DIR` writes `run.json`, `postmortem.json`, `portable.json`
+- `blackbox postmortem --fail-on-failure` exits 1 on failed/cancelled runs
+
+#### Real-shell soak
+- `tests/shell_soak.rs` — install bash wrappers into temp HOME, source them, ambient-record a fake harness; `BLACKBOX_OFF` creates no store
+
+#### Native log pollers
+- Per-harness roots/filters (claude/codex/aider/cursor/gemini/opencode/grok)
+- Prefer session `.jsonl`; aider plaintext history (`.aider.chat.history.md`)
+
+#### Pricing config file
+- `BLACKBOX_PRICING=/path/pricing.toml` or project `.blackbox/pricing.toml`
+- Custom rates override builtins; still never invents prices when disabled/unknown
+
+#### Sandbox git_diff_blob
+- After `git archive`, apply checkpoint working-tree diff via `git apply` / `patch -p1`
+
+#### Windows parity
+- Soft/hard kill via `taskkill` (no bare `libc::kill` on Windows paths)
+- `enable --install-shell --shell powershell` profile wrappers
+
 ## [1.0.0] — 2026-07-12
 
 First major release: leave-on daily driver for Linux/macOS agent workflows.

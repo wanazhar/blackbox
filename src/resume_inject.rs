@@ -122,15 +122,28 @@ pub async fn prepare_resume_injection(
 fn format_resume_preamble(pack: &ContextPackView) -> String {
     let mut out = String::new();
     out.push_str("# blackbox resume context\n\n");
+    out.push_str(&format!("{}\n\n", pack.headline));
     out.push_str(&format!(
-        "You are continuing after a prior agent run that did not fully succeed.\n\
-         Run: {} (status={:?}, exit={:?})\n\n",
-        pack.short_id, pack.summary.status, pack.summary.exit_code
+        "Attention: {} · tokens≈{}{}\n\n",
+        pack.attention_reason,
+        pack.approx_tokens,
+        if pack.truncated { " (truncated)" } else { "" }
     ));
+    out.push_str(&format!("## Next action\n{}\n\n", pack.next_action));
     if !pack.failed_tools.is_empty() {
         out.push_str("## Failed tools\n");
         for t in &pack.failed_tools {
             out.push_str(&format!("- seq={} {} {}\n", t.sequence, t.name, t.detail));
+        }
+        out.push('\n');
+    }
+    if !pack.errors_top.is_empty() {
+        out.push_str("## Top errors\n");
+        for e in pack.errors_top.iter().take(8) {
+            out.push_str(&format!(
+                "- seq={} [{}] {}\n",
+                e.sequence, e.error_type, e.message
+            ));
         }
         out.push('\n');
     }

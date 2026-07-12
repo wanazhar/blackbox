@@ -182,6 +182,7 @@ pub async fn build_status(
             crate::shell_install::ShellKind::Fish,
             crate::shell_install::ShellKind::Bash,
             crate::shell_install::ShellKind::Zsh,
+            crate::shell_install::ShellKind::PowerShell,
         ] {
             let p = crate::shell_install::rc_path(kind, h);
             if std::fs::read_to_string(&p)
@@ -308,6 +309,12 @@ pub fn format_status_text(v: &StatusView) -> String {
             pack.approx_tokens,
             if pack.truncated { ", truncated" } else { "" }
         ));
+        if !pack.headline.is_empty() {
+            out.push_str(&format!("    headline: {}\n", pack.headline));
+        }
+        if !pack.next_action.is_empty() {
+            out.push_str(&format!("    next_action: {}\n", pack.next_action));
+        }
     }
     out
 }

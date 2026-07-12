@@ -14,6 +14,8 @@ pub enum ShellKind {
     Fish,
     Bash,
     Zsh,
+    /// Windows PowerShell (profile.ps1) — best-effort ambient wrappers.
+    PowerShell,
 }
 
 impl ShellKind {
@@ -22,18 +24,37 @@ impl ShellKind {
             "fish" => Some(Self::Fish),
             "bash" => Some(Self::Bash),
             "zsh" => Some(Self::Zsh),
+            "powershell" | "pwsh" | "ps" => Some(Self::PowerShell),
             _ => None,
         }
     }
 
     pub fn detect() -> Self {
-        let shell = std::env::var("SHELL").unwrap_or_default();
-        if shell.contains("fish") {
-            Self::Fish
-        } else if shell.contains("zsh") {
-            Self::Zsh
-        } else {
-            Self::Bash
+        // Windows default → PowerShell when SHELL is empty / cmd-like
+        #[cfg(windows)]
+        {
+            let shell = std::env::var("SHELL").unwrap_or_default();
+            if shell.contains("bash") {
+                return Self::Bash;
+            }
+            if shell.contains("zsh") {
+                return Self::Zsh;
+            }
+            if shell.contains("fish") {
+                return Self::Fish;
+            }
+            return Self::PowerShell;
+        }
+        #[cfg(not(windows))]
+        {
+            let shell = std::env::var("SHELL").unwrap_or_default();
+            if shell.contains("fish") {
+                Self::Fish
+            } else if shell.contains("zsh") {
+                Self::Zsh
+            } else {
+                Self::Bash
+            }
         }
     }
 
@@ -42,6 +63,7 @@ impl ShellKind {
             Self::Fish => "fish",
             Self::Bash => "bash",
             Self::Zsh => "zsh",
+            Self::PowerShell => "powershell",
         }
     }
 }
@@ -53,12 +75,25 @@ pub struct InstallResult {
     pub action: &'static str, // "installed" | "updated" | "unchanged"
 }
 
-/// Resolve the rc / conf.d path for a shell (respects HOME).
+/// Resolve the rc / conf.d path for a shell (respects HOME / USERPROFILE).
 pub fn rc_path(shell: ShellKind, home: &Path) -> PathBuf {
     match shell {
         ShellKind::Fish => home.join(".config/fish/conf.d/blackbox.fish"),
         ShellKind::Bash => home.join(".bashrc"),
         ShellKind::Zsh => home.join(".zshrc"),
+        ShellKind::PowerShell => {
+            // Documents\PowerShell\Microsoft.PowerShell_profile.ps1 (pwsh) or WindowsPowerShell
+            let docs = home.join("Documents");
+            let pwsh = docs
+                .join("PowerShell")
+                .join("Microsoft.PowerShell_profile.ps1");
+            if pwsh.parent().is_some_and(|p| p.exists()) || cfg!(windows) {
+                pwsh
+            } else {
+                docs.join("WindowsPowerShell")
+                    .join("Microsoft.PowerShell_profile.ps1")
+            }
+        }
     }
 }
 
@@ -66,10 +101,41 @@ fn managed_block(shell: ShellKind, wrap: &[String]) -> String {
     let body = match shell {
         ShellKind::Fish => shell_snippet_fish(wrap),
         ShellKind::Bash | ShellKind::Zsh => shell_snippet_bash(wrap),
+        ShellKind::PowerShell => shell_snippet_powershell(wrap),
     };
-    format!(
-        "{BEGIN_MARKER}\n# Managed by `blackbox enable --install-shell`. Do not edit by hand.\n{body}{END_MARKER}\n"
-    )
+    let comment = match shell {
+        ShellKind::PowerShell => {
+            "# Managed by `blackbox enable --install-shell`. Do not edit by hand."
+        }
+        _ => "# Managed by `blackbox enable --install-shell`. Do not edit by hand.",
+    };
+    format!("{BEGIN_MARKER}\n{comment}\n{body}{END_MARKER}\n")
+}
+
+/// PowerShell function wrappers (Windows ambient capture).
+pub fn shell_snippet_powershell(wrap: &[String]) -> String {
+    let mut out = String::from("# blackbox ambient capture (PowerShell)\n");
+    for name in wrap {
+        // Skip names that are not valid PS function identifiers
+        if !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            continue;
+        }
+        out.push_str(&format!(
+            "function global:{name} {{\n\
+             \tparam([Parameter(ValueFromRemainingArguments=$true)]$Args)\n\
+             \tif (Get-Command blackbox -ErrorAction SilentlyContinue) {{\n\
+             \t\t& blackbox maybe-run -- {name} @Args\n\
+             \t}} else {{\n\
+             \t\t& {name}.exe @Args 2>$null\n\
+             \t\tif (-not $?) {{ & {name} @Args }}\n\
+             \t}}\n\
+             }}\n\n"
+        ));
+    }
+    out
 }
 
 /// Insert or replace the managed blackbox block in `content`.
@@ -192,7 +258,7 @@ pub fn uninstall_shell(shell: ShellKind, home: &Path) -> anyhow::Result<Option<P
     };
 
     // For fish conf.d file that becomes empty/only whitespace — remove file.
-    if shell == ShellKind::Fish && new_content.trim().is_empty() {
+    if matches!(shell, ShellKind::Fish) && new_content.trim().is_empty() {
         std::fs::remove_file(&path)?;
         return Ok(Some(path));
     }
@@ -235,6 +301,19 @@ mod tests {
         assert!(!out.contains(BEGIN_MARKER));
         assert!(out.contains("# header"));
         assert!(out.contains("# footer"));
+    }
+
+    #[test]
+    fn powershell_snippet_and_install() {
+        let s = shell_snippet_powershell(&["claude".into()]);
+        assert!(s.contains("function global:claude"));
+        assert!(s.contains("blackbox maybe-run"));
+        let home = tempfile::tempdir().unwrap();
+        let r = install_shell(ShellKind::PowerShell, &["claude".into()], home.path()).unwrap();
+        assert!(r.path.exists());
+        let text = std::fs::read_to_string(&r.path).unwrap();
+        assert!(text.contains(BEGIN_MARKER));
+        assert!(text.contains("maybe-run"));
     }
 
     #[test]

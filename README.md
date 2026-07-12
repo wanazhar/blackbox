@@ -7,7 +7,7 @@
 | **CLI / lib name** | `blackbox` |
 | **crates.io package** | [`blackbox-recorder`](https://crates.io/crates/blackbox-recorder) |
 | **License** | MIT OR Apache-2.0 |
-| **Status** | **1.0.0** — leave it on: enable → capture → fail → handoff / MCP / auto-resume → next agent |
+| **Status** | **1.1.0** — leave it on: adoption bar + deeper adapters, CI/eval, opt-in pricing, sandbox restore, shell soak |
 
 ## Why use it
 
@@ -17,6 +17,34 @@
 - **Project-local store** — `.blackbox/blackbox.db` + `.blackbox/blobs/` (override with `--store` / `BLACKBOX_DB`).
 - **Safe share defaults** — `export` and `sync push` redact unless you pass `--no-redact`.
 - **Agent-native** — `--json`, `handoff`, MCP tools, auto-resume after failures.
+
+### 1.1 adoption bar
+
+1.0 shipped the capability loop. 1.1 proves you can leave ambient capture on — and folds the former post-1.0 backlog into the same release:
+
+| Gate | What “leave it on” requires |
+|---|---|
+| **A1 Ambient contract** | OFF / nest / wrap / install-uninstall tested (`docs/ambient-contract.md`) |
+| **A2 Redaction gate** | Structural IDs never scar; secrets still die (`tests/redaction_gate.rs`) |
+| **A3 Resume packs** | `headline` + `next_action` + budget; failures beat raw transcript |
+| **A4 Cost visibility** | `doctor` / `stats` show db + blob size and soft warnings |
+| **A6 Overhead** | Soft capture budget smoke test |
+| **A7 Adapters** | First-class aider / gemini / cursor / opencode / grok parsers |
+
+Also in 1.1: CI/eval (`run --ci --artifact-dir`, `postmortem --fail-on-failure`), opt-in pricing (`BLACKBOX_ESTIMATE_COST=1`, optional `.blackbox/pricing.toml`), sandbox git-archive + diff restore, real-shell soak tests, richer native log pollers, Windows taskkill + PowerShell install.
+
+Design: [`docs/plan/adoption-1.1.md`](docs/plan/adoption-1.1.md).
+
+### Pricing file (optional)
+
+```toml
+# .blackbox/pricing.toml  — only used when BLACKBOX_ESTIMATE_COST=1
+[models."my-custom-model"]
+input_per_mtok = 1.0
+output_per_mtok = 2.0
+```
+
+Or `BLACKBOX_PRICING=/path/to/pricing.toml`.
 
 ## Install
 

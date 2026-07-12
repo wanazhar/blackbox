@@ -319,6 +319,14 @@ pub struct RunArgs {
     #[arg(long)]
     pub auto_resume: bool,
 
+    /// CI/eval mode: propagate child exit code; write artifacts when --artifact-dir set
+    #[arg(long)]
+    pub ci: bool,
+
+    /// Directory for CI artifacts (run.json, postmortem.json, optional portable export)
+    #[arg(long)]
+    pub artifact_dir: Option<PathBuf>,
+
     /// The command to observe (everything after `--`)
     #[arg(last = true, required = true)]
     pub command: Vec<String>,
@@ -425,7 +433,7 @@ pub struct EnableArgs {
     #[arg(long)]
     pub uninstall_shell: bool,
 
-    /// Shell for snippets/install: fish, bash, zsh (default: detect)
+    /// Shell for snippets/install: fish, bash, zsh, powershell (default: detect)
     #[arg(long)]
     pub shell: Option<String>,
 }
@@ -442,6 +450,10 @@ pub struct SummaryArgs {
     /// Larger SQL limit for big runs
     #[arg(long)]
     pub full: bool,
+
+    /// Exit 1 when the run failed/cancelled (CI/eval)
+    #[arg(long)]
+    pub fail_on_failure: bool,
 }
 
 #[derive(Args)]
@@ -840,6 +852,23 @@ async fn cmd_run(cli: &Cli, args: &RunArgs) -> anyhow::Result<()> {
         }
     }
 
+    // CI artifacts: stable files for eval pipelines.
+    if let Some(ref dir) = args.artifact_dir {
+        if let Err(e) = write_ci_artifacts(store.as_ref(), &run, dir).await {
+            tracing::warn!(error = %e, "failed to write CI artifacts");
+            if args.ci {
+                anyhow::bail!("CI artifact write failed: {e}");
+            }
+        } else if !cli.json {
+            eprintln!("artifacts: {}", dir.display());
+        }
+    }
+
+    let attention = matches!(
+        run.status,
+        crate::core::run::RunStatus::Failed | crate::core::run::RunStatus::Cancelled
+    );
+
     if cli.json {
         #[derive(serde::Serialize)]
         struct RunDone {
@@ -849,12 +878,10 @@ async fn cmd_run(cli: &Cli, args: &RunArgs) -> anyhow::Result<()> {
             status: String,
             attention_needed: bool,
             handoff_hint: String,
+            artifact_dir: Option<String>,
+            ci: bool,
         }
-        let attention = matches!(
-            run.status,
-            crate::core::run::RunStatus::Failed | crate::core::run::RunStatus::Cancelled
-        );
-        return output::emit_ok(
+        let result = output::emit_ok(
             "run",
             &RunDone {
                 run_id: run.id.clone(),
@@ -870,8 +897,17 @@ async fn cmd_run(cli: &Cli, args: &RunArgs) -> anyhow::Result<()> {
                 } else {
                     "blackbox status --json".into()
                 },
+                artifact_dir: args.artifact_dir.as_ref().map(|p| p.display().to_string()),
+                ci: args.ci,
             },
         );
+        if args.ci {
+            let code = run.exit_code.unwrap_or(1);
+            if code != 0 {
+                std::process::exit(code);
+            }
+        }
+        return result;
     }
 
     println!(
@@ -884,14 +920,54 @@ async fn cmd_run(cli: &Cli, args: &RunArgs) -> anyhow::Result<()> {
             println!("  {}", notes);
         }
     }
-    if matches!(
-        run.status,
-        crate::core::run::RunStatus::Failed | crate::core::run::RunStatus::Cancelled
-    ) {
+    if attention {
         println!(
             "  handoff: blackbox handoff --json  (or: blackbox context {} --for-resume --json)",
             short_id(&run.id)
         );
+    }
+
+    // CI/eval: propagate supervised process exit code.
+    if args.ci {
+        let code = run.exit_code.unwrap_or(1);
+        if code != 0 {
+            std::process::exit(code);
+        }
+    }
+    Ok(())
+}
+
+/// Write `run.json` + `postmortem.json` under artifact_dir (CI/eval convention).
+async fn write_ci_artifacts(
+    store: &dyn TraceStore,
+    run: &crate::core::run::Run,
+    dir: &std::path::Path,
+) -> anyhow::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let run_path = dir.join("run.json");
+    std::fs::write(&run_path, serde_json::to_string_pretty(run)?)?;
+
+    let summary = crate::summary::build_summary(
+        store,
+        run,
+        crate::summary::SummaryOptions {
+            short: false,
+            full: false,
+        },
+    )
+    .await?;
+    std::fs::write(
+        dir.join("postmortem.json"),
+        serde_json::to_string_pretty(&summary)?,
+    )?;
+
+    // Optional portable export for offline eval scoring
+    if let Ok(events) = store.get_events(&run.id).await {
+        if let Ok(archive) =
+            crate::export::portable::export_portable(store, run, &events, true).await
+        {
+            let _ = std::fs::write(dir.join("portable.json"), archive);
+        }
     }
     Ok(())
 }
@@ -1161,6 +1237,9 @@ async fn cmd_stats(cli: &Cli, args: &StatsArgs) -> anyhow::Result<()> {
                 .sum()
         })
         .unwrap_or(0);
+    let db_bytes = std::fs::metadata(store.db_path()).ok().map(|m| m.len());
+    let total_storage_bytes = db_bytes.map(|d| d.saturating_add(blob_bytes));
+    let storage_warning = storage_soft_warning(total_storage_bytes, blob_bytes);
 
     if cli.json {
         let view = views::StatsView {
@@ -1177,12 +1256,27 @@ async fn cmd_stats(cli: &Cli, args: &StatsArgs) -> anyhow::Result<()> {
             top_kinds: top_kinds.clone(),
             blob_files,
             blob_bytes,
+            db_bytes,
+            total_storage_bytes,
+            storage_warning: storage_warning.clone(),
         };
         return output::emit_ok("stats", &view);
     }
 
     println!("Store: {}", store.db_path().display());
     println!("Blobs: {}", store.blob_dir().display());
+    if let Some(total) = total_storage_bytes {
+        println!(
+            "Size:  {} total (db {} + blobs {} in {} files)",
+            format_bytes(total),
+            format_bytes(db_bytes.unwrap_or(0)),
+            format_bytes(blob_bytes),
+            blob_files
+        );
+    }
+    if let Some(ref w) = storage_warning {
+        println!("warn:  {w}");
+    }
     println!();
     println!("Runs: {} ({} tagged)", runs.len(), tagged);
     println!("  by status:");
@@ -1947,7 +2041,31 @@ async fn cmd_replay(cli: &Cli, args: &ReplayArgs) -> anyhow::Result<()> {
         } else {
             crate::replay::ReplayPolicy::Sandbox
         };
-        Box::new(SandboxReplay::new().with_policy(policy))
+        let checkpoints = store.get_checkpoints(&run_id).await.unwrap_or_default();
+        let git_commit = checkpoints
+            .iter()
+            .rev()
+            .find_map(|c| c.git_commit.clone().filter(|g| !g.is_empty()));
+        let git_diff = {
+            let mut text = None;
+            for cp in checkpoints.iter().rev() {
+                if let Some(ref key) = cp.git_diff_blob {
+                    if let Some(bref) = crate::core::blob::BlobReference::try_new(key.clone(), 0) {
+                        if let Ok(bytes) = store.load_blob(&bref).await {
+                            text = Some(String::from_utf8_lossy(&bytes).into_owned());
+                            break;
+                        }
+                    }
+                }
+            }
+            text
+        };
+        Box::new(
+            SandboxReplay::new()
+                .with_policy(policy)
+                .with_git_commit(git_commit)
+                .with_git_diff(git_diff),
+        )
     } else {
         Box::new(TimelineReplay)
     };
@@ -2023,6 +2141,8 @@ async fn cmd_fork(cli: &Cli, args: &ForkArgs) -> anyhow::Result<()> {
             no_redact: false,
             no_auto_resume: false,
             auto_resume: false,
+            ci: false,
+            artifact_dir: None,
             resume_injection: None,
             command: cmd,
         };
@@ -2970,6 +3090,9 @@ async fn cmd_context(cli: &Cli, args: &ContextArgs) -> anyhow::Result<()> {
         pack.approx_tokens,
         if pack.truncated { ", truncated" } else { "" }
     );
+    println!("  headline: {}", pack.headline);
+    println!("  attention: {}", pack.attention_reason);
+    println!("  next: {}", pack.next_action);
     println!(
         "  status={:?} exit={:?} tools={} errors={}",
         pack.summary.status,
@@ -2984,6 +3107,12 @@ async fn cmd_context(cli: &Cli, args: &ContextArgs) -> anyhow::Result<()> {
         println!("  failed tools:");
         for t in &pack.failed_tools {
             println!("    seq={} {} {}", t.sequence, t.name, t.detail);
+        }
+    }
+    if !pack.errors_top.is_empty() {
+        println!("  errors_top:");
+        for e in pack.errors_top.iter().take(8) {
+            println!("    seq={} [{}] {}", e.sequence, e.error_type, e.message);
         }
     }
     if let Some(ref cmd) = pack.resume_command {
@@ -3026,10 +3155,22 @@ async fn cmd_summary(cli: &Cli, args: &SummaryArgs) -> anyhow::Result<()> {
     };
 
     let view = build_summary(&store, &run, opts).await?;
+    let failed = matches!(
+        run.status,
+        crate::core::run::RunStatus::Failed | crate::core::run::RunStatus::Cancelled
+    ) || run.exit_code.is_some_and(|c| c != 0);
+
     if cli.json {
-        return output::emit_ok("postmortem", &view);
+        let result = output::emit_ok("postmortem", &view);
+        if args.fail_on_failure && failed {
+            std::process::exit(1);
+        }
+        return result;
     }
     print!("{}", format_summary_text(&view));
+    if args.fail_on_failure && failed {
+        std::process::exit(1);
+    }
     Ok(())
 }
 
@@ -3053,6 +3194,8 @@ async fn cmd_doctor(cli: &Cli, args: &DoctorArgs) -> anyhow::Result<()> {
     let mut fts5 = "unopened".to_string();
     let mut secrets_clean = None;
     let mut store_size_bytes = None;
+    let mut blob_bytes = None;
+    let mut blob_files = None;
 
     if let Ok(store) = open_store(cli) {
         if args.reindex {
@@ -3097,7 +3240,28 @@ async fn cmd_doctor(cli: &Cli, args: &DoctorArgs) -> anyhow::Result<()> {
         if let Ok(meta) = std::fs::metadata(store.db_path()) {
             store_size_bytes = Some(meta.len());
         }
+        let (bf, bb) = dir_file_stats(store.blob_dir());
+        blob_files = Some(bf);
+        blob_bytes = Some(bb);
     }
+
+    // Best-effort blob stats even if store open failed but dir exists
+    if blob_bytes.is_none() && paths.blob_dir.exists() {
+        let (bf, bb) = dir_file_stats(&paths.blob_dir);
+        blob_files = Some(bf);
+        blob_bytes = Some(bb);
+    }
+    if store_size_bytes.is_none() && paths.db_path.exists() {
+        store_size_bytes = std::fs::metadata(&paths.db_path).ok().map(|m| m.len());
+    }
+
+    let total_storage_bytes = match (store_size_bytes, blob_bytes) {
+        (Some(d), Some(b)) => Some(d.saturating_add(b)),
+        (Some(d), None) => Some(d),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+    };
+    let storage_warning = storage_soft_warning(total_storage_bytes, blob_bytes.unwrap_or(0));
 
     let config_view = match &discovery.config {
         Some(c) => views::DoctorConfigView {
@@ -3107,6 +3271,7 @@ async fn cmd_doctor(cli: &Cli, args: &DoctorArgs) -> anyhow::Result<()> {
             retention: Some(views::DoctorRetentionView {
                 keep_runs: c.retention.keep_runs,
                 max_age_days: c.retention.max_age_days,
+                auto_apply: c.retention.auto_apply,
             }),
         },
         None => views::DoctorConfigView {
@@ -3127,13 +3292,17 @@ async fn cmd_doctor(cli: &Cli, args: &DoctorArgs) -> anyhow::Result<()> {
             blob_dir_exists: paths.blob_dir.exists(),
             project_root: discovery.project_root.display().to_string(),
             store_size_bytes,
+            blob_bytes,
+            blob_files,
+            total_storage_bytes,
+            storage_warning: storage_warning.clone(),
             run_count,
             running_count,
             fts5,
             secrets_clean,
             config: config_view,
             shell_integration_hint:
-                "functions call maybe-run; install via blackbox enable --install-shell (0.2)".into(),
+                "functions call maybe-run; install via blackbox enable --install-shell".into(),
             blackbox_on_path: on_path,
         };
         return output::emit_ok("doctor", &view);
@@ -3153,10 +3322,28 @@ async fn cmd_doctor(cli: &Cli, args: &DoctorArgs) -> anyhow::Result<()> {
     println!("blob dir:   {}", paths.blob_dir.display());
     println!("db exists:  {}", paths.db_path.exists());
     println!("blobs dir:  {}", paths.blob_dir.exists());
+    if let Some(total) = total_storage_bytes {
+        println!(
+            "storage:    {} total (db {} · blobs {} / {} files)",
+            format_bytes(total),
+            format_bytes(store_size_bytes.unwrap_or(0)),
+            format_bytes(blob_bytes.unwrap_or(0)),
+            blob_files.unwrap_or(0)
+        );
+    }
+    if let Some(ref w) = storage_warning {
+        println!("warning:    {w}");
+    }
     println!(
         "config:     {}",
         if config_view.present { "yes" } else { "no" }
     );
+    if let Some(ref ret) = config_view.retention {
+        println!(
+            "retention:  keep_runs={} max_age_days={:?} auto_apply={}",
+            ret.keep_runs, ret.max_age_days, ret.auto_apply
+        );
+    }
     if let Some(n) = run_count {
         println!(
             "runs:       {} (running/orphan: {})",
@@ -3194,6 +3381,54 @@ async fn cmd_doctor(cli: &Cli, args: &DoctorArgs) -> anyhow::Result<()> {
     println!();
     println!("ok — blackbox serve  ·  blackbox run -- echo hi");
     Ok(())
+}
+
+/// Soft thresholds for A4 cost visibility (not hard deletes).
+const STORAGE_WARN_TOTAL: u64 = 1_073_741_824; // 1 GiB
+const STORAGE_WARN_BLOBS: u64 = 536_870_912; // 512 MiB
+
+fn dir_file_stats(dir: &std::path::Path) -> (usize, u64) {
+    let rd = match std::fs::read_dir(dir) {
+        Ok(rd) => rd,
+        Err(_) => return (0, 0),
+    };
+    let mut files = 0usize;
+    let mut bytes = 0u64;
+    for e in rd.filter_map(|e| e.ok()) {
+        if let Ok(m) = e.metadata() {
+            if m.is_file() {
+                files += 1;
+                bytes = bytes.saturating_add(m.len());
+            }
+        }
+    }
+    (files, bytes)
+}
+
+fn storage_soft_warning(total: Option<u64>, blob_bytes: u64) -> Option<String> {
+    if total.is_some_and(|t| t >= STORAGE_WARN_TOTAL) || blob_bytes >= STORAGE_WARN_BLOBS {
+        Some(
+            "store is large — run `blackbox gc` / `blackbox stats` (retention auto_apply may already be on)"
+                .into(),
+        )
+    } else {
+        None
+    }
+}
+
+fn format_bytes(n: u64) -> String {
+    const KIB: u64 = 1024;
+    const MIB: u64 = KIB * 1024;
+    const GIB: u64 = MIB * 1024;
+    if n >= GIB {
+        format!("{:.2} GiB", n as f64 / GIB as f64)
+    } else if n >= MIB {
+        format!("{:.2} MiB", n as f64 / MIB as f64)
+    } else if n >= KIB {
+        format!("{:.1} KiB", n as f64 / KIB as f64)
+    } else {
+        format!("{n} B")
+    }
 }
 
 async fn cmd_serve(cli: &Cli, args: &ServeArgs) -> anyhow::Result<()> {

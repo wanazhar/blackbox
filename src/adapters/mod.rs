@@ -1,5 +1,7 @@
+pub mod agents;
 pub mod claude;
 pub mod codex;
+pub mod detect;
 pub mod generic;
 pub mod harness;
 pub mod launch;

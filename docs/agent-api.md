@@ -1,4 +1,4 @@
-# blackbox agent API (1.0)
+# blackbox agent API (1.0 → 1.1)
 
 Machine-readable contracts for agents and custom harnesses.
 
@@ -59,6 +59,25 @@ Error:
 | Auto-resume | Default on; writes `.blackbox/RESUME.md` + injects into next launch |
 | `serve` `/api/status` `/api/handoff` | Dashboard JSON mirrors CLI Views |
 | Wrap defaults | claude, codex, aider, cursor, cursor-agent, gemini, opencode, grok |
+
+### 1.1 additions (adoption bar + former backlog)
+
+| Surface | Notes |
+|---|---|
+| `context --for-resume` pack | Additive fields: `headline`, `next_action`, `attention_reason`, `errors_top` (existing fields unchanged) |
+| `doctor --json` | `blob_bytes`, `blob_files`, `total_storage_bytes`, `storage_warning`; retention includes `auto_apply` |
+| `stats --json` | `db_bytes`, `total_storage_bytes`, `storage_warning` |
+| Ambient contract | See `docs/ambient-contract.md`; tests in `tests/ambient_contract.rs` |
+| Redaction gate | `tests/redaction_gate.rs` — structural IDs never scar |
+| Adapters | `aider`, `gemini`, `cursor`, `opencode`, `grok` first-class (detect + parse) |
+| `run --ci` | Exit with child process code after recording |
+| `run --artifact-dir DIR` | Writes `run.json`, `postmortem.json`, `portable.json` |
+| `postmortem --fail-on-failure` | Exit 1 if run failed/cancelled/nonzero |
+| Cost estimate | `BLACKBOX_ESTIMATE_COST=1` fills `estimated_cost_usd`; optional `BLACKBOX_PRICING` / `.blackbox/pricing.toml` |
+| Sandbox restore | Checkpoint `git_commit` via `git archive` + apply `git_diff_blob` when present |
+| Shell soak | `tests/shell_soak.rs` exercises real bash install → ambient record |
+| Native logs | Per-harness roots/filters; aider plaintext history |
+| Windows | `taskkill` soft/hard stop; `--shell powershell` install |
 
 **Agent session start (recommended):**
 

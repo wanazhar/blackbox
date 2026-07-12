@@ -216,6 +216,10 @@ pub struct StatsView {
     pub top_kinds: Vec<(String, usize)>,
     pub blob_files: usize,
     pub blob_bytes: u64,
+    /// SQLite file size when available (1.1 A4).
+    pub db_bytes: Option<u64>,
+    pub total_storage_bytes: Option<u64>,
+    pub storage_warning: Option<String>,
 }
 
 // ── doctor ────────────────────────────────────────────────────────
@@ -230,6 +234,13 @@ pub struct DoctorView {
     pub blob_dir_exists: bool,
     pub project_root: String,
     pub store_size_bytes: Option<u64>,
+    /// Best-effort sum of files under blob dir (1.1 A4).
+    pub blob_bytes: Option<u64>,
+    pub blob_files: Option<usize>,
+    /// db + blobs when both known.
+    pub total_storage_bytes: Option<u64>,
+    /// Soft warning when storage is large (human + agents).
+    pub storage_warning: Option<String>,
     pub run_count: Option<usize>,
     pub running_count: Option<usize>,
     pub fts5: String,
@@ -251,4 +262,5 @@ pub struct DoctorConfigView {
 pub struct DoctorRetentionView {
     pub keep_runs: u32,
     pub max_age_days: Option<u32>,
+    pub auto_apply: bool,
 }

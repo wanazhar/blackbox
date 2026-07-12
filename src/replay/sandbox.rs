@@ -40,6 +40,12 @@ pub struct SandboxReplay {
     workspace: Option<PathBuf>,
     /// When true (default), copy source project files into the workspace.
     seed_from_cwd: bool,
+    /// Optional git commit from a checkpoint — restore tree via `git archive`.
+    git_commit: Option<String>,
+    /// Optional unified-diff text from checkpoint `git_diff_blob` (applied after archive).
+    git_diff: Option<String>,
+    /// When true (default), attempt git-commit restore when `git_commit` is set.
+    restore_git: bool,
 }
 
 impl SandboxReplay {
@@ -48,6 +54,9 @@ impl SandboxReplay {
             policy: ReplayPolicy::Sandbox,
             workspace: None,
             seed_from_cwd: true,
+            git_commit: None,
+            git_diff: None,
+            restore_git: true,
         }
     }
 
@@ -63,6 +72,23 @@ impl SandboxReplay {
 
     pub fn without_seed(mut self) -> Self {
         self.seed_from_cwd = false;
+        self
+    }
+
+    /// Restore workspace files from this git commit (best-effort `git archive`).
+    pub fn with_git_commit(mut self, commit: Option<String>) -> Self {
+        self.git_commit = commit;
+        self
+    }
+
+    /// Apply checkpoint working-tree diff after git archive (best-effort).
+    pub fn with_git_diff(mut self, diff: Option<String>) -> Self {
+        self.git_diff = diff;
+        self
+    }
+
+    pub fn without_git_restore(mut self) -> Self {
+        self.restore_git = false;
         self
     }
 
@@ -216,12 +242,46 @@ impl ReplayEngine for SandboxReplay {
             dir
         };
 
+        let mut git_restored = None;
+        let mut git_diff_applied = None;
+        if self.restore_git {
+            if let Some(ref commit) = self.git_commit {
+                match restore_git_tree(Path::new(&run.cwd), &workspace, commit) {
+                    Ok(msg) => {
+                        git_restored = Some(msg);
+                        tracing::info!(commit = %commit, "sandbox: restored git tree via archive");
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, commit = %commit, "sandbox: git restore failed");
+                    }
+                }
+            }
+            if let Some(ref diff) = self.git_diff {
+                if !diff.trim().is_empty() {
+                    match apply_git_diff(&workspace, diff) {
+                        Ok(msg) => {
+                            git_diff_applied = Some(msg);
+                            tracing::info!("sandbox: applied checkpoint git diff");
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "sandbox: git diff apply failed");
+                        }
+                    }
+                }
+            }
+        }
+
         let seed_stats = if self.seed_from_cwd && self.policy != ReplayPolicy::Live {
-            match seed_workspace(Path::new(&run.cwd), &workspace) {
-                Ok(s) => s,
-                Err(e) => {
-                    tracing::warn!(error = %e, "sandbox: seed from cwd failed");
-                    SeedStats::default()
+            // Prefer git restore as the primary tree; seed fills when archive failed.
+            if git_restored.is_some() {
+                SeedStats::default()
+            } else {
+                match seed_workspace(Path::new(&run.cwd), &workspace) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "sandbox: seed from cwd failed");
+                        SeedStats::default()
+                    }
                 }
             }
         } else {
@@ -237,6 +297,9 @@ impl ReplayEngine for SandboxReplay {
             "event_count": slice.len(),
             "seeded_files": seed_stats.files,
             "seeded_bytes": seed_stats.bytes,
+            "git_commit": self.git_commit,
+            "git_restored": git_restored,
+            "git_diff_applied": git_diff_applied,
         });
         std::fs::write(
             workspace.join(".blackbox-sandbox-context.json"),
@@ -246,6 +309,12 @@ impl ReplayEngine for SandboxReplay {
         println!("═══ Sandbox replay ═══");
         println!("workspace: {}", workspace.display());
         println!("policy:    {:?}", self.policy);
+        if let Some(ref g) = git_restored {
+            println!("git:       {g}");
+        }
+        if let Some(ref d) = git_diff_applied {
+            println!("diff:      {d}");
+        }
         if seed_stats.files > 0 {
             println!(
                 "seeded:    {} files ({} bytes) from {}",
@@ -336,6 +405,128 @@ impl ReplayEngine for SandboxReplay {
 struct SeedStats {
     files: usize,
     bytes: u64,
+}
+
+/// Best-effort restore of a commit's tree into `workspace` using
+/// `git -C source archive <commit> | tar -x -C workspace`.
+///
+/// Does not require copying `.git`. Fails if source is not a git repo or
+/// the commit is missing. Not a full FS guarantee (untracked files absent).
+pub fn restore_git_tree(source: &Path, workspace: &Path, commit: &str) -> anyhow::Result<String> {
+    let commit = commit.trim();
+    // Only full/abbreviated hex SHAs from checkpoints (no branch names / path injection).
+    if commit.len() < 7 || commit.len() > 64 || !commit.chars().all(|c| c.is_ascii_hexdigit()) {
+        anyhow::bail!("invalid git commit sha");
+    }
+    std::fs::create_dir_all(workspace)?;
+
+    let archive = Command::new("git")
+        .args(["-C", &source.to_string_lossy(), "archive", commit])
+        .output()
+        .map_err(|e| anyhow::anyhow!("git archive spawn failed: {e}"))?;
+    if !archive.status.success() {
+        let err = String::from_utf8_lossy(&archive.stderr);
+        anyhow::bail!("git archive failed: {err}");
+    }
+
+    let mut tar = Command::new("tar")
+        .args(["-x", "-C", &workspace.to_string_lossy()])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("tar spawn failed: {e}"))?;
+
+    if let Some(mut stdin) = tar.stdin.take() {
+        use std::io::Write;
+        stdin.write_all(&archive.stdout)?;
+    }
+    let out = tar.wait_with_output()?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        anyhow::bail!("tar extract failed: {err}");
+    }
+    Ok(format!("git archive {commit} → {}", workspace.display()))
+}
+
+/// Strip blackbox capture banners and apply a unified diff to `workspace`.
+///
+/// Tries `git apply` first (if git is available), then `patch -p1`.
+/// Best-effort — partial apply is not rolled back.
+pub fn apply_git_diff(workspace: &Path, diff: &str) -> anyhow::Result<String> {
+    let cleaned = strip_diff_banners(diff);
+    if cleaned.trim().is_empty() {
+        anyhow::bail!("empty diff after stripping banners");
+    }
+    // Cap size (matches capture limits roughly)
+    if cleaned.len() > 8 * 1024 * 1024 {
+        anyhow::bail!("diff too large to apply");
+    }
+
+    let patch_path = workspace.join(".blackbox-restore.patch");
+    std::fs::write(&patch_path, &cleaned)?;
+
+    // Prefer git apply --unsafe-paths -p1 in workspace (not necessarily a repo)
+    let git = Command::new("git")
+        .args([
+            "apply",
+            "--whitespace=nowarn",
+            "--unsafe-paths",
+            "-p1",
+            &patch_path.to_string_lossy(),
+        ])
+        .current_dir(workspace)
+        .output();
+
+    if let Ok(out) = git {
+        if out.status.success() {
+            let _ = std::fs::remove_file(&patch_path);
+            return Ok(format!("git apply ({} bytes)", cleaned.len()));
+        }
+        tracing::debug!(
+            stderr = %String::from_utf8_lossy(&out.stderr),
+            "git apply failed; trying patch"
+        );
+    }
+
+    let patch = Command::new("patch")
+        .args([
+            "-p1",
+            "--forward",
+            "--batch",
+            "-i",
+            &patch_path.to_string_lossy(),
+        ])
+        .current_dir(workspace)
+        .output();
+
+    match patch {
+        Ok(out) if out.status.success() => {
+            let _ = std::fs::remove_file(&patch_path);
+            Ok(format!("patch -p1 ({} bytes)", cleaned.len()))
+        }
+        Ok(out) => {
+            let err = String::from_utf8_lossy(&out.stderr);
+            anyhow::bail!("patch apply failed: {err}");
+        }
+        Err(e) => anyhow::bail!("patch spawn failed: {e}"),
+    }
+}
+
+/// Capture stores diffs with human banners; strip them for `git apply`.
+fn strip_diff_banners(diff: &str) -> String {
+    let mut out = String::with_capacity(diff.len());
+    for line in diff.lines() {
+        if line.starts_with("--- Unstaged Changes ---")
+            || line.starts_with("--- Staged Changes ---")
+            || line.starts_with("--- Combined ---")
+        {
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
 }
 
 /// Shallow copy of project files into the sandbox (skips heavy/noise dirs).
@@ -618,5 +809,52 @@ mod tests {
             other => panic!("unexpected {:?}", other),
         }
         let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn restore_git_tree_rejects_non_hex() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = restore_git_tree(dir.path(), dir.path(), "../etc/passwd").unwrap_err();
+        assert!(err.to_string().contains("invalid"));
+    }
+
+    #[test]
+    fn strip_diff_banners_removes_headers() {
+        let raw = "--- Unstaged Changes ---\ndiff --git a/x b/x\n+hi\n";
+        let c = strip_diff_banners(raw);
+        assert!(!c.contains("Unstaged"));
+        assert!(c.contains("diff --git"));
+    }
+
+    #[test]
+    fn apply_git_diff_empty_fails() {
+        let ws = tempfile::tempdir().unwrap();
+        let err = apply_git_diff(ws.path(), "--- Unstaged Changes ---\n").unwrap_err();
+        assert!(err.to_string().contains("empty"));
+    }
+
+    #[test]
+    fn restore_git_tree_from_repo_when_available() {
+        // Best-effort: skip if not in a git repo or git/tar missing.
+        let cwd = std::env::current_dir().unwrap();
+        let rev = Command::new("git")
+            .args(["-C", &cwd.to_string_lossy(), "rev-parse", "HEAD"])
+            .output();
+        let Ok(out) = rev else { return };
+        if !out.status.success() {
+            return;
+        }
+        let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if sha.len() < 7 {
+            return;
+        }
+        let ws = tempfile::tempdir().unwrap();
+        let msg = restore_git_tree(&cwd, ws.path(), &sha).expect("git archive restore");
+        assert!(msg.contains(&sha[..7]));
+        // Repo should have extracted something (Cargo.toml at least for this project)
+        assert!(
+            ws.path().join("Cargo.toml").exists() || ws.path().read_dir().unwrap().next().is_some(),
+            "expected files from git archive"
+        );
     }
 }

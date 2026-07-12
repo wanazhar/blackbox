@@ -62,6 +62,8 @@ async fn records_tool_events_from_fake_claude() {
         no_redact: false,
         no_auto_resume: false,
         auto_resume: false,
+        ci: false,
+        artifact_dir: None,
         resume_injection: None,
         command: vec![claude.to_string_lossy().into(), "-p".into(), "hi".into()],
     };
@@ -145,6 +147,8 @@ async fn redacts_secret_in_command_argv() {
         no_redact: false,
         no_auto_resume: false,
         auto_resume: false,
+        ci: false,
+        artifact_dir: None,
         resume_injection: None,
         command: vec![
             "sh".into(),
@@ -189,6 +193,8 @@ async fn tags_persist_on_run() {
         no_redact: false,
         no_auto_resume: false,
         auto_resume: false,
+        ci: false,
+        artifact_dir: None,
         resume_injection: None,
         command: vec!["true".into()],
     };
@@ -229,6 +235,8 @@ async fn portable_export_import_round_trip() {
         no_redact: false,
         no_auto_resume: false,
         auto_resume: false,
+        ci: false,
+        artifact_dir: None,
         resume_injection: None,
         command: vec!["sh".into(), "-c".into(), "echo portable-payload".into()],
     };
@@ -272,6 +280,8 @@ async fn export_jsonl_transcript_and_delete_run() {
         no_redact: false,
         no_auto_resume: false,
         auto_resume: false,
+        ci: false,
+        artifact_dir: None,
         resume_injection: None,
         command: vec!["sh".into(), "-c".into(), "echo export-ok".into()],
     };

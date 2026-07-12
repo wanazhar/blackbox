@@ -109,10 +109,12 @@ Prefer tests for redaction, store invariants, sequencing, adapters, export/impor
 | `README.md` | Users — install, quick start, commands |
 | `CHANGELOG.md` | Release notes |
 | `AGENTS.md` | Contributors / coding agents (this file) |
-| `docs/ROADMAP.md` | Quality bar + remaining work |
+| `docs/ROADMAP.md` | Quality bar + remaining work (1.1 adoption bar) |
+| `docs/plan/adoption-1.1.md` | Active 1.1 design — ambient / redaction / resume / cost |
+| `docs/ambient-contract.md` | Normative ambient shell + maybe-run contract |
 | `docs/PUBLISH.md` | crates.io publish checklist |
 | `docs/history/*` | Archived plans — not current truth |
 
 ## Roadmap
 
-P0–P3 product bar is largely met for a first release. Open work and non-goals live in `docs/ROADMAP.md`. Do not use `docs/history/` task lists as a backlog.
+**1.0** = capability daily-driver. **1.1** = adoption proof (leave ambient on). See `docs/ROADMAP.md` and `docs/plan/adoption-1.1.md`. Do not use `docs/history/` task lists as a backlog.

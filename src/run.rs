@@ -7,9 +7,7 @@ use anyhow::Context;
 use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
 use tokio::sync::mpsc;
 
-use crate::adapters::claude::ClaudeAdapter;
-use crate::adapters::codex::CodexAdapter;
-use crate::adapters::generic::GenericAdapter;
+use crate::adapters::detect::detect_adapter;
 use crate::adapters::harness::HarnessAdapter;
 use crate::adapters::native_logs::{discover_log_roots, poll_native_logs};
 use crate::adapters::{LaunchContext, RunContext};
@@ -108,14 +106,7 @@ impl RunSupervisor {
         }
 
         // ── Detect harness adapter (use original args for detection) ──
-        let detect_cmd = &args.command;
-        let adapter: Arc<dyn HarnessAdapter> = if ClaudeAdapter::new().detect(detect_cmd) {
-            Arc::new(ClaudeAdapter::new())
-        } else if CodexAdapter::new().detect(detect_cmd) {
-            Arc::new(CodexAdapter::new())
-        } else {
-            Arc::new(GenericAdapter::new())
-        };
+        let adapter: Arc<dyn HarnessAdapter> = detect_adapter(&args.command);
         let adapter_id = adapter.id();
         tracing::info!(adapter = adapter_id, "detected harness adapter");
 
@@ -744,25 +735,7 @@ impl RunSupervisor {
                     .context("failed to wait for child process")?
             }
             _ = tokio::time::sleep(Duration::from_secs(4 * 3600)) => {
-                // H-20/H-21: After 4h timeout, escalate: SIGINT -> 5s -> SIGKILL.
-                tracing::warn!(pid = child_pid, "child wait timed out; escalating to SIGKILL");
-                let _ = unsafe { libc::kill(-(child_pid as i32), libc::SIGINT) };
-                tokio::time::sleep(Duration::from_secs(5)).await;
-                let _ = unsafe { libc::kill(-(child_pid as i32), libc::SIGKILL) };
-                let _ = unsafe { libc::kill(child_pid as i32, libc::SIGKILL) };
-                tokio::task::spawn_blocking(move || {
-                    let mut status: libc::c_int = 0;
-                    loop {
-                        let ret = unsafe { libc::waitpid(child_pid as i32, &mut status, 0) };
-                        if ret > 0 || ret == -1 { break; }
-                        std::thread::sleep(Duration::from_millis(100));
-                    }
-                    use std::os::unix::process::ExitStatusExt;
-                    let std_status = std::process::ExitStatus::from_raw(status);
-                    portable_pty::ExitStatus::with_exit_code(std_status.code().unwrap_or(137) as u32)
-                })
-                .await
-                .context("wait task panicked after SIGKILL")?
+                timeout_kill_and_wait(child_pid).await?
             }
         };
 
@@ -895,28 +868,88 @@ impl RunSupervisor {
     }
 }
 
-/// Forward SIGINT to a child process (process group first, fallback to direct).
+/// Soft-stop the supervised child (SIGINT on Unix; taskkill without /F on Windows).
 async fn forward_sigint(pid: u32) {
-    tracing::debug!(pid, "forwarding SIGINT to child");
-    // SAFETY: signal_child_pid was obtained from process::Command output and is a valid
-    // child PID. The negative PID sends the signal to the entire process group.
-    let ret = unsafe { libc::kill(-(pid as i32), libc::SIGINT) };
-    if ret != 0 {
-        // SAFETY: Same PID; falling back to direct process signal when process-group kill fails.
-        let ret2 = unsafe { libc::kill(pid as i32, libc::SIGINT) };
-        if ret2 != 0 {
-            tracing::warn!(
-                pid,
-                errno = std::io::Error::last_os_error().to_string(),
-                "failed to forward SIGINT"
-            );
+    if pid == 0 {
+        return;
+    }
+    tracing::debug!(pid, "forwarding interrupt to child");
+    #[cfg(unix)]
+    {
+        // SAFETY: pid from PTY spawn; negative PID targets process group.
+        let ret = unsafe { libc::kill(-(pid as i32), libc::SIGINT) };
+        if ret != 0 {
+            let ret2 = unsafe { libc::kill(pid as i32, libc::SIGINT) };
+            if ret2 != 0 {
+                tracing::warn!(
+                    pid,
+                    errno = std::io::Error::last_os_error().to_string(),
+                    "failed to forward SIGINT"
+                );
+            }
         }
+    }
+    #[cfg(windows)]
+    {
+        // Best-effort soft stop: taskkill without /F asks the process to exit.
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
     }
 }
 
-/// Escalate to SIGKILL after grace period (both process group and direct).
+/// Hard-kill after grace (SIGKILL / taskkill /F).
 async fn escalate_sigkill(pid: u32) {
-    tracing::debug!(pid, "SIGKILL escalation after timeout");
-    let _ = unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
-    let _ = unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+    if pid == 0 {
+        return;
+    }
+    tracing::debug!(pid, "kill escalation after timeout");
+    #[cfg(unix)]
+    {
+        let _ = unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
+        let _ = unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+    }
+    #[cfg(windows)]
+    {
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+}
+
+/// Timeout escalation: soft interrupt then hard kill, then wait for exit.
+async fn timeout_kill_and_wait(child_pid: u32) -> anyhow::Result<portable_pty::ExitStatus> {
+    tracing::warn!(pid = child_pid, "child wait timed out; escalating kill");
+    forward_sigint(child_pid).await;
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    escalate_sigkill(child_pid).await;
+
+    #[cfg(unix)]
+    {
+        tokio::task::spawn_blocking(move || {
+            let mut status: libc::c_int = 0;
+            loop {
+                let ret = unsafe { libc::waitpid(child_pid as i32, &mut status, 0) };
+                if ret > 0 || ret == -1 {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            use std::os::unix::process::ExitStatusExt;
+            let std_status = std::process::ExitStatus::from_raw(status);
+            portable_pty::ExitStatus::with_exit_code(std_status.code().unwrap_or(137) as u32)
+        })
+        .await
+        .context("wait task panicked after kill")
+    }
+    #[cfg(not(unix))]
+    {
+        // On Windows, waitpid is unavailable; report a synthetic timeout exit.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        Ok(portable_pty::ExitStatus::with_exit_code(1))
+    }
 }

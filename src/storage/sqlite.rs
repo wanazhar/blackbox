@@ -28,6 +28,10 @@ const SCHEMA_VERSION: i32 = 3;
 /// for the current single-dashboard + CLI usage pattern but will need
 /// replacement with `tokio::sync::Mutex` (or an r2d2 pool) if the
 /// server faces concurrent write-heavy workloads.
+/// M-14: There is currently no garbage-collection pass for orphaned blobs.
+/// Blobs whose referencing rows are deleted remain on disk.  A future
+/// `gc_blobs()` method should cross-reference the `blobs` table against
+/// `events` / `checkpoints` rows and prune unreferenced entries.
 pub struct SqliteStore {
     conn: Mutex<Connection>,
     blob_dir: PathBuf,

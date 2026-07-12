@@ -7,6 +7,10 @@ use crate::terminal::{TerminalRecorder, TerminalSegment};
 
 /// Maximum number of segments a RawRecorder will retain.
 /// When exceeded, the oldest segments are dropped with a warning.
+/// M-16: This cap prevents unbounded memory growth during long-running
+/// sessions.  At 10_000 segments with an average segment size of a few
+/// KiB, worst-case memory is well under 100 MiB — acceptable for a
+/// local CLI tool.  The cap is intentionally conservative.
 const MAX_SEGMENTS: usize = 10_000;
 
 /// Raw terminal I/O recorder.

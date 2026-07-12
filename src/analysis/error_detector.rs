@@ -91,8 +91,13 @@ impl ErrorDetector {
         for line in output.lines() {
             let trimmed = line.trim();
             for prefix in &js_error_prefixes {
-                if let Some(message) = trimmed.strip_prefix(prefix) {
-                    let message = message.trim().to_string();
+                if let Some(rest) = trimmed.strip_prefix(prefix) {
+                    // Require whitespace or end-of-line after the error prefix
+                    // to avoid matching identifiers like "MyError:"
+                    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+                        continue;
+                    }
+                    let message = rest.trim().to_string();
                     let (file, line_num, col) = self.parse_file_location(trimmed);
                     errors.push(StructuredError {
                         error_type: "javascript".to_string(),
@@ -107,15 +112,25 @@ impl ErrorDetector {
         }
 
         // Python tracebacks: "Traceback (most recent call last):"
+        // The traceback block ends at the first non-empty line after the
+        // indented frames, or at the next "Traceback" header.  We scan
+        // backward from the bottom and stop at those boundaries so we
+        // don't pick up unrelated ": " patterns from other output.
         if output.contains("Traceback") {
             let lines: Vec<&str> = output.lines().collect();
             for (i, line) in lines.iter().enumerate() {
                 if line.trim().starts_with("Traceback") {
-                    // The actual error is typically the last non-empty line after the traceback
+                    // Scan backward from the last line to find the error line.
+                    // Stop at traceback block boundaries: another "Traceback"
+                    // header or a line starting with "File " (traceback frame).
                     for j in (i + 1..lines.len()).rev() {
                         let trimmed = lines[j].trim();
                         if trimmed.is_empty() {
                             continue;
+                        }
+                        // Stop at block boundaries — we've left this traceback
+                        if trimmed.starts_with("Traceback") || trimmed.starts_with("File \"") {
+                            break;
                         }
                         if let Some(colon_idx) = trimmed.find(": ") {
                             let error_type = trimmed[..colon_idx].to_string();
@@ -137,10 +152,12 @@ impl ErrorDetector {
         }
 
         // Test framework failures: "FAILED", "failures:"
-        if output.contains("FAILED") {
+        // Anchor to line start to avoid false positives on lines like
+        // "info: test completed, NOT FAILED" embedded in log output.
+        if output.lines().any(|l| l.trim().starts_with("FAILED")) {
             let message = output
                 .lines()
-                .find(|l| l.contains("FAILED"))
+                .find(|l| l.trim().starts_with("FAILED"))
                 .unwrap_or("")
                 .trim()
                 .to_string();
@@ -152,10 +169,10 @@ impl ErrorDetector {
                 line: line_num,
                 column: col,
             });
-        } else if output.contains("failures:") {
+        } else if output.lines().any(|l| l.trim().starts_with("failures:")) {
             let message = output
                 .lines()
-                .find(|l| l.contains("failures:"))
+                .find(|l| l.trim().starts_with("failures:"))
                 .unwrap_or("")
                 .trim()
                 .to_string();

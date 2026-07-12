@@ -26,6 +26,11 @@ pub fn has_option(command: &[String], option: &str) -> bool {
 }
 
 /// Insert `insert` after the binary (index 0), unless already present.
+///
+/// # POSIX note
+/// Flags are inserted as discrete argv tokens, never concatenated into the
+/// binary path or a shell string, so there is no shell injection or argument
+/// mangling risk on POSIX systems. Each token maps 1:1 to an argv element.
 pub fn ensure_flags(command: &[String], insert: &[&str]) -> Vec<String> {
     let out = command.to_vec();
     if out.is_empty() {

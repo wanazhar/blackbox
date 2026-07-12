@@ -83,7 +83,7 @@ impl Run {
     /// Allocate the next sequence number for an event in this run.
     pub fn allocate_sequence(&mut self) -> u64 {
         let seq = self.next_sequence;
-        self.next_sequence += 1;
+        self.next_sequence = self.next_sequence.saturating_add(1);
         seq
     }
 
@@ -103,6 +103,7 @@ impl Run {
 ///
 /// Returned by the run supervisor and used to interact with the
 /// running child process (signal, inject input, poll, stop).
+#[allow(dead_code)]
 pub struct RunHandle {
     pub run_id: String,
     pub child_pid: u32,

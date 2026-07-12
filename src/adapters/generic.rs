@@ -68,7 +68,9 @@ impl HarnessAdapter for GenericAdapter {
 
             events.extend(parse_plaintext(run_id, trimmed, "generic"));
 
-            // Surface common error banners as structured events
+            // Surface common error banners as structured events.
+            // Use trimmed.starts_with() to anchor detection to line start,
+            // avoiding false positives on substrings in log output.
             if trimmed.starts_with("error:")
                 || trimmed.starts_with("Error:")
                 || trimmed.starts_with("ERROR:")
@@ -81,7 +83,7 @@ impl HarnessAdapter for GenericAdapter {
                 || trimmed.starts_with("FAILED")
                 || trimmed.starts_with("Aborted")
                 || trimmed.starts_with("Killed")
-                || trimmed.contains("Traceback (most recent call last)")
+                || trimmed.starts_with("Traceback")
             {
                 let mut ev = TraceEvent::new(run_id, EventSource::System, "process.error_banner");
                 ev.status = EventStatus::Error;

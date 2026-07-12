@@ -95,6 +95,12 @@ pub async fn export_run(
             Ok(serde_json::to_string_pretty(&v)?)
         }
         "html" => {
+            // M-26: The HTML redactor operates on a single JSON string value.
+            // It does not parse or walk the HTML DOM — so redaction patterns
+            // that span element boundaries (e.g. split across tags) will not
+            // be caught.  This is acceptable for the current export pipeline
+            // where the HTML is machine-generated and patterns stay within
+            // text nodes.
             let mut wrapped = serde_json::Value::String(output);
             redactor.redact_json(&mut wrapped);
             Ok(wrapped.as_str().unwrap_or("").to_string())

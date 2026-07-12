@@ -61,7 +61,14 @@ impl TerminalCoalescer {
         self.chunks += 1;
         self.redactions += redaction_count;
         if self.store_raw {
-            self.insecure_raw.extend_from_slice(raw);
+            // Cap insecure_raw to avoid unbounded memory growth on
+            // long-running sessions.  Drop oldest data first.
+            const MAX_INSECURE_RAW: usize = 10 * 1024 * 1024; // 10 MiB
+            let remaining = MAX_INSECURE_RAW.saturating_sub(self.insecure_raw.len());
+            let to_copy = raw.len().min(remaining);
+            if to_copy > 0 {
+                self.insecure_raw.extend_from_slice(&raw[..to_copy]);
+            }
         }
 
         let should_flush = raw.len() >= self.policy.large_chunk

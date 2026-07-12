@@ -67,6 +67,10 @@ pub async fn search_store(
             hits.push(hit);
         }
     } else {
+        // L-30: Fallback linear scan when FTS5 is unavailable. This is O(n*m)
+        // over all runs × events — acceptable for small stores but may be slow
+        // for large histories. Consider adding an in-memory inverted index as
+        // an intermediate tier.
         for run in runs.into_iter().take(max_runs) {
             let events = store.get_events(&run.id).await?;
             for ev in events {

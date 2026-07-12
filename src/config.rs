@@ -37,6 +37,8 @@ impl BlackboxPaths {
         }
 
         if let Ok(env_db) = std::env::var("BLACKBOX_DB") {
+            // M-11: An empty string is treated as "not set" — the variable is
+            // ignored and fallback resolution (legacy path → default) proceeds.
             if !env_db.is_empty() {
                 let env_path = PathBuf::from(&env_db);
                 if env_path.is_dir() {
@@ -67,6 +69,11 @@ impl BlackboxPaths {
         };
 
         // Legacy: keep using cwd blackbox.db if present so existing traces survive.
+        //
+        // M-12: This check has an inherent TOCTOU race (the file could appear
+        // or disappear between `exists()` and `open()`), but the window is
+        // negligible in practice and the worst case (a brief "not found" error
+        // at open time) is acceptable for this migration path.
         let legacy = project.join("blackbox.db");
         if legacy.exists() {
             return Ok(Self::from_db_path(legacy));

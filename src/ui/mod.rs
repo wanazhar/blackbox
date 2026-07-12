@@ -8,6 +8,7 @@ pub mod tui;
 use ratatui::layout::Rect;
 use ratatui::Frame;
 
+#[allow(dead_code)] // L-08: trait used only via impl blocks; no dyn Panel or trait bounds yet
 /// A TUI panel that can be rendered within a Ratatui layout.
 pub trait Panel {
     /// Render this panel into the given frame area.

@@ -267,9 +267,15 @@ impl RunSupervisor {
         tracing::info!(run_id = %run.id, command = ?run.command, "run started");
 
         // ── Spawn child in a PTY ──────────────────────────────────
-        let (rows, cols) = term_size::dimensions()
-            .map(|(w, h)| (h as u16, w as u16))
-            .unwrap_or((24, 80));
+        let (rows, cols) = match term_size::dimensions() {
+            Some((w, h)) => (h as u16, w as u16),
+            None => {
+                tracing::info!(
+                    "terminal size unavailable; defaulting to 24x80 (L-25)"
+                );
+                (24, 80)
+            }
+        };
 
         let pty_system = NativePtySystem::default();
         let pair = pty_system

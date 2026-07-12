@@ -2,7 +2,7 @@
 ///
 /// Builds an index over normalized terminal output for
 /// full-text search, event correlation, and context retrieval.
-pub struct TranscriptIndexer;
+pub struct TranscriptIndexer; // TODO(L-06): implement indexing backend (FTS5 or in-memory trie)
 
 impl Default for TranscriptIndexer {
     fn default() -> Self {

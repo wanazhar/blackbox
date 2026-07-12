@@ -190,6 +190,10 @@ impl GitCapture {
     }
 
     /// Build a simple filesystem manifest (name + size) for non-git dirs.
+    ///
+    /// NOTE: This hard-coded skip list (`.`, `target`, `node_modules`) is a
+    /// subset of `IGNORE_COMPONENTS` in `capture/filesystem.rs`. Keep the two
+    /// lists in sync when adding new entries, or factor out a shared constant.
     fn filesystem_manifest(cwd: &str) -> String {
         let mut entries = Vec::new();
         if let Ok(read_dir) = std::fs::read_dir(cwd) {

@@ -60,13 +60,14 @@ impl EventCorrelator {
                 Confidence::Unknown
             };
 
-            // Cross-layer correlation boost: process → filesystem/git
+            // Cross-layer correlation boost: process → filesystem/git,
+            // terminal → process.  Deliberately excludes System source
+            // to avoid boosting every system event across all layers.
             let cross_layer = matches!(
                 (&prev.source, &event.source),
                 (EventSource::Process, EventSource::Filesystem)
                     | (EventSource::Process, EventSource::Git)
                     | (EventSource::Terminal, EventSource::Process)
-                    | (EventSource::System, _)
             );
 
             let confidence = if cross_layer && gap < 2000 {

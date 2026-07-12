@@ -30,8 +30,7 @@ impl SideEffectClassifier {
         let base = parts.first().copied().unwrap_or("");
 
         // Destructive patterns first
-        if lower.contains("rm -rf")
-            || lower.contains("rm -fr")
+        if (base == "rm" && (lower.contains("-rf") || lower.contains("-fr")))
             || lower.contains("drop table")
             || lower.contains("delete from")
             || lower.contains("mkfs")

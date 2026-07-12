@@ -4,8 +4,8 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
 /// Run comparison panel — shows differences between two runs.
+// TODO(L-07): implement diff rendering (currently a placeholder stub)
 pub struct DiffView;
-
 impl Default for DiffView {
     fn default() -> Self {
         Self::new()

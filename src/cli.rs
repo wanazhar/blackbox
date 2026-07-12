@@ -347,6 +347,8 @@ pub struct ExportArgs {
     #[arg(long, default_value = "jsonl")]
     pub format: ExportFormat,
 
+    // TODO(L-20): add --output / -o flag to write to a file instead of stdout
+
     /// Include secrets (disable redaction). Default is redacted.
     #[arg(long)]
     pub no_redact: bool,
@@ -627,6 +629,8 @@ async fn cmd_runs(cli: &Cli, args: &RunsArgs) -> anyhow::Result<()> {
     if let Some(ref status) = args.status {
         let s = status.to_lowercase();
         runs.retain(|r| format!("{:?}", r.status).to_lowercase().contains(&s));
+        // L-18: Lenient matching — accepts partial/lowercase status strings
+        // (e.g. "suc" matches "Succeeded", "fail" matches "Failed").
     }
     if let Some(limit) = args.limit {
         runs.truncate(limit);
@@ -741,6 +745,8 @@ async fn cmd_tag(cli: &Cli, args: &TagArgs) -> anyhow::Result<()> {
         .await?
         .ok_or_else(|| anyhow::anyhow!("run not found"))?;
 
+    // L-23: When a tag appears in both --add and --rm, the remove runs first,
+    // then the add re-inserts it. Net effect is the tag stays (idempotent add).
     for t in &args.rm {
         run.tags.retain(|x| x != t);
     }
@@ -1179,6 +1185,9 @@ async fn cmd_diff(cli: &Cli, args: &DiffArgs) -> anyhow::Result<()> {
     let store = open_store(cli)?;
     let id_a = resolve_run_id(&store, &args.run_a).await?;
     let id_b = resolve_run_id(&store, &args.run_b).await?;
+    if id_a == id_b {
+        eprintln!("warning: diffing a run against itself (L-19: self-diff produces no useful output)");
+    }
 
     let run_a = store
         .get_run(&id_a)
@@ -1318,6 +1327,15 @@ async fn cmd_import(cli: &Cli, args: &ImportArgs) -> anyhow::Result<()> {
 
     let store = open_store(cli)?;
     let new_ids = !args.keep_ids;
+    if args.keep_ids {
+        // Validate that the input is a JSON object with an "id" field before
+        // attempting import, so we fail early with a clear message.
+        let parsed: serde_json::Value = serde_json::from_str(&json)
+            .map_err(|e| anyhow::anyhow!("--keep-ids requires valid JSON: {e}"))?;
+        if parsed.get("id").is_none() {
+            anyhow::bail!("--keep-ids: imported JSON must contain a top-level \"id\" field");
+        }
+    }
     let result = import_portable(&store, &json, new_ids).await?;
     println!(
         "Imported run {} ({} events, {} blobs{})",
@@ -1358,6 +1376,9 @@ async fn cmd_sync(cli: &Cli, args: &SyncArgs) -> anyhow::Result<()> {
     match &args.action {
         SyncAction::Push(d) => {
             let redact = d.redact && !d.no_redact;
+            if d.no_redact {
+                eprintln!("warning: --no-redact includes unredacted secrets in sync archives (L-29)");
+            }
             if let Some(ref remote) = d.remote {
                 println!("Sync push → {remote}");
                 let report =
@@ -1752,6 +1773,7 @@ async fn cmd_watch(cli: &Cli, args: &WatchArgs) -> anyhow::Result<()> {
     println!("{}", "-".repeat(72));
 
     let mut seen: HashSet<String> = HashSet::new();
+    // TODO(L-22): cap output buffer size to prevent OOM on extremely long runs
     // Seed with existing so we only print new if already completed; for live
     // runs print everything once then tail.
     let initial = store.get_events(&run_id).await?;

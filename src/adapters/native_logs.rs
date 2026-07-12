@@ -230,7 +230,14 @@ async fn ingest_file_delta(
             );
             // Redact metadata
             let mut meta_val =
-                serde_json::to_value(&ev.metadata).unwrap_or_else(|_| serde_json::json!({}));
+                serde_json::to_value(&ev.metadata).unwrap_or_else(|e| {
+                    tracing::warn!(
+                        error = %e,
+                        event_id = %ev.id,
+                        "failed to serialize event metadata for redaction, using empty map"
+                    );
+                    serde_json::json!({})
+                });
             scanner.redact_json(&mut meta_val);
             if let Ok(m) = serde_json::from_value(meta_val) {
                 ev.metadata = m;
@@ -242,7 +249,9 @@ async fn ingest_file_delta(
             }
         }
 
-        // Safety: don't flood from a huge backlog
+        // SAFETY: cap per-cycle emission to prevent unbounded memory growth
+        // when the log file has a large backlog.  500 events is enough for
+        // a burst of activity while keeping the ingest loop bounded.
         if emitted > 500 {
             tracing::warn!(path = %path.display(), "native log ingest rate-limited this cycle");
             break;

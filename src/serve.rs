@@ -115,6 +115,14 @@ async fn auth_middleware(
     response
 }
 
+/// Authenticate a request via `Authorization: Bearer` header or `?token=`
+/// query parameter.
+///
+/// # Security note (L-28)
+/// The query-string path (`?token=…`) is **deprecated** and kept only for
+/// backward-compatible programmatic clients. Tokens in URLs are logged by
+/// proxies, browsers, and CDN edge caches. Prefer the `Authorization`
+/// header in production use.
 fn token_ok(expected: &str, headers: &HeaderMap, query: Option<&str>) -> bool {
     if let Some(auth) = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()) {
         // Constant-time comparison to avoid timing side-channels.

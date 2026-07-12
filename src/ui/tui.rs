@@ -180,7 +180,9 @@ impl App {
                     self._timeline = TimelineView::new(self.events.clone());
                     self._event_detail = EventView::new();
                 }
-                Err(_) => {
+                Err(e) => {
+                    // M-30: Log DB error so silent failures are diagnosable.
+                    tracing::warn!(run_id = %run_id, error = %e, "failed to load events for run");
                     self.events = Vec::new();
                     self.selected_event_idx = 0;
                     self._timeline = TimelineView::new(Vec::new());
@@ -310,6 +312,17 @@ fn render_layout(frame: &mut Frame, app: &App) {
                         .and_then(|v| v.as_str())
                 })
                 .unwrap_or("");
+            // M-29: Truncate long metadata previews to avoid rendering huge text blocks.
+            const MAX_PREVIEW: usize = 200;
+            let preview = if preview.len() > MAX_PREVIEW {
+                let mut end = MAX_PREVIEW;
+                while !preview.is_char_boundary(end) {
+                    end -= 1;
+                }
+                &preview[..end]
+            } else {
+                preview
+            };
             let blob = ev.output_blob.as_deref().unwrap_or("—");
             format!(
                 "ID:     {}\nKind:   {}\nSource: {:?}\nStatus: {:?}\nStart:  {}\nBlob:   {}\n\n{}",
@@ -372,10 +385,16 @@ pub async fn run_tui_with_store(store: SqliteStore, run_id: Option<&str>) -> any
     }
     .await;
 
-    // Always restore terminal
-    let _ = disable_raw_mode();
-    let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
-    let _ = terminal.show_cursor();
+    // M-31: Always restore terminal state; log errors for diagnostics.
+    if let Err(e) = disable_raw_mode() {
+        tracing::warn!(error = %e, "failed to disable raw mode during cleanup");
+    }
+    if let Err(e) = execute!(terminal.backend_mut(), LeaveAlternateScreen) {
+        tracing::warn!(error = %e, "failed to leave alternate screen during cleanup");
+    }
+    if let Err(e) = terminal.show_cursor() {
+        tracing::warn!(error = %e, "failed to restore cursor during cleanup");
+    }
 
     result
 }

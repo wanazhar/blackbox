@@ -13,6 +13,9 @@ use crate::core::event::{EventSource, EventStatus, SideEffect, TraceEvent};
 use crate::core::run::Run;
 
 /// Path components ignored by the live watcher (high-noise / internal).
+/// **Note:** `notify` follows symlinks by default on most platforms. Changes
+/// inside symlinked directories will appear as normal events. If isolation is
+/// needed in the future, resolve and filter symlinked paths before forwarding.
 const IGNORE_COMPONENTS: &[&str] = &[
     ".git",
     "target",
@@ -280,7 +283,7 @@ impl CaptureLayer for FilesystemCapture {
         self._watcher = None;
         if let Some(mut handle) = self.bridge_handle.take() {
             // Give the bridge a moment to finish gracefully, then abort if stuck.
-            let _ = tokio::time::timeout(Duration::from_millis(100), &mut handle).await;
+            let _ = tokio::time::timeout(Duration::from_millis(250), &mut handle).await;
             if !handle.is_finished() {
                 tracing::debug!("bridge task did not exit in time; aborting");
                 handle.abort();

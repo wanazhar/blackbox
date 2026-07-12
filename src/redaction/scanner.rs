@@ -104,6 +104,12 @@ impl SecretScanner {
             RedactionReason::ApiKey,
             r"\bnpm_[A-Za-z0-9]{36}\b",
         );
+        // PEM body lines: 40+ base64 characters (content between BEGIN/END markers)
+        add(
+            &mut patterns,
+            RedactionReason::SshKey,
+            r"^[A-Za-z0-9+/]{40,}={0,2}$",
+        );
 
         // Custom patterns from config
         for pat in &config.custom_patterns {

@@ -4,8 +4,8 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
 /// Process tree panel — shows the hierarchy of commands launched.
+// TODO(L-07): implement process tree rendering (currently a placeholder stub)
 pub struct ProcessTreeView;
-
 impl Default for ProcessTreeView {
     fn default() -> Self {
         Self::new()

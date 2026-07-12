@@ -62,10 +62,10 @@ impl EventWriter {
         }
 
         if let Some(fp) = tool_fingerprint(&event) {
-            let mut seen = self
-                .tool_seen
-                .lock()
-                .map_err(|e| anyhow::anyhow!("tool_seen lock poisoned: {}", e))?;
+            // M-09: Recover from mutex poison rather than propagating the error.
+            // A poisoned lock means a prior holder panicked; the data is still
+            // usable and the set can be continued safely.
+            let mut seen = self.tool_seen.lock().unwrap_or_else(|e| e.into_inner());
             if !seen.insert(fp.clone()) {
                 tracing::debug!(
                     kind = %event.kind,

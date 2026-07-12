@@ -1,5 +1,6 @@
-# Build
-/target
+# Build (default and alternate CARGO_TARGET_DIR=/path/target-*)
+/target/
+/target-*/
 **/*.rs.bk
 
 # Editor / OS
@@ -31,6 +32,3 @@ blobs/
 # Cargo package scratch
 /package/
 *.crate
-target-fixhigh2/
-target-*/
-target-*/

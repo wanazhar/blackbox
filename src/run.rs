@@ -59,16 +59,14 @@ impl RunSupervisor {
         run.status = RunStatus::Running;
 
         // ── Detect harness adapter ────────────────────────────────
-        let adapters: Vec<Box<dyn HarnessAdapter>> = vec![
-            Box::new(ClaudeAdapter::new()),
-            Box::new(CodexAdapter::new()),
-            Box::new(GenericAdapter::new()),
-        ];
-        let detected_adapter = adapters
-            .iter()
-            .find(|a| a.detect(&run.command))
-            .map(|a| a.id());
-        let adapter_id = detected_adapter.unwrap_or("generic");
+        let adapter: Arc<dyn HarnessAdapter> = if ClaudeAdapter::new().detect(&run.command) {
+            Arc::new(ClaudeAdapter::new())
+        } else if CodexAdapter::new().detect(&run.command) {
+            Arc::new(CodexAdapter::new())
+        } else {
+            Arc::new(GenericAdapter::new())
+        };
+        let adapter_id = adapter.id();
         tracing::info!(adapter = adapter_id, "detected harness adapter");
 
         // Apply adapter-specific launch preparation
@@ -77,10 +75,6 @@ impl RunSupervisor {
             environment: std::env::vars().collect(),
             run_id: run.id.clone(),
         };
-        let adapter = adapters
-            .iter()
-            .find(|a| a.detect(&run.command))
-            .unwrap();
         if let Some(prepared) = adapter.prepare_launch(&run.command, &launch_context) {
             run.command = prepared.command;
             tracing::debug!(adapter = adapter_id, "applied adapter launch preparation");
@@ -301,8 +295,10 @@ impl RunSupervisor {
         });
 
         // Task: consume PTY output via RawRecorder + AnsiNormalizer + SecretScanner
+        // + harness adapter structured parsing (line-buffered NDJSON)
         let store_writer = self.store.clone();
         let run_id_writer = run_id.clone();
+        let adapter_writer = adapter.clone();
         let scanner = SecretScanner::new(RedactionConfig::default());
         let ansi_normalizer = AnsiNormalizer::new();
         let writer_handle = tokio::spawn(async move {
@@ -312,6 +308,9 @@ impl RunSupervisor {
             }
 
             let mut segment_count: u64 = 0;
+            let mut tool_seq: u64 = 0;
+            let mut line_buf = String::new();
+
             while let Some(data) = pty_out_rx.recv().await {
                 segment_count += 1;
 
@@ -362,6 +361,45 @@ impl RunSupervisor {
 
                 if let Err(e) = store_writer.insert_event(&ev).await {
                     tracing::error!(error = %e, "failed to persist terminal event");
+                }
+
+                // ── Adapter structured parse (line-buffered) ──────
+                line_buf.push_str(&redacted_text);
+                while let Some(pos) = line_buf.find('\n') {
+                    let line = line_buf[..pos].to_string();
+                    line_buf = line_buf[pos + 1..].to_string();
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    for mut parsed in adapter_writer.parse_output(&run_id_writer, line.as_bytes())
+                    {
+                        tool_seq += 1;
+                        parsed.sequence = tool_seq;
+                        if let Err(e) = store_writer.insert_event(&parsed).await {
+                            tracing::error!(
+                                error = %e,
+                                kind = %parsed.kind,
+                                "failed to persist adapter event"
+                            );
+                        } else {
+                            tracing::debug!(
+                                kind = %parsed.kind,
+                                "structured harness event"
+                            );
+                        }
+                    }
+                }
+            }
+
+            // Flush any trailing incomplete line through the adapter
+            if !line_buf.trim().is_empty() {
+                for mut parsed in adapter_writer.parse_output(&run_id_writer, line_buf.as_bytes())
+                {
+                    tool_seq += 1;
+                    parsed.sequence = tool_seq;
+                    if let Err(e) = store_writer.insert_event(&parsed).await {
+                        tracing::error!(error = %e, "failed to persist trailing adapter event");
+                    }
                 }
             }
 
@@ -438,10 +476,18 @@ impl RunSupervisor {
                 .context("failed to persist completion event")?;
             end_ev.id.clone()
         };
+        // Discover harness session id from captured events (for resume/fork)
+        let all_events = self.store.get_events(&run.id).await.unwrap_or_default();
+        let session_id = adapter.discover_session_id(&all_events);
+        if let Some(ref sid) = session_id {
+            tracing::info!(session_id = %sid, "discovered harness session");
+        }
+
         let mut end_checkpoint = Checkpoint::new(&run.id, &end_event_id, &run.cwd);
         end_checkpoint.environment_blob = Some(env_blob.key);
         end_checkpoint.git_commit = git_capture.commit_hash().map(str::to_string);
         end_checkpoint.git_diff_blob = git_capture.before_diff_blob_key().map(str::to_string);
+        end_checkpoint.harness_session_id = session_id;
         self.store
             .insert_checkpoint(&end_checkpoint)
             .await

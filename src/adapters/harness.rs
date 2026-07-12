@@ -28,8 +28,11 @@ pub trait HarnessAdapter: Send + Sync {
         context: &LaunchContext,
     ) -> Option<PreparedLaunch>;
 
-    /// Parse a terminal output chunk into semantic events.
-    fn parse_output(&self, _chunk: &[u8]) -> Vec<TraceEvent> {
+    /// Parse a terminal output chunk (or complete line) into semantic events.
+    ///
+    /// `run_id` is required so produced events attach to the active run.
+    /// Callers should prefer feeding complete lines for NDJSON streams.
+    fn parse_output(&self, _run_id: &str, _chunk: &[u8]) -> Vec<TraceEvent> {
         Vec::new()
     }
 

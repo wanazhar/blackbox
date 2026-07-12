@@ -1,4 +1,7 @@
 use crate::adapters::harness::HarnessAdapter;
+use crate::adapters::parse::{
+    parse_claude_json_line, parse_plaintext,
+};
 use crate::adapters::{LaunchContext, PreparedLaunch, RunContext};
 use crate::core::event::TraceEvent;
 
@@ -7,6 +10,7 @@ use crate::core::event::TraceEvent;
 /// Detects: `claude`, `claude ...`
 ///
 /// Capabilities:
+/// - stream-json / NDJSON tool_use & assistant parsing
 /// - Session identification from output
 /// - Transcript log location
 /// - Resume command construction
@@ -15,6 +19,12 @@ pub struct ClaudeAdapter;
 impl ClaudeAdapter {
     pub fn new() -> Self {
         Self
+    }
+}
+
+impl Default for ClaudeAdapter {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -42,8 +52,58 @@ impl HarnessAdapter for ClaudeAdapter {
         })
     }
 
-    fn discover_session_id(&self, _events: &[TraceEvent]) -> Option<String> {
+    fn parse_output(&self, run_id: &str, chunk: &[u8]) -> Vec<TraceEvent> {
+        let text = String::from_utf8_lossy(chunk);
+        let mut events = Vec::new();
+
+        // Prefer line-oriented NDJSON
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            if line.starts_with('{') {
+                events.extend(parse_claude_json_line(run_id, line));
+            } else {
+                events.extend(parse_plaintext(run_id, line, "claude"));
+            }
+        }
+
+        // If the chunk had no newlines, still try plaintext heuristics once
+        if !text.contains('\n') && !text.trim().starts_with('{') {
+            events.extend(parse_plaintext(run_id, &text, "claude"));
+        }
+
+        events
+    }
+
+    fn discover_session_id(&self, events: &[TraceEvent]) -> Option<String> {
+        for ev in events.iter().rev() {
+            if ev.kind == "harness.session" {
+                if let Some(sid) = ev
+                    .metadata
+                    .get("session_id")
+                    .and_then(|v| v.as_str())
+                {
+                    return Some(sid.to_string());
+                }
+            }
+            // Fallback: search terminal output
+            if let Some(raw) = ev.metadata.get("normalized").and_then(|v| v.as_str()) {
+                if let Some(sid) = crate::adapters::parse::extract_session_id(raw) {
+                    return Some(sid);
+                }
+            }
+        }
         None
+    }
+
+    fn build_resume_command(&self, session_id: &str) -> Option<Vec<String>> {
+        Some(vec![
+            "claude".to_string(),
+            "--resume".to_string(),
+            session_id.to_string(),
+        ])
     }
 
     fn locate_native_logs(&self, context: &RunContext) -> Vec<String> {
@@ -55,5 +115,54 @@ impl HarnessAdapter for ClaudeAdapter {
         } else {
             Vec::new()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detect_claude() {
+        let a = ClaudeAdapter::new();
+        assert!(a.detect(&["claude".into(), "-p".into(), "hi".into()]));
+        assert!(!a.detect(&["codex".into()]));
+    }
+
+    #[test]
+    fn parse_stream_json_tool() {
+        let a = ClaudeAdapter::new();
+        let chunk = br#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]}}
+"#;
+        let events = a.parse_output("run-x", chunk);
+        assert!(events.iter().any(|e| e.kind == "tool.call"));
+        assert_eq!(
+            events
+                .iter()
+                .find(|e| e.kind == "tool.call")
+                .unwrap()
+                .metadata
+                .get("tool_name")
+                .and_then(|v| v.as_str()),
+            Some("Bash")
+        );
+    }
+
+    #[test]
+    fn resume_command() {
+        let a = ClaudeAdapter::new();
+        let cmd = a.build_resume_command("sess-99").unwrap();
+        assert_eq!(cmd, vec!["claude", "--resume", "sess-99"]);
+    }
+
+    #[test]
+    fn discover_session() {
+        let a = ClaudeAdapter::new();
+        let events = a.parse_output(
+            "run-x",
+            br#"{"session_id":"sess-abcdef01","type":"system"}"#,
+        );
+        let sid = a.discover_session_id(&events);
+        assert_eq!(sid.as_deref(), Some("sess-abcdef01"));
     }
 }

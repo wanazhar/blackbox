@@ -2,6 +2,7 @@ pub mod harness;
 pub mod codex;
 pub mod claude;
 pub mod generic;
+pub mod parse;
 
 use std::collections::HashMap;
 

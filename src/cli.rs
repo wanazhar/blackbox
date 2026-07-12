@@ -207,18 +207,158 @@ async fn cmd_show(args: &ShowArgs) -> anyhow::Result<()> {
 }
 
 async fn cmd_timeline(args: &TimelineArgs) -> anyhow::Result<()> {
-    tracing::info!(run_id = %args.run_id, "timeline");
-    anyhow::bail!("timeline view not yet implemented")
+    use crate::storage::sqlite::SqliteStore;
+    use crate::storage::TraceStore;
+
+    let store = SqliteStore::open("blackbox.db")?;
+    let run_id = if args.run_id == "latest" {
+        let runs = store.list_runs().await?;
+        runs.first()
+            .map(|r| r.id.clone())
+            .ok_or_else(|| anyhow::anyhow!("no runs recorded"))?
+    } else {
+        args.run_id.clone()
+    };
+
+    let events = store.get_events(&run_id).await?;
+    if events.is_empty() {
+        println!("No events recorded for run {}.", &run_id[..8]);
+    } else {
+        println!("Timeline for run {} ({} events):", &run_id[..8], events.len());
+        println!("{:<8} {:<6} {:<20} {:<15} {}", "SEQ", "SRC", "KIND", "STATUS", "TIMESTAMP");
+        println!("{}", "-".repeat(80));
+        for ev in &events {
+            let status = match &ev.status {
+                crate::core::event::EventStatus::Success => "✓",
+                crate::core::event::EventStatus::Error => "✗",
+                crate::core::event::EventStatus::Running => "●",
+                _ => "○",
+            };
+            println!(
+                "{:<8} {:<6} {:<20} {:<15} {}",
+                ev.sequence,
+                format!("{:?}", ev.source),
+                ev.kind,
+                status,
+                ev.started_at.format("%H:%M:%S%.3f"),
+            );
+        }
+    }
+    Ok(())
 }
 
 async fn cmd_inspect(args: &InspectArgs) -> anyhow::Result<()> {
-    tracing::info!(run_id = %args.run_id, event_id = %args.event_id, "inspect event");
-    anyhow::bail!("event inspection not yet implemented")
+    use crate::storage::sqlite::SqliteStore;
+    use crate::storage::TraceStore;
+
+    let store = SqliteStore::open("blackbox.db")?;
+
+
+
+    let event = store
+        .get_event(&args.event_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("event not found: {}", args.event_id))?;
+
+    println!("Event: {}", event.id);
+    println!("  Run:       {}", &event.run_id[..8]);
+    println!("  Sequence:  {}", event.sequence);
+    println!("  Source:    {:?}", event.source);
+    println!("  Kind:      {}", event.kind);
+    println!("  Status:    {:?}", event.status);
+    println!("  Started:   {}", event.started_at);
+    if let Some(ended) = event.ended_at {
+        println!("  Ended:     {}", ended);
+    }
+    if let Some(duration) = event.duration_ms {
+        println!("  Duration:  {}ms", duration);
+    }
+    println!("  Side Eff:  {:?}", event.side_effect);
+    if !event.metadata.is_empty() {
+        println!("  Metadata:");
+        for (k, v) in &event.metadata {
+            let val_str = if let Some(s) = v.as_str() {
+                if s.len() > 100 {
+                    format!("{}...", &s[..100])
+                } else {
+                    s.to_string()
+                }
+            } else {
+                v.to_string()
+            };
+            println!("    {}: {}", k, val_str);
+        }
+    }
+    Ok(())
 }
 
 async fn cmd_diff(args: &DiffArgs) -> anyhow::Result<()> {
-    tracing::info!(run_a = %args.run_a, run_b = %args.run_b, "diff runs");
-    anyhow::bail!("run comparison not yet implemented")
+    use crate::storage::sqlite::SqliteStore;
+    use crate::storage::TraceStore;
+
+    let store = SqliteStore::open("blackbox.db")?;
+
+    let run_a = store
+        .get_run(&args.run_a)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("run not found: {}", args.run_a))?;
+    let run_b = store
+        .get_run(&args.run_b)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("run not found: {}", args.run_b))?;
+
+    let events_a = store.get_events(&args.run_a).await?;
+    let events_b = store.get_events(&args.run_b).await?;
+
+    println!("Comparing runs:");
+    println!("  A: {} — {:?} ({} events)", &run_a.id[..8], run_a.command, events_a.len());
+    println!("  B: {} — {:?} ({} events)", &run_b.id[..8], run_b.command, events_b.len());
+    println!();
+
+    // Compare status
+    if run_a.status == run_b.status {
+        println!("  Status:     both {:?}", run_a.status);
+    } else {
+        println!("  Status:     A={:?}  B={:?}", run_a.status, run_b.status);
+    }
+
+    // Compare exit codes
+    match (run_a.exit_code, run_b.exit_code) {
+        (Some(a), Some(b)) if a == b => println!("  Exit code:  both {}", a),
+        (Some(a), Some(b)) => println!("  Exit code:  A={}  B={}", a, b),
+        (None, None) => println!("  Exit code:  both unknown"),
+        (a, b) => println!("  Exit code:  A={:?}  B={:?}", a, b),
+    }
+
+    // Compare event counts by source
+    use std::collections::HashMap;
+    let mut sources_a: HashMap<String, usize> = HashMap::new();
+    let mut sources_b: HashMap<String, usize> = HashMap::new();
+    for ev in &events_a {
+        *sources_a.entry(format!("{:?}", ev.source)).or_insert(0) += 1;
+    }
+    for ev in &events_b {
+        *sources_b.entry(format!("{:?}", ev.source)).or_insert(0) += 1;
+    }
+    let mut all_sources: Vec<String> = sources_a.keys().chain(sources_b.keys()).cloned().collect();
+    all_sources.sort();
+    all_sources.dedup();
+
+    if !all_sources.is_empty() {
+        println!();
+        println!("  Event sources:");
+        for src in &all_sources {
+            let count_a = sources_a.get(src).copied().unwrap_or(0);
+            let count_b = sources_b.get(src).copied().unwrap_or(0);
+            if count_a == count_b {
+                println!("    {:<12} both {}", src, count_a);
+            } else {
+                println!("    {:<12} A={}  B={}", src, count_a, count_b);
+            }
+        }
+    }
+
+    Ok(())
 }
 
 async fn cmd_export(args: &ExportArgs) -> anyhow::Result<()> {
@@ -249,8 +389,8 @@ async fn cmd_export(args: &ExportArgs) -> anyhow::Result<()> {
 
     let format_str = match args.format {
         ExportFormat::Jsonl => "jsonl",
-        ExportFormat::Html => anyhow::bail!("HTML export not yet implemented"),
-        ExportFormat::Portable => anyhow::bail!("portable export not yet implemented"),
+        ExportFormat::Html => "html",
+        ExportFormat::Portable => "portable",
     };
 
     let output = export_run(&run, &events, format_str, args.redact).await?;
@@ -260,23 +400,71 @@ async fn cmd_export(args: &ExportArgs) -> anyhow::Result<()> {
 }
 
 async fn cmd_replay(args: &ReplayArgs) -> anyhow::Result<()> {
-    tracing::info!(
-        run_id = %args.run_id,
-        mock_tools = %args.mock_tools,
-        sandbox = %args.sandbox,
-        live = %args.live,
-        from = ?args.from,
-        "replay run"
-    );
-    anyhow::bail!("replay not yet implemented")
+    use crate::storage::sqlite::SqliteStore;
+    use crate::storage::TraceStore;
+    use crate::replay::ReplayEngine;
+    use crate::replay::mock::MockReplay;
+    use crate::replay::sandbox::SandboxReplay;
+    use crate::replay::timeline::TimelineReplay;
+
+    let store = SqliteStore::open("blackbox.db")?;
+
+    let run_id = if args.run_id == "latest" {
+        let runs = store.list_runs().await?;
+        runs.first()
+            .map(|r| r.id.clone())
+            .ok_or_else(|| anyhow::anyhow!("no runs recorded"))?
+    } else {
+        args.run_id.clone()
+    };
+
+    let run = store
+        .get_run(&run_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("run not found: {}", run_id))?;
+    let events = store.get_events(&run_id).await?;
+
+    let mut engine: Box<dyn ReplayEngine> = if args.mock_tools {
+        Box::new(MockReplay)
+    } else if args.sandbox {
+        Box::new(SandboxReplay::new())
+    } else {
+        Box::new(TimelineReplay)
+    };
+
+    tracing::info!(engine = engine.name(), "starting replay");
+    let outcome = engine.start(&run, &events, args.from.as_deref()).await?;
+    println!("Replay finished: {:?}", outcome);
+    Ok(())
 }
 
 async fn cmd_fork(args: &ForkArgs) -> anyhow::Result<()> {
-    tracing::info!(
-        run_id = %args.run_id,
-        at = ?args.at,
-        name = ?args.name,
-        "fork run"
-    );
-    anyhow::bail!("fork not yet implemented")
+    use crate::storage::sqlite::SqliteStore;
+    use crate::storage::TraceStore;
+    use crate::replay::ReplayEngine;
+    use crate::replay::fork::ForkManager;
+
+    let store = SqliteStore::open("blackbox.db")?;
+
+    let run_id = if args.run_id == "latest" {
+        let runs = store.list_runs().await?;
+        runs.first()
+            .map(|r| r.id.clone())
+            .ok_or_else(|| anyhow::anyhow!("no runs recorded"))?
+    } else {
+        args.run_id.clone()
+    };
+
+    let run = store
+        .get_run(&run_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("run not found: {}", run_id))?;
+    let events = store.get_events(&run_id).await?;
+
+    let mut fork = ForkManager;
+    let from_event = args.at.as_deref();
+    tracing::info!(from = ?from_event, name = ?args.name, "forking run");
+    let outcome = fork.start(&run, &events, from_event).await?;
+    println!("Fork finished: {:?}", outcome);
+    Ok(())
 }

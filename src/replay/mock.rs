@@ -32,12 +32,44 @@ impl ReplayEngine for MockReplay {
             .filter(|e| e.source == EventSource::Tool)
             .collect();
 
+        tracing::info!(
+            total_tool_events = tool_events.len(),
+            "mock: replaying tool events with recorded outputs"
+        );
+
         for event in &tool_events {
+            let tool_name = event
+                .metadata
+                .get("tool_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+
+            let output_preview = event
+                .output_blob
+                .as_deref()
+                .unwrap_or("(no output recorded)");
+
+            let input_summary = event
+                .metadata
+                .get("input")
+                .map(|v| v.to_string())
+                .or_else(|| event.metadata.get("args").map(|v| v.to_string()))
+                .unwrap_or_else(|| "(no input recorded)".to_string());
+
             tracing::info!(
-                tool = ?event.metadata.get("tool_name"),
-                "mock tool call"
+                seq = event.sequence,
+                tool = tool_name,
+                input = %input_summary,
+                output = output_preview,
+                "mock: tool call replayed"
             );
         }
+
+        tracing::info!(
+            mocked = tool_events.len(),
+            "mock replay complete"
+        );
+
         Ok(ReplayOutcome::Completed)
     }
 }

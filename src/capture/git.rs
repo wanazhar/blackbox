@@ -1,9 +1,11 @@
 use std::path::Path;
 use std::process::Command;
+use std::sync::Arc;
 
 use crate::capture::CaptureLayer;
 use crate::core::event::{EventSource, EventStatus, TraceEvent};
 use crate::core::run::Run;
+use crate::storage::TraceStore;
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 
@@ -16,11 +18,19 @@ use tokio::sync::mpsc;
 pub struct GitCapture {
     /// Working directory to run git commands in
     cwd: Option<String>,
+    /// Optional store for persisting diffs as content-addressed blobs
+    store: Option<Arc<dyn TraceStore>>,
 }
 
 impl GitCapture {
     pub fn new() -> Self {
-        Self { cwd: None }
+        Self { cwd: None, store: None }
+    }
+
+    /// Attach a trace store so diffs are persisted as blobs.
+    pub fn with_store(mut self, store: Arc<dyn TraceStore>) -> Self {
+        self.store = Some(store);
+        self
     }
 
     /// Check if the given directory is inside a git repository.
@@ -151,6 +161,26 @@ impl CaptureLayer for GitCapture {
                         diff.clone()
                     }
                 ));
+
+            // Store the full diff as a content-addressed blob
+            if let Some(ref store) = self.store {
+                match store.store_blob(diff.as_bytes()).await {
+                    Ok(reference) => {
+                        ev.metadata.insert(
+                            "diff_blob_key".to_string(),
+                            serde_json::json!(reference.key),
+                        );
+                        ev.metadata.insert(
+                            "diff_blob_size".to_string(),
+                            serde_json::json!(reference.size),
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "failed to store git diff blob");
+                    }
+                }
+            }
+
             let _ = tx.send(ev).await;
         }
 

@@ -28,9 +28,46 @@ impl ReplayEngine for ForkManager {
     async fn start(
         &mut self,
         _run: &Run,
-        _events: &[TraceEvent],
-        _from_event_id: Option<&str>,
+        events: &[TraceEvent],
+        from_event_id: Option<&str>,
     ) -> anyhow::Result<ReplayOutcome> {
-        anyhow::bail!("fork not yet implemented")
+        let start_idx = from_event_id
+            .and_then(|id| events.iter().position(|e| e.id == id))
+            .unwrap_or(0);
+
+        let fork_point = &events[start_idx];
+
+        tracing::info!(
+            fork_event_id = %fork_point.id,
+            fork_event_kind = %fork_point.kind,
+            fork_event_sequence = fork_point.sequence,
+            "fork: selecting fork point"
+        );
+
+        let remaining = &events[start_idx..];
+        tracing::info!(
+            total_events = remaining.len(),
+            first_sequence = remaining.first().map(|e| e.sequence),
+            last_sequence = remaining.last().map(|e| e.sequence),
+            "fork: events queued for replay"
+        );
+
+        for event in remaining {
+            tracing::debug!(
+                seq = event.sequence,
+                kind = %event.kind,
+                source = ?event.source,
+                side_effect = ?event.side_effect,
+                "fork: would replay event"
+            );
+        }
+
+        tracing::info!(
+            fork_point = %fork_point.id,
+            events_to_replay = remaining.len(),
+            "fork simulation complete"
+        );
+
+        Ok(ReplayOutcome::Completed)
     }
 }

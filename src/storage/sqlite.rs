@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use rusqlite::{params, Connection};
@@ -13,22 +13,38 @@ use crate::storage::TraceStore;
 
 /// SQLite-backed trace store with content-addressed blob storage.
 ///
+/// Metadata lives in SQLite; large payloads (blobs) are stored as
+/// files in a content-addressed directory (`<blob_dir>/<sha256>`).
 /// All rusqlite operations run on a dedicated blocking thread via
 /// `tokio::task::spawn_blocking` to avoid holding the async runtime.
 pub struct SqliteStore {
     db_path: String,
+    blob_dir: PathBuf,
 }
-
 impl SqliteStore {
     /// Open or create a SQLite database at the given path.
+    ///
+    /// Blobs are stored in `<db_dir>/.blackbox/blobs/` where `db_dir`
+    /// is the parent directory of the database file.
     pub fn open(path: impl AsRef<Path>) -> anyhow::Result<Self> {
-        let path = path.as_ref().to_string_lossy().to_string();
+        let path = path.as_ref().to_path_buf();
         let conn = Connection::open(&path).context("failed to open SQLite database")?;
 
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
             .context("failed to set pragmas")?;
 
-        let store = Self { db_path: path };
+        let blob_dir = path
+            .parent()
+            .unwrap_or(Path::new("."))
+            .join(".blackbox")
+            .join("blobs");
+        std::fs::create_dir_all(&blob_dir)
+            .context("failed to create blob directory")?;
+
+        let store = Self {
+            db_path: path.to_string_lossy().to_string(),
+            blob_dir,
+        };
         store.migrate(&conn)?;
         Ok(store)
     }
@@ -40,15 +56,20 @@ impl SqliteStore {
         conn.execute_batch("PRAGMA foreign_keys=ON;")
             .context("failed to set pragmas")?;
 
+        let blob_dir = std::env::temp_dir().join("blackbox-test-blobs");
+        std::fs::create_dir_all(&blob_dir)
+            .context("failed to create test blob directory")?;
+
         let store = Self {
             db_path: ":memory:".to_string(),
+            blob_dir,
         };
         store.migrate(&conn)?;
         Ok(store)
     }
-
     fn migrate(&self, conn: &Connection) -> anyhow::Result<()> {
         conn.execute_batch(
+
             "
             CREATE TABLE IF NOT EXISTS runs (
                 id              TEXT PRIMARY KEY,
@@ -105,7 +126,6 @@ impl SqliteStore {
 
             CREATE TABLE IF NOT EXISTS blobs (
                 key             TEXT PRIMARY KEY,
-                data            BLOB NOT NULL,
                 size            INTEGER NOT NULL,
                 compressed      INTEGER NOT NULL DEFAULT 0,
                 content_type    TEXT
@@ -341,14 +361,31 @@ impl TraceStore for SqliteStore {
         let data = data.to_vec();
         let key_clone = key.clone();
 
+        // Write blob to disk (content-addressed: key IS the filename)
+        let blob_path = self.blob_dir.join(&key);
+        if !blob_path.exists() {
+            let blob_dir = self.blob_dir.clone();
+            let key_for_write = key.clone();
+            let data_for_write = data.clone();
+            task::spawn_blocking(move || -> anyhow::Result<()> {
+                std::fs::create_dir_all(&blob_dir)
+                    .context("failed to create blob directory")?;
+                std::fs::write(blob_dir.join(&key_for_write), &data_for_write)
+                    .context("failed to write blob file")?;
+                Ok(())
+            })
+            .await??;
+        }
+
+        // Insert metadata into SQLite (no data column — data lives on disk)
         let conn = self.get_conn()?;
         task::spawn_blocking(move || -> anyhow::Result<()> {
             conn.execute(
-                "INSERT OR IGNORE INTO blobs (key, data, size, compressed, content_type)
-                 VALUES (?1, ?2, ?3, 0, NULL)",
-                params![key_clone, data, size as i64],
+                "INSERT OR IGNORE INTO blobs (key, size, compressed, content_type)
+                 VALUES (?1, ?2, 0, NULL)",
+                params![key_clone, size as i64],
             )
-            .context("failed to store blob")?;
+            .context("failed to store blob metadata")?;
             Ok(())
         })
         .await??;
@@ -357,19 +394,14 @@ impl TraceStore for SqliteStore {
     }
 
     async fn load_blob(&self, reference: &BlobReference) -> anyhow::Result<Vec<u8>> {
-        let conn = self.get_conn()?;
+        let blob_dir = self.blob_dir.clone();
         let key = reference.key.clone();
         task::spawn_blocking(move || -> anyhow::Result<Vec<u8>> {
-            let result: Vec<u8> = conn.query_row(
-                "SELECT data FROM blobs WHERE key = ?1",
-                params![key],
-                |row| row.get(0),
-            )?;
-
-            Ok(result)
+            let path = blob_dir.join(&key);
+            std::fs::read(&path)
+                .with_context(|| format!("blob not found: {}", path.display()))
         })
         .await?
-        .map_err(|e| anyhow::anyhow!("blob not found: {}", e))
     }
 }
 

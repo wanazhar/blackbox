@@ -1,14 +1,23 @@
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::{Read, Write};
+use std::os::unix::io::FromRawFd;
 use std::sync::Arc;
 
 use anyhow::Context;
 use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
 use tokio::sync::mpsc;
 
+use crate::adapters::harness::HarnessAdapter;
+use crate::adapters::LaunchContext;
+use crate::adapters::claude::ClaudeAdapter;
+use crate::adapters::codex::CodexAdapter;
+use crate::adapters::generic::GenericAdapter;
 use crate::capture::git::GitCapture;
 use crate::capture::pty::PtyCapture;
 use crate::capture::{CaptureLayer, merge_layers};
 use crate::cli::RunArgs;
+use crate::core::checkpoint::Checkpoint;
 use crate::core::event::{EventSource, EventStatus, TraceEvent};
 use crate::core::run::{Run, RunStatus};
 use crate::redaction::environment::EnvironmentRedactor;
@@ -40,6 +49,33 @@ impl RunSupervisor {
         run.name = args.name.clone();
         run.tags = args.tag.clone();
         run.status = RunStatus::Running;
+        // ── Detect harness adapter ────────────────────────────────
+        let adapters: Vec<Box<dyn HarnessAdapter>> = vec![
+            Box::new(ClaudeAdapter::new()),
+            Box::new(CodexAdapter::new()),
+            Box::new(GenericAdapter::new()),
+        ];
+        let detected_adapter = adapters
+            .iter()
+            .find(|a| a.detect(&run.command))
+            .map(|a| a.id());
+        let adapter_id = detected_adapter.unwrap_or("generic");
+        tracing::info!(adapter = adapter_id, "detected harness adapter");
+
+        // Apply adapter-specific launch preparation
+        let launch_context = LaunchContext {
+            project_dir: run.cwd.clone(),
+            environment: std::env::vars().collect(),
+            run_id: run.id.clone(),
+        };
+        let adapter = adapters.iter().find(|a| a.detect(&run.command)).unwrap();
+        if let Some(prepared) = adapter.prepare_launch(&run.command, &launch_context) {
+            run.command = prepared.command;
+            tracing::debug!(adapter = adapter_id, "applied adapter launch preparation");
+        }
+
+        // Store adapter metadata in the run
+        run.notes = Some(format!("adapter:{}", adapter_id));
 
         self.store
             .insert_run(&run)
@@ -74,6 +110,13 @@ impl RunSupervisor {
         }
         self.store.insert_event(&env_event).await.context("failed to persist environment event")?;
 
+        // ── Create initial checkpoint ────────────────────────────
+        let start_checkpoint = Checkpoint::new(&run.id, &env_event.id, &run.cwd);
+        self.store
+            .insert_checkpoint(&start_checkpoint)
+            .await
+            .context("failed to persist start checkpoint")?;
+        tracing::debug!(checkpoint_id = %start_checkpoint.id, "start checkpoint created");
         tracing::info!(run_id = %run.id, command = ?run.command, "run started");
 
         // ── 2. Spawn the child in a PTY ─────────────────────────
@@ -101,22 +144,35 @@ impl RunSupervisor {
         let child_pid = child.process_id().unwrap_or(0);
         tracing::info!(pid = child_pid, "child process spawned");
 
-        // Get the master's raw fd, then dup it for our reader.
+        // Dup master fd for reading and writing (pair will be dropped)
+        // SAFETY: libc::dup returns a valid fd or -1; we check for -1 above.
+        // File::from_raw_fd takes ownership and will close the fd on drop.
         let master_fd = pair
             .master
             .as_raw_fd()
             .context("failed to get master fd")?;
         let reader_fd = unsafe { libc::dup(master_fd) };
         if reader_fd < 0 {
-            anyhow::bail!("failed to dup master fd");
+            anyhow::bail!("failed to dup master fd for reading");
         }
+        // SAFETY: reader_fd is a valid fd from libc::dup (checked above)
+        let mut reader_file = unsafe { File::from_raw_fd(reader_fd) };
+        let writer_fd = unsafe { libc::dup(master_fd) };
+        if writer_fd < 0 {
+            anyhow::bail!("failed to dup master fd for writing");
+        }
+        // SAFETY: writer_fd is a valid fd from libc::dup (checked above)
+        let mut writer_file = unsafe { File::from_raw_fd(writer_fd) };
 
-        // Drop pair — closes slave and master fds in parent.
+        // Drop pair — closes slave and original master fds in parent.
         drop(pair);
+
+        // ── stdin forwarding channel ──────────────────────────────
+        let (stdin_tx, mut stdin_rx) = mpsc::channel::<Vec<u8>>(256);
 
         // ── 3. Start Capture Layers ───────────────────────────────
         let mut pty_capture = PtyCapture::new();
-        let mut git_capture = GitCapture::new();
+        let mut git_capture = GitCapture::new().with_store(self.store.clone());
 
         let pty_rx = pty_capture.start(&run).await?;
         let git_rx = git_capture.start(&run).await?;
@@ -140,18 +196,61 @@ impl RunSupervisor {
         let (pty_out_tx, mut pty_out_rx) = mpsc::channel::<Vec<u8>>(256);
 
         // Blocking task: read PTY master output
+        // SAFETY: reader_file is a valid File wrapping a duped master fd.
         let reader_handle = tokio::task::spawn_blocking(move || {
             let mut buf = [0u8; 8192];
             loop {
-                let n = unsafe {
-                    libc::read(reader_fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len())
-                };
-                if n <= 0 {
+                match reader_file.read(&mut buf) {
+                    Ok(0) => break, // EOF
+                    Ok(n) => {
+                        let data = buf[..n].to_vec();
+                        if pty_out_tx.blocking_send(data).is_err() {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+            // reader_file is dropped here, closing the fd
+        });
+        // Task: read from terminal stdin and forward to PTY master
+        let stdin_handle = tokio::task::spawn_blocking(move || {
+            let mut stdin = std::io::stdin();
+            let mut buf = [0u8; 4096];
+            loop {
+                match std::io::Read::read(&mut stdin, &mut buf) {
+                    Ok(0) => break, // EOF
+                    Ok(n) => {
+                        let data = buf[..n].to_vec();
+                        if stdin_tx.blocking_send(data).is_err() {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        // Task: write stdin bytes to PTY master
+        // SAFETY: writer_file is a valid File wrapping a duped master fd.
+        let pty_writer_handle = tokio::task::spawn_blocking(move || {
+            while let Some(data) = stdin_rx.blocking_recv() {
+                if writer_file.write_all(&data).is_err() {
                     break;
                 }
-                let data = buf[..n as usize].to_vec();
-                if pty_out_tx.blocking_send(data).is_err() {
+            }
+            // writer_file is dropped here, closing the fd
+        });
+        // Task: forward SIGINT to child process
+        let signal_child_pid = child_pid;
+        let signal_handle = tokio::spawn(async move {
+            loop {
+                if tokio::signal::ctrl_c().await.is_err() {
                     break;
+                }
+                tracing::debug!(pid = signal_child_pid, "forwarding SIGINT to child");
+                unsafe {
+                    libc::kill(signal_child_pid as i32, libc::SIGINT);
                 }
             }
         });
@@ -214,8 +313,14 @@ impl RunSupervisor {
             .context("wait task panicked")?
             .context("failed to wait for child process")?;
 
+        // Abort signal handler — child is gone
+        signal_handle.abort();
         // Wait for reader task to drain
         let _ = reader_handle.await;
+
+        // Wait for stdin forwarding to finish (user presses Ctrl+D or stdin closes)
+        let _ = stdin_handle.await;
+        let _ = pty_writer_handle.await;
 
         // Signal capture layers to stop
         let _ = pty_capture.stop().await;
@@ -233,6 +338,28 @@ impl RunSupervisor {
             segments = segments,
             "child process exited"
         );
+        // ── Create end checkpoint ─────────────────────────────────
+        let end_event_id = {
+            let mut end_ev = TraceEvent::new(&run.id, EventSource::System, "run.completed");
+            end_ev.status = if exit_status.success() {
+                EventStatus::Success
+            } else {
+                EventStatus::Error
+            };
+            end_ev.metadata.insert(
+                "exit_code".to_string(),
+                serde_json::json!(exit_status.exit_code()),
+            );
+            self.store.insert_event(&end_ev).await
+                .context("failed to persist completion event")?;
+            end_ev.id.clone()
+        };
+        let end_checkpoint = Checkpoint::new(&run.id, &end_event_id, &run.cwd);
+        self.store
+            .insert_checkpoint(&end_checkpoint)
+            .await
+            .context("failed to persist end checkpoint")?;
+        tracing::debug!(checkpoint_id = %end_checkpoint.id, "end checkpoint created");
 
         // ── 5. Finalize the Run ──────────────────────────────────
         run.finish(exit_status.exit_code() as i32);

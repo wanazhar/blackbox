@@ -38,11 +38,13 @@ pub struct App {
     _event_detail: EventView,
     events: Vec<TraceEvent>,
     selected_run_idx: usize,
+    selected_event_idx: usize,
     run_ids: Vec<String>,
+    store: SqliteStore,
 }
 
 impl App {
-    async fn load(store: &SqliteStore) -> anyhow::Result<Self> {
+    async fn load(store: SqliteStore) -> anyhow::Result<Self> {
         let runs = store.list_runs().await?;
         let run_ids: Vec<String> = runs.iter().map(|r| r.id.clone()).collect();
 
@@ -60,11 +62,13 @@ impl App {
             _event_detail: EventView::new(),
             events,
             selected_run_idx: 0,
+            selected_event_idx: 0,
             run_ids,
+            store,
         })
     }
 
-    fn handle_key(&mut self, key: KeyEvent) -> bool {
+    async fn handle_key(&mut self, key: KeyEvent) -> bool {
         match key.code {
             // Quit
             KeyCode::Char('q') | KeyCode::Esc => return false,
@@ -84,7 +88,7 @@ impl App {
 
             // Enter to select from runs list
             KeyCode::Enter if self.focus == Focus::Runs => {
-                self.select_run();
+                self.select_run().await;
             }
 
             // Enter to select event from timeline
@@ -112,32 +116,65 @@ impl App {
                 self.selected_run_idx = new.min(max - 1);
             }
             Focus::Timeline => {
-                // Navigate events
+                let max = self.events.len();
+                if max == 0 {
+                    return;
+                }
+                let new = (self.selected_event_idx as i32 + delta).max(0) as usize;
+                self.selected_event_idx = new.min(max - 1);
             }
             Focus::EventDetail => {}
         }
     }
 
     fn move_to_top(&mut self) {
-        if self.focus == Focus::Runs && !self.run_ids.is_empty() {
-            self.selected_run_idx = 0;
+        match self.focus {
+            Focus::Runs if !self.run_ids.is_empty() => {
+                self.selected_run_idx = 0;
+            }
+            Focus::Timeline if !self.events.is_empty() => {
+                self.selected_event_idx = 0;
+            }
+            _ => {}
         }
     }
 
     fn move_to_bottom(&mut self) {
-        if self.focus == Focus::Runs && !self.run_ids.is_empty() {
-            self.selected_run_idx = self.run_ids.len() - 1;
+        match self.focus {
+            Focus::Runs if !self.run_ids.is_empty() => {
+                self.selected_run_idx = self.run_ids.len() - 1;
+            }
+            Focus::Timeline if !self.events.is_empty() => {
+                self.selected_event_idx = self.events.len() - 1;
+            }
+            _ => {}
         }
     }
 
-    fn select_run(&mut self) {
-        // The selected run's events would be loaded here
-        // For now, just a placeholder
+    async fn select_run(&mut self) {
+        if let Some(run_id) = self.run_ids.get(self.selected_run_idx) {
+            let run_id = run_id.clone();
+            match self.store.get_events(&run_id).await {
+                Ok(events) => {
+                    self.events = events;
+                    self.selected_event_idx = 0;
+                    self._timeline = TimelineView::new(self.events.clone());
+                    self._event_detail = EventView::new();
+                }
+                Err(_) => {
+                    self.events = Vec::new();
+                    self.selected_event_idx = 0;
+                    self._timeline = TimelineView::new(Vec::new());
+                    self._event_detail = EventView::new();
+                }
+            }
+        }
     }
 
     fn select_event(&mut self) {
-        // The selected event's details would be shown here
-        // For now, just a placeholder
+        if let Some(ev) = self.events.get(self.selected_event_idx) {
+            self._event_detail.set_event(ev.clone());
+        }
     }
 }
 
@@ -211,12 +248,20 @@ fn render_layout(frame: &mut Frame, app: &App) {
     let timeline_items: Vec<Line> = app
         .events
         .iter()
-        .map(|ev| {
+        .enumerate()
+        .map(|(i, ev)| {
             let offset = ev.started_at.format("%H:%M:%S").to_string();
+            let style = if i == app.selected_event_idx && app.focus == Focus::Timeline {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
             Line::from(vec![
                 Span::styled(
-                    format!("{}  {}", offset, ev.kind),
-                    Style::default(),
+                    format!("{}  {}  {:?}", offset, ev.kind, ev.status),
+                    style,
                 ),
             ])
         })
@@ -234,7 +279,7 @@ fn render_layout(frame: &mut Frame, app: &App) {
         .borders(Borders::ALL)
         .title("Event Details")
         .style(detail_style);
-    let detail_text = match app.events.first() {
+    let detail_text = match app.events.get(app.selected_event_idx) {
         Some(ev) => {
             format!(
                 "ID:     {}\nKind:   {}\nSource: {:?}\nStatus: {:?}\nStart:  {}",
@@ -264,7 +309,7 @@ pub async fn run_tui(_run_id: Option<&str>) -> anyhow::Result<()> {
     // Load data from store
     let store = SqliteStore::open("blackbox.db")
         .context("failed to open database")?;
-    let mut app = App::load(&store).await?;
+    let mut app = App::load(store).await?;
 
     // Main loop
     let tick_rate = Duration::from_millis(100);
@@ -278,7 +323,7 @@ pub async fn run_tui(_run_id: Option<&str>) -> anyhow::Result<()> {
                 {
                     break;
                 }
-                if !app.handle_key(key) {
+                if !app.handle_key(key).await {
                     break;
                 }
             }

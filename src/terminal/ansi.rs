@@ -22,16 +22,69 @@ impl AnsiNormalizer {
     /// Removes ANSI escape sequences, carriage returns, and
     /// other control codes, preserving printable content.
     pub fn normalize(&self, raw: &[u8]) -> String {
-        // Stub: full ANSI parser will handle:
-        // - CSI sequences (SGR colors, cursor movement, erase)
-        // - OSC sequences (window title, clipboard)
-        // - DCS sequences
-        // - SOS, PM, APC string terminators
-        // - Carriage return handling (overwrite vs newline)
-        String::from_utf8_lossy(raw)
-            .chars()
-            .filter(|&c| c.is_ascii_graphic() || c == '\n' || c == '\r' || c == '\t' || c == ' ')
-            .collect()
+        let mut result = String::new();
+        let mut i = 0;
+        let bytes = raw;
+
+        while i < bytes.len() {
+            let byte = bytes[i];
+
+            // Handle ANSI escape sequences
+            if byte == 0x1B && i + 1 < bytes.len() {
+                let next = bytes[i + 1];
+
+                // CSI sequences: ESC [
+                if next == b'[' {
+                    i += 2;
+                    // Skip until we find a final character (0x40-0x7E)
+                    while i < bytes.len() && !(0x40..=0x7E).contains(&bytes[i]) {
+                        i += 1;
+                    }
+                    if i < bytes.len() {
+                        i += 1; // Skip the final character
+                    }
+                    continue;
+                }
+
+                // OSC sequences: ESC ]
+                if next == b']' {
+                    i += 2;
+                    // Skip until we find ST (ESC \ or BEL)
+                    while i < bytes.len() {
+                        if bytes[i] == 0x1B && i + 1 < bytes.len() && bytes[i + 1] == b'\\' {
+                            i += 2;
+                            break;
+                        }
+                        if bytes[i] == 0x07 {
+                            i += 1;
+                            break;
+                        }
+                        i += 1;
+                    }
+                    continue;
+                }
+
+                // Other escape sequences - skip the next character
+                i += 2;
+                continue;
+            }
+
+            // Handle carriage returns
+            if byte == b'\r' {
+                // Skip carriage returns (they're handled by the terminal)
+                i += 1;
+                continue;
+            }
+
+            // Preserve printable characters, newlines, tabs, and spaces
+            if byte.is_ascii_graphic() || byte == b'\n' || byte == b'\t' || byte == b' ' {
+                result.push(byte as char);
+            }
+
+            i += 1;
+        }
+
+        result
     }
 
     /// Produce a terminal event with both raw and normalized content.

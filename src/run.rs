@@ -13,6 +13,7 @@ use crate::core::run::{Run, RunStatus};
 use crate::redaction::scanner::SecretScanner;
 use crate::redaction::RedactionConfig;
 use crate::storage::TraceStore;
+use crate::terminal::ansi::AnsiNormalizer;
 
 /// Supervises a child process in a PTY and captures trace events.
 pub struct RunSupervisor {
@@ -125,27 +126,31 @@ impl RunSupervisor {
             }
         });
 
-        // Task: consume PTY output, scan for secrets, and persist events
+        // Task: consume PTY output, normalize ANSI, scan for secrets, and persist events
         let store_writer = self.store.clone();
         let run_id_writer = run_id.clone();
         let scanner = SecretScanner::new(RedactionConfig::default());
+        let ansi_normalizer = AnsiNormalizer::new();
         let writer_handle = tokio::spawn(async move {
             let mut segment_count: u64 = 0;
             while let Some(data) = pty_out_rx.recv().await {
                 segment_count += 1;
-                let text = String::from_utf8_lossy(&data).to_string();
+                let raw_text = String::from_utf8_lossy(&data).to_string();
 
-                // Scan for secrets in the output
-                let redactions = scanner.scan(&text, &format!("terminal:{}", segment_count), None);
+                // Normalize ANSI sequences
+                let normalized_text = ansi_normalizer.normalize(&data);
+
+                // Scan for secrets in the normalized output
+                let redactions = scanner.scan(&normalized_text, &format!("terminal:{}", segment_count), None);
                 let redacted_text = if redactions.is_empty() {
-                    text
+                    normalized_text.clone()
                 } else {
                     tracing::warn!(
                         count = redactions.len(),
                         segment = segment_count,
                         "redacted secrets in terminal output"
                     );
-                    scanner.redact(&text)
+                    scanner.redact(&normalized_text)
                 };
 
                 let mut ev =
@@ -155,7 +160,9 @@ impl RunSupervisor {
                 ev.metadata
                     .insert("bytes".to_string(), serde_json::json!(data.len()));
                 ev.metadata
-                    .insert("raw".to_string(), serde_json::json!(redacted_text));
+                    .insert("raw".to_string(), serde_json::json!(raw_text));
+                ev.metadata
+                    .insert("normalized".to_string(), serde_json::json!(redacted_text));
 
                 if !redactions.is_empty() {
                     ev.metadata.insert(

@@ -408,16 +408,13 @@ impl RunSupervisor {
                     Ok(s) => s,
                     Err(e) => {
                         tracing::debug!(error = %e, "SIGTERM handler unavailable");
-                        // Fall back to ctrl_c only
-                        loop {
-                            if tokio::signal::ctrl_c().await.is_err() {
-                                break;
-                            }
-                            forward_sigint(signal_child_pid).await;
-                            tokio::time::sleep(Duration::from_millis(SIGGRACE_MS)).await;
-                            escalate_sigkill(signal_child_pid).await;
-                            break;
+                        // Fall back to ctrl_c only (single pass).
+                        if tokio::signal::ctrl_c().await.is_err() {
+                            return;
                         }
+                        forward_sigint(signal_child_pid).await;
+                        tokio::time::sleep(Duration::from_millis(SIGGRACE_MS)).await;
+                        escalate_sigkill(signal_child_pid).await;
                         return;
                     }
                 };

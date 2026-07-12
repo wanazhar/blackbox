@@ -206,6 +206,16 @@ pub async fn collect_referenced_blobs(
                 keys.insert(k);
             }
         }
+
+        // Also collect keys from the blobs table itself. A blob may have been
+        // stored (row + file on disk) but not yet referenced by any event or
+        // checkpoint. Without this, the file gets GC'd while the blobs table
+        // row persists, creating a metadata/data inconsistency.
+        if let Ok(blob_keys) = store.all_blob_keys().await {
+            for k in blob_keys {
+                keys.insert(k);
+            }
+        }
     }
     Ok(keys)
 }

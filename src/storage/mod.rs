@@ -97,4 +97,13 @@ pub trait TraceStore: Send + Sync + 'static {
         }
         Ok(())
     }
+
+    /// Return all blob keys currently tracked in the blob metadata table.
+    ///
+    /// Used by scrub GC to cross-reference blobs table entries against
+    /// event and checkpoint references. Returns empty vec on backends
+    /// that do not maintain a blob metadata table.
+    async fn all_blob_keys(&self) -> anyhow::Result<Vec<String>> {
+        Ok(Vec::new())
+    }
 }

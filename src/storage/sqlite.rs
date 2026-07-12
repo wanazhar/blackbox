@@ -17,7 +17,7 @@ use crate::core::run::Run;
 use crate::storage::TraceStore;
 
 /// Current schema version. Bump when migrations change.
-const SCHEMA_VERSION: i32 = 3;
+const SCHEMA_VERSION: i32 = 4;
 
 /// Default scanner for redacting secrets in FTS index content.
 static FTS_SCANNER: LazyLock<SecretScanner> =
@@ -86,6 +86,10 @@ impl SqliteStore {
             db_path,
         };
         store.migrate()?;
+        // After migrations, checkpoint the WAL so growth from schema changes is reclaimed.
+        if let Err(e) = store.wal_checkpoint() {
+            tracing::warn!(error = %e, "post-migration WAL checkpoint failed (non-fatal)");
+        }
         store.recover_stale_runs()?;
         Ok(store)
     }
@@ -150,9 +154,21 @@ impl SqliteStore {
         Ok(store)
     }
 
+    /// WAL checkpoint: flush WAL to main database file and truncate the WAL.
+    ///
+    /// Should be called periodically after write-heavy operations to prevent
+    /// unbounded WAL growth. Uses TRUNCATE checkpoint for maximum effect.
+    pub fn wal_checkpoint(&self) -> anyhow::Result<()> {
+        let conn = self.conn.lock();
+        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+            .context("failed to WAL checkpoint")?;
+        Ok(())
+    }
+
     fn lock(&self) -> parking_lot::MutexGuard<'_, Connection> {
         self.conn.lock()
     }
+
 
     /// Run schema migrations up to `SCHEMA_VERSION`.
     fn migrate(&self) -> anyhow::Result<()> {
@@ -209,7 +225,20 @@ impl SqliteStore {
         }
 
         // Ensure we never claim a higher version than we support
-        let _ = SCHEMA_VERSION;
+        let applied: i32 = conn
+            .query_row(
+                "SELECT COALESCE(MAX(version), 0) FROM schema_version",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        if applied > SCHEMA_VERSION {
+            anyhow::bail!(
+                "database schema version {} is newer than this binary supports (max {})",
+                applied,
+                SCHEMA_VERSION
+            );
+        }
 
         Ok(())
     }
@@ -1010,10 +1039,25 @@ impl TraceStore for SqliteStore {
             }
             tx.commit().context("failed to commit insert_events_batch transaction")?;
         }
+        // Flush WAL after batch write to keep WAL size bounded.
+        if let Err(e) = self.wal_checkpoint() {
+            tracing::warn!(error = %e, "post-batch WAL checkpoint failed (non-fatal)");
+        }
         tokio::task::yield_now().await;
         Ok(())
     }
- }
+    async fn all_blob_keys(&self) -> anyhow::Result<Vec<String>> {
+        let conn = self.lock();
+        let mut stmt = conn
+            .prepare("SELECT key FROM blobs")
+            .context("failed to prepare all_blob_keys")?;
+        let keys = stmt
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(keys)
+    }
+}
+
 fn event_search_body(event: &TraceEvent) -> String {
     // Only include metadata values in the body column; kind, source, and
     // status are separate FTS columns and indexing them in body too would
@@ -1087,21 +1131,37 @@ fn fts_upsert_in_tx(tx: &rusqlite::Transaction, event: &TraceEvent) -> anyhow::R
 
 /// Build an FTS5 MATCH query: all alphanumeric terms AND-ed.
 fn build_fts_match(query: &str) -> String {
+    // Build a safe FTS5 match expression by quoting each term and filtering
+    // out special FTS5 characters that could be used for injection.
+    //
+    // FTS5 special characters: * ( ) + - ~ ^ : " { } [ ]
+    // By wrapping each term in double quotes and removing all special chars
+    // from the term body, we prevent query injection while preserving search
+    // relevance for typical identifiers and paths.
     let terms: Vec<String> = query
         .split_whitespace()
         .filter_map(|t| {
+            // Strip FTS5 special characters that would break out of quoted strings
+            // or alter the query syntax. We keep only alphanumeric, underscore,
+            // hyphen, dot, and forward-slash — sufficient for code identifiers,
+            // file paths, and error message fragments.
             let cleaned: String = t
                 .chars()
                 .filter(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | '/'))
                 .collect();
             if cleaned.len() < 2 {
-                None
-            } else {
-                // Quote tokens so punctuation-safe
-                Some(format!("\"{}\"", cleaned.replace('"', "")))
+                return None;
             }
+            // Wrap in double quotes so that any remaining safe characters
+            // are treated as literal text by FTS5.
+            Some(format!("\"{}\"", cleaned))
         })
         .collect();
+    if terms.is_empty() {
+        // Return a match-nothing expression rather than an empty query
+        // which would match everything.
+        return "\"__NO_MATCH__\"".to_string();
+    }
     terms.join(" AND ")
 }
 
@@ -1167,7 +1227,20 @@ fn event_from_row(row: &rusqlite::Row) -> rusqlite::Result<TraceEvent> {
                 .ok()
                 .map(|dt| dt.with_timezone(&chrono::Utc))
         }),
-        duration_ms: row.get::<_, Option<i64>>(8)?.map(|d| d as u64),
+        duration_ms: row.get::<_, Option<i64>>(8)?.map(|d| {
+            if d < 0 {
+                // Negative duration indicates clock skew or data corruption;
+                // clamp to zero rather than wrapping to u64::MAX.
+                tracing::warn!(
+                    "negative duration_ms {} for event {}, clamped to 0",
+                    d,
+                    row.get::<_, String>(0).unwrap_or_default()
+                );
+                0u64
+            } else {
+                d as u64
+            }
+        }),
         status: serde_json::from_str(&status_json)
             .unwrap_or(crate::core::event::EventStatus::Unknown),
         side_effect: serde_json::from_str(&side_effect_json)

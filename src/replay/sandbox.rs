@@ -407,6 +407,14 @@ fn seed_walk(
 fn is_readonly_command(cmd: &[String]) -> bool {
     let joined = cmd.join(" ").to_lowercase();
     let first = cmd.first().map(|s| s.as_str()).unwrap_or("");
+
+    // Block shell interpreters entirely — they can execute arbitrary commands
+    // passed as arguments (e.g. `sh -c "rm -rf /"`), bypassing the side-effect
+    // classification if the event was incorrectly tagged as Read/LocalWrite.
+    if matches!(first, "sh" | "bash" | "dash" | "zsh" | "fish" | "ksh") {
+        return false;
+    }
+
     matches!(
         first,
         "ls" | "cat" | "head" | "tail" | "pwd" | "echo" | "true" | "false" | "which" | "env"

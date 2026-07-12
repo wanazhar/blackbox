@@ -108,3 +108,94 @@ pub struct RunHandle {
     pub run_id: String,
     pub child_pid: u32,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_sets_defaults() {
+        let r = Run::new(vec!["cargo".into(), "test".into()], "/tmp".into());
+        assert_eq!(r.command, vec!["cargo", "test"]);
+        assert_eq!(r.cwd, "/tmp");
+        assert_eq!(r.project_dir, "/tmp");
+        assert_eq!(r.status, RunStatus::Pending);
+        assert!(r.ended_at.is_none());
+        assert!(r.exit_code.is_none());
+        assert!(r.parent_run_id.is_none());
+        assert!(r.id.parse::<uuid::Uuid>().is_ok());
+        assert_eq!(r.next_sequence, 0);
+        assert!(r.name.is_none());
+        assert!(r.notes.is_none());
+        assert!(r.tags.is_empty());
+    }
+
+    #[test]
+    fn allocate_sequence_increments() {
+        let mut r = Run::new(vec!["echo".into()], "/tmp".into());
+        assert_eq!(r.allocate_sequence(), 0);
+        assert_eq!(r.allocate_sequence(), 1);
+        assert_eq!(r.allocate_sequence(), 2);
+        assert_eq!(r.next_sequence, 3);
+    }
+
+    #[test]
+    fn finish_sets_succeeded_on_zero_exit() {
+        let mut r = Run::new(vec!["true".into()], "/tmp".into());
+        r.finish(0);
+        assert_eq!(r.status, RunStatus::Succeeded);
+        assert_eq!(r.exit_code, Some(0));
+        assert!(r.ended_at.is_some());
+    }
+
+    #[test]
+    fn finish_sets_failed_on_nonzero_exit() {
+        let mut r = Run::new(vec!["false".into()], "/tmp".into());
+        r.finish(1);
+        assert_eq!(r.status, RunStatus::Failed);
+        assert_eq!(r.exit_code, Some(1));
+    }
+
+    #[test]
+    fn finish_is_idempotent() {
+        let mut r = Run::new(vec!["test".into()], "/tmp".into());
+        r.finish(0);
+        assert_eq!(r.status, RunStatus::Succeeded);
+        // Finish again — should not panic
+        r.finish(1);
+        assert_eq!(r.status, RunStatus::Failed);
+        assert_eq!(r.exit_code, Some(1));
+    }
+
+    #[test]
+    fn serde_round_trip() {
+        let mut r = Run::new(vec!["bash".into(), "-c".into(), "ls".into()], "/home".into());
+        r.status = RunStatus::Succeeded;
+        r.exit_code = Some(0);
+        r.tags = vec!["test".into(), "demo".into()];
+        r.name = Some("demo-run".into());
+        let json = serde_json::to_string(&r).unwrap();
+        let de: Run = serde_json::from_str(&json).unwrap();
+        assert_eq!(de.id, r.id);
+        assert_eq!(de.command, r.command);
+        assert_eq!(de.tags, r.tags);
+        assert_eq!(de.name, r.name);
+        assert_eq!(de.status, r.status);
+    }
+
+    #[test]
+    fn status_serialization() {
+        let cases = [
+            (RunStatus::Pending, "\"Pending\""),
+            (RunStatus::Running, "\"Running\""),
+            (RunStatus::Succeeded, "\"Succeeded\""),
+            (RunStatus::Failed, "\"Failed\""),
+            (RunStatus::Cancelled, "\"Cancelled\""),
+            (RunStatus::Unknown, "\"Unknown\""),
+        ];
+        for (variant, expected) in &cases {
+            let json = serde_json::to_string(variant).unwrap();
+            assert_eq!(&json, expected, "mismatch for {variant:?}");
+        }
+    }
+}

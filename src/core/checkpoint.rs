@@ -66,3 +66,41 @@ impl Checkpoint {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_sets_correct_defaults() {
+        let cp = Checkpoint::new("run-1", "evt-1", "/tmp");
+        assert_eq!(cp.run_id, "run-1");
+        assert_eq!(cp.event_id, "evt-1");
+        assert_eq!(cp.cwd, "/tmp");
+        assert!(cp.git_commit.is_none());
+        assert!(cp.git_diff_blob.is_none());
+        assert!(cp.filesystem_manifest_blob.is_none());
+        assert!(cp.environment_blob.is_none());
+        assert!(cp.transcript_blob.is_none());
+        assert!(cp.harness_session_id.is_none());
+        assert!(cp.id.parse::<uuid::Uuid>().is_ok());
+    }
+
+    #[test]
+    fn new_generates_unique_ids() {
+        let cp1 = Checkpoint::new("run-1", "evt-1", "/tmp");
+        let cp2 = Checkpoint::new("run-1", "evt-1", "/tmp");
+        assert_ne!(cp1.id, cp2.id);
+    }
+
+    #[test]
+    fn serde_round_trip() {
+        let cp = Checkpoint::new("run-1", "evt-1", "/home/user/project");
+        let json = serde_json::to_string(&cp).unwrap();
+        let de: Checkpoint = serde_json::from_str(&json).unwrap();
+        assert_eq!(de.id, cp.id);
+        assert_eq!(de.run_id, cp.run_id);
+        assert_eq!(de.event_id, cp.event_id);
+        assert_eq!(de.cwd, cp.cwd);
+    }
+}

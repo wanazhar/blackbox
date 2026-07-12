@@ -100,6 +100,8 @@ pub fn run_args_for_record(
         artifact_dir: None,
         command,
         resume_injection: None,
+        claim_id_note: None,
+        ambient: true,
     }
 }
 

@@ -7,7 +7,7 @@
 | **CLI / lib name** | `blackbox` |
 | **crates.io package** | [`blackbox-recorder`](https://crates.io/crates/blackbox-recorder) |
 | **License** | MIT OR Apache-2.0 |
-| **Status** | **1.1.0** — leave it on: adoption bar + deeper adapters, CI/eval, opt-in pricing, sandbox restore, shell soak |
+| **Status** | **1.2.0** — Agent Memory Bus: project memory on every supervised launch + sticky continuity / claims |
 
 ## Why use it
 
@@ -16,11 +16,27 @@
 - **Payloads as blobs** — large content lives under content-addressed files; events keep short previews.
 - **Project-local store** — `.blackbox/blackbox.db` + `.blackbox/blobs/` (override with `--store` / `BLACKBOX_DB`).
 - **Safe share defaults** — `export` and `sync push` redact unless you pass `--no-redact`.
-- **Agent-native** — `--json`, `handoff`, MCP tools, auto-resume after failures.
+- **Agent-native** — `--json`, `handoff`, MCP tools, project memory bus on launch.
+- **Continuity plane (1.2)** — `.blackbox/MEMORY.md` + env inject so agents cannot honestly start cold on blackbox paths (delivery ≠ forced model read).
 
-### 1.1 adoption bar
+### 1.2 Agent Memory Bus
 
-1.0 shipped the capability loop. 1.1 proves you can leave ambient capture on — and folds the former post-1.0 backlog into the same release:
+In an enabled project, supervised launches **materialize and inject** a bounded project memory pack (files/env/preamble). New projects default `continuity=always`; existing ambient-on users stay on attention-derived behavior until `blackbox enable --continuity always` / `--memory-bus`.
+
+```bash
+blackbox enable --memory-bus          # opt in (or new project enable)
+blackbox handoff --json               # project_memory + attention.level
+blackbox memory show --json
+blackbox memory set --goal "…" --open "…"
+blackbox claim acquire                # optional multi-agent hold
+blackbox resolve                      # clear unresolved failure
+```
+
+Design: [`docs/plan/agent-memory-bus-1.2.md`](docs/plan/agent-memory-bus-1.2.md).
+
+### 1.1 adoption bar (still permanent)
+
+1.0 shipped the capability loop. 1.1 proves you can leave ambient capture on:
 
 | Gate | What “leave it on” requires |
 |---|---|

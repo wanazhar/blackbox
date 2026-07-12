@@ -4,7 +4,7 @@
 
 **blackbox** is a Rust flight recorder and debugger for AI-agent runs. It launches agent commands (Claude, Codex, or generic), captures terminal output and structured events via PTY supervision, stores traces in SQLite + content-addressed blobs, and provides CLI, TUI, and a local web dashboard for inspection.
 
-**Quality bar:** secrets never at rest by default; monotonic event sequencing; payloads as blobs; project-local `.blackbox/` store; safe export/sync defaults; agent handoff via `status`/`handoff` after failures. See `docs/ROADMAP.md` and `README.md`.
+**Quality bar:** secrets never at rest by default; monotonic event sequencing; payloads as blobs; project-local `.blackbox/` store; safe export/sync defaults; agent handoff via `status`/`handoff` after failures; **1.2 memory bus** delivers project memory on supervised launches. See `docs/ROADMAP.md` and `README.md`.
 
 **Package naming:** crates.io package is `blackbox-recorder`; the binary and library crate path remain `blackbox`.
 
@@ -58,6 +58,9 @@ CLI (clap) → RunSupervisor → CaptureLayers (Git, FS, Process) + PTY I/O
 | `src/search.rs` | FTS-backed search |
 | `src/scrub.rs` | At-rest re-redaction + blob GC |
 | `src/resume.rs` | Fork/resume helpers |
+| `src/resume_inject.rs` | Continuity / memory launch inject |
+| `src/memory.rs` | ProjectMemoryPack (blackbox.memory/v1) |
+| `src/state.rs` | Sticky v2 + state.lock + M6 + claims |
 | `src/transcript.rs` | Transcript rebuild for CLI |
 | `tests/` | Integration tests |
 | `docs/` | ROADMAP, PUBLISH; `docs/history/` is archival only |
@@ -110,11 +113,12 @@ Prefer tests for redaction, store invariants, sequencing, adapters, export/impor
 | `CHANGELOG.md` | Release notes |
 | `AGENTS.md` | Contributors / coding agents (this file) |
 | `docs/ROADMAP.md` | Quality bar + remaining work (1.1 adoption bar) |
-| `docs/plan/adoption-1.1.md` | Active 1.1 design — ambient / redaction / resume / cost |
+| `docs/plan/adoption-1.1.md` | 1.1 design — ambient / redaction / resume / cost (shipped) |
+| `docs/plan/agent-memory-bus-1.2.md` | Active 1.2 design — memory bus / continuity / claims |
 | `docs/ambient-contract.md` | Normative ambient shell + maybe-run contract |
 | `docs/PUBLISH.md` | crates.io publish checklist |
 | `docs/history/*` | Archived plans — not current truth |
 
 ## Roadmap
 
-**1.0** = capability daily-driver. **1.1** = adoption proof (leave ambient on). See `docs/ROADMAP.md` and `docs/plan/adoption-1.1.md`. Do not use `docs/history/` task lists as a backlog.
+**1.0** = capability daily-driver. **1.1** = adoption proof (leave ambient on). **1.2** = Agent Memory Bus (project memory on launch). See `docs/ROADMAP.md` and `docs/plan/agent-memory-bus-1.2.md`. Do not use `docs/history/` task lists as a backlog.

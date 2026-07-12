@@ -4,6 +4,44 @@ All notable changes to **blackbox** are documented here.
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-07-12
+
+**Agent Memory Bus / Continuity plane** — project enable means supervised launches deliver a bounded project memory pack (files, env, preamble when possible), not merely “recording is available.”
+
+Design: `docs/plan/agent-memory-bus-1.2.md`.
+
+#### Project memory pack (`blackbox.memory/v1`)
+- `src/memory.rs` — `ProjectMemoryPack` builder (≤3 runs, ≤2k events, budget shrink order)
+- Live `git status --porcelain` (500ms) for dirty tree
+- Side-effect rollups + `secret_redaction_events` (no secret values)
+- Skip transcript when `attention_level=none`
+- End-of-run writes `MEMORY.md` / `MEMORY.json` + identical `RESUME.*` copies
+
+#### Sticky state v2 + M6 attention
+- `attention_level`, `intent`, `active_claim`, `unresolved_failure_id`, `memory_updated_at`
+- `apply_run_outcome` + `OutcomeExtras` (unrelated success does not clear unresolved failure)
+- All sticky RMW under `.blackbox/state.lock` (flock)
+
+#### Continuity inject
+- `capture.continuity` = `always` | `attention` | `off` (new projects default `always`)
+- Precedence: CLI > `BLACKBOX_CONTINUITY` > `BLACKBOX_AUTO_RESUME` > config
+- Env: `BLACKBOX_MEMORY_FILE`, `BLACKBOX_MEMORY_SCHEMA`, `BLACKBOX_CONTINUITY=1`
+- `parent_run_id` only when attention ≥ continue
+- Notes merge fix (adapter no longer clobbers continuity/session segments)
+
+#### Claims / gate / CLI
+- One project claim: `blackbox claim acquire|release|status`
+- `auto_claim` default false; release on run end when held
+- `gate_mode` warn / require_ack on **explicit** `blackbox run` only (maybe-run never blocked)
+- `blackbox ack` + `BLACKBOX_ACK=1`
+- `blackbox memory show|set`, `blackbox resolve [--clear-wip]`
+
+#### Surfaces
+- `status` / `handoff`: `attention.level` + `project_memory`
+- MCP: `blackbox_memory`, `blackbox_claim`, `blackbox_resolve`, `blackbox_memory_update`; handoff returns memory by default
+- Doctor: continuity / memory / claim fields
+- Tests: `tests/memory_pack_quality.rs` (M2a)
+
 ## [1.1.0] — 2026-07-12
 
 Adoption bar (“leave it on”) plus folded post-1.0 backlog.

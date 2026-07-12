@@ -1,15 +1,27 @@
 # blackbox skill
 
-Local flight recorder for AI-agent runs. Secrets redacted by default.
+Local flight recorder + project memory bus for AI-agent runs. Secrets redacted by default.
 
 ## When to use
-- After a failed or long agent run: postmortem + resume pack
-- Before an expensive retry: compare prior attempt trajectory
+- Session start in a project with `.blackbox/`: load handoff/memory first
+- After a failed or long agent run: postmortem + project memory
+- Before an expensive retry: compare prior attempt; honor claims
 - When sharing a trace: export redacted HTML/portable
+
+## Session start
+```bash
+blackbox handoff --json
+# or MCP: blackbox_handoff / blackbox_memory
+```
+Read `project_memory` and `attention.level` before continuing.
 
 ## Commands (prefer --json)
 ```bash
 blackbox doctor --json
+blackbox memory show --json
+blackbox memory set --goal "…" --open "item"
+blackbox claim status
+blackbox resolve
 blackbox runs --json
 blackbox postmortem latest --json
 blackbox show latest --json
@@ -19,10 +31,11 @@ blackbox diff <runA> <runB> --trajectory --json
 blackbox export latest --format portable > run.json
 ```
 
-## Ambient capture
+## Ambient capture + memory bus
 ```bash
-blackbox enable   # once per project; paste shell snippets
+blackbox enable --memory-bus --install-shell   # once; open new shell
 # then claude/codex go through maybe-run when basename is in wrap list
+# continuity injects MEMORY when configured (always for new projects)
 ```
 
 ## When not to use

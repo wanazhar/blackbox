@@ -99,7 +99,7 @@ fn initialize_result() -> Value {
             "name": SERVER_NAME,
             "version": SERVER_VERSION
         },
-        "instructions": "blackbox flight recorder. Prefer blackbox_handoff at session start; use blackbox_status for lightweight checks."
+        "instructions": "Enabled project: call blackbox_handoff or blackbox_memory before other work. Prefer project_memory over re-reading transcripts. Honor active claims. Use blackbox_status for lightweight checks."
     })
 }
 
@@ -178,6 +178,54 @@ fn tools_list() -> Value {
                 "Diagnose store path, schema, and environment health.",
                 json!({ "type": "object", "properties": {} }),
             ),
+            tool_def(
+                "blackbox_memory",
+                "Project memory pack (blackbox.memory/v1). Call at session start; prefer over transcripts.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "max_tokens": { "type": "integer", "default": 4000 }
+                    }
+                }),
+            ),
+            tool_def(
+                "blackbox_claim",
+                "Project claim acquire|release|status for multi-agent coordination.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["acquire", "release", "status"], "default": "status" },
+                        "goal": { "type": "string" },
+                        "ttl_secs": { "type": "integer" },
+                        "holder": { "type": "string" }
+                    }
+                }),
+            ),
+            tool_def(
+                "blackbox_resolve",
+                "Clear unresolved failure attention (optional clear open_items).",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "clear_wip": { "type": "boolean", "default": false },
+                        "clear_goal": { "type": "boolean", "default": false }
+                    }
+                }),
+            ),
+            tool_def(
+                "blackbox_memory_update",
+                "Set project intent: goal / open_items (redacted).",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "goal": { "type": "string" },
+                        "open_items": { "type": "array", "items": { "type": "string" } },
+                        "clear_open": { "type": "boolean" },
+                        "clear_goal": { "type": "boolean" },
+                        "plan": { "type": "string" }
+                    }
+                }),
+            ),
         ]
     })
 }
@@ -208,6 +256,10 @@ async fn handle_tool_call(
         "blackbox_runs" => tool_runs(store_override, &args).await,
         "blackbox_search" => tool_search(store_override, &args).await,
         "blackbox_doctor" => tool_doctor(store_override).await,
+        "blackbox_memory" => tool_memory(store_override, &args).await,
+        "blackbox_claim" => tool_claim(store_override, &args).await,
+        "blackbox_resolve" => tool_resolve(store_override, &args).await,
+        "blackbox_memory_update" => tool_memory_update(store_override, &args).await,
         other => Err(rpc_err(-32602, &format!("unknown tool: {other}"))),
     }
 }
@@ -260,15 +312,18 @@ async fn tool_status(
                 .get("always")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false),
+            include_project_memory: true,
         }
     } else {
+        let resume = args
+            .get("resume")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         StatusOptions {
-            include_resume: args
-                .get("resume")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false),
+            include_resume: resume,
             max_tokens,
             force_resume: false,
+            include_project_memory: resume,
         }
     };
 
@@ -421,6 +476,207 @@ async fn tool_search(
     Ok(tool_ok(&json!({ "hits": items, "count": items.len() })))
 }
 
+async fn tool_memory(
+    store_override: Option<&std::path::Path>,
+    args: &Value,
+) -> Result<Value, Value> {
+    use crate::memory::{build_project_memory, MemoryBuildOptions};
+    use crate::state::ProjectState;
+    let (discovery, store) = open_ctx(store_override).await?;
+    let sticky = ProjectState::load(&discovery.paths.root)
+        .map_err(|e| rpc_err(-32000, &e.to_string()))?
+        .unwrap_or_default();
+    let max_tokens = args
+        .get("max_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(4000) as usize;
+    let continuity = discovery
+        .config
+        .as_ref()
+        .map(|c| c.capture.continuity_from_config())
+        .unwrap_or(crate::config::ContinuityMode::Off);
+    let pack = build_project_memory(
+        store.as_ref().map(|s| s as &dyn TraceStore),
+        &sticky,
+        MemoryBuildOptions {
+            max_tokens,
+            purpose: "project-memory".into(),
+            continuity_mode: continuity.as_str().into(),
+            project_root: discovery.project_root.clone(),
+            store_db: discovery.paths.db_path.clone(),
+            skip_porcelain_if_none: sticky.attention_level.is_none(),
+        },
+    )
+    .await
+    .map_err(|e| rpc_err(-32000, &e.to_string()))?;
+    let v = serde_json::to_value(&pack).map_err(|e| rpc_err(-32000, &e.to_string()))?;
+    Ok(tool_ok(&v))
+}
+
+async fn tool_claim(
+    store_override: Option<&std::path::Path>,
+    args: &Value,
+) -> Result<Value, Value> {
+    use crate::state::{claim_acquire, claim_holder_id, claim_release, ProjectState};
+    let (discovery, _) = open_ctx(store_override).await?;
+    let action = args
+        .get("action")
+        .and_then(|v| v.as_str())
+        .unwrap_or("status");
+    let ttl = args
+        .get("ttl_secs")
+        .and_then(|v| v.as_u64())
+        .or_else(|| discovery.config.as_ref().map(|c| c.capture.claim_ttl_secs))
+        .unwrap_or(1800);
+    match action {
+        "acquire" => {
+            let (default_holder, kind) = claim_holder_id(None, None, false);
+            let holder = args
+                .get("holder")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or(default_holder);
+            let goal = args
+                .get("goal")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            match claim_acquire(&discovery.paths.root, &holder, &kind, None, goal, ttl)
+                .map_err(|e| rpc_err(-32000, &e.to_string()))?
+            {
+                Ok(c) => {
+                    let v =
+                        serde_json::to_value(&c).map_err(|e| rpc_err(-32000, &e.to_string()))?;
+                    Ok(tool_ok(&v))
+                }
+                Err(conflict) => Ok(tool_ok(&json!({ "ok": false, "conflict": conflict }))),
+            }
+        }
+        "release" => {
+            let holder = args.get("holder").and_then(|v| v.as_str());
+            let c = claim_release(&discovery.paths.root, holder)
+                .map_err(|e| rpc_err(-32000, &e.to_string()))?;
+            let v = serde_json::to_value(&c).map_err(|e| rpc_err(-32000, &e.to_string()))?;
+            Ok(tool_ok(&v))
+        }
+        _ => {
+            let sticky = ProjectState::load(&discovery.paths.root)
+                .map_err(|e| rpc_err(-32000, &e.to_string()))?
+                .unwrap_or_default();
+            let v = serde_json::to_value(&sticky.active_claim)
+                .map_err(|e| rpc_err(-32000, &e.to_string()))?;
+            Ok(tool_ok(&v))
+        }
+    }
+}
+
+async fn tool_resolve(
+    store_override: Option<&std::path::Path>,
+    args: &Value,
+) -> Result<Value, Value> {
+    use crate::core::run::{Run, RunStatus};
+    use crate::state::{apply_run_outcome, with_state_lock, OutcomeExtras};
+    let (discovery, _) = open_ctx(store_override).await?;
+    let clear_wip = args
+        .get("clear_wip")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let clear_goal = args
+        .get("clear_goal")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let remaining = with_state_lock(&discovery.paths.root, |state| {
+        let fid = state.unresolved_failure_id.clone();
+        let mut run = Run::new(
+            vec!["blackbox".into(), "resolve".into()],
+            discovery.project_root.display().to_string(),
+        );
+        run.status = RunStatus::Succeeded;
+        run.exit_code = Some(0);
+        run.ended_at = Some(chrono::Utc::now());
+        if let Some(ref id) = fid {
+            run.parent_run_id = Some(id.clone());
+        }
+        apply_run_outcome(
+            state,
+            &run,
+            OutcomeExtras {
+                resolve_failure: true,
+                clear_wip,
+                ..Default::default()
+            },
+        );
+        if clear_goal {
+            state.intent.goal = None;
+        }
+        Ok(state.unresolved_failure_id.clone())
+    })
+    .map_err(|e| rpc_err(-32000, &e.to_string()))?;
+    Ok(tool_ok(&json!({
+        "resolved": remaining.is_none(),
+        "unresolved_failure_id": remaining
+    })))
+}
+
+async fn tool_memory_update(
+    store_override: Option<&std::path::Path>,
+    args: &Value,
+) -> Result<Value, Value> {
+    use crate::redaction::scanner::SecretScanner;
+    use crate::redaction::RedactionConfig;
+    use crate::state::{with_state_lock, ProjectState};
+    let (discovery, _) = open_ctx(store_override).await?;
+    let scanner = SecretScanner::new(RedactionConfig::default());
+    with_state_lock(&discovery.paths.root, |state| {
+        if args
+            .get("clear_goal")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            state.intent.goal = None;
+        } else if let Some(g) = args.get("goal").and_then(|v| v.as_str()) {
+            state.intent.goal = if g.is_empty() {
+                None
+            } else {
+                Some(scanner.redact(g))
+            };
+        }
+        if args
+            .get("clear_open")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            state.intent.open_items.clear();
+        } else if let Some(items) = args.get("open_items").and_then(|v| v.as_array()) {
+            state.intent.open_items = items
+                .iter()
+                .filter_map(|v| v.as_str())
+                .map(|s| scanner.redact(s))
+                .take(8)
+                .collect();
+        }
+        if let Some(p) = args.get("plan").and_then(|v| v.as_str()) {
+            state.intent.plan_summary = if p.is_empty() {
+                None
+            } else {
+                Some(scanner.redact(p))
+            };
+        }
+        if !state.intent.open_items.is_empty() && state.unresolved_failure_id.is_none() {
+            state.attention_level = crate::state::AttentionLevel::Continue;
+            state.attention_reason = Some("wip".into());
+            state.attention_needed = true;
+        }
+        state.updated_at = chrono::Utc::now();
+        Ok(())
+    })
+    .map_err(|e| rpc_err(-32000, &e.to_string()))?;
+    let sticky = ProjectState::load(&discovery.paths.root)
+        .map_err(|e| rpc_err(-32000, &e.to_string()))?
+        .unwrap_or_default();
+    let v = serde_json::to_value(&sticky).map_err(|e| rpc_err(-32000, &e.to_string()))?;
+    Ok(tool_ok(&v))
+}
+
 async fn tool_doctor(store_override: Option<&std::path::Path>) -> Result<Value, Value> {
     let (discovery, store) = open_ctx(store_override).await?;
     let run_count = if let Some(ref s) = store {
@@ -428,6 +684,22 @@ async fn tool_doctor(store_override: Option<&std::path::Path>) -> Result<Value, 
     } else {
         0
     };
+    let sticky = crate::state::ProjectState::load(&discovery.paths.root)
+        .ok()
+        .flatten();
+    let continuity_mode = discovery
+        .config
+        .as_ref()
+        .map(|c| c.capture.continuity_from_config().as_str())
+        .unwrap_or("off");
+    let memory_path = discovery.paths.root.join("MEMORY.json");
+    let memory_file_present = memory_path.exists();
+    let memory_age_secs = memory_path
+        .metadata()
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.elapsed().ok())
+        .map(|d| d.as_secs());
     let v = json!({
         "project_root": discovery.project_root,
         "store_db": discovery.paths.db_path,
@@ -436,6 +708,12 @@ async fn tool_doctor(store_override: Option<&std::path::Path>) -> Result<Value, 
         "schema_version": SCHEMA_VERSION,
         "run_count": run_count,
         "config": discovery.config,
+        "continuity_mode": continuity_mode,
+        "memory_file_present": memory_file_present,
+        "memory_age_secs": memory_age_secs,
+        "claims_active": sticky.as_ref().and_then(|s| s.active_claim.as_ref()).is_some(),
+        "unresolved_failure_id": sticky.as_ref().and_then(|s| s.unresolved_failure_id.clone()),
+        "attention_level": sticky.as_ref().map(|s| s.attention_level.as_str()).unwrap_or("none"),
     });
     Ok(tool_ok(&v))
 }

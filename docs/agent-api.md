@@ -1,4 +1,4 @@
-# blackbox agent API (1.0 → 1.1)
+# blackbox agent API (1.0 → 1.2)
 
 Machine-readable contracts for agents and custom harnesses.
 
@@ -78,6 +78,23 @@ Error:
 | Shell soak | `tests/shell_soak.rs` exercises real bash install → ambient record |
 | Native logs | Per-harness roots/filters; aider plaintext history |
 | Windows | `taskkill` soft/hard stop; `--shell powershell` install |
+
+### 1.2 additions (Agent Memory Bus)
+
+| Surface | Notes |
+|---|---|
+| `project_memory` | `blackbox.memory/v1` pack on handoff / `memory show` / MCP `blackbox_memory` |
+| `attention.level` | `none` \| `info` \| `continue` \| `blocked` (additive; `needed` still derived) |
+| Sticky state | `blackbox.state/v2` — intent, claim, unresolved_failure_id (serde defaults for v1 files) |
+| Continuity modes | `capture.continuity` = always \| attention \| off; env `BLACKBOX_CONTINUITY` |
+| Inject env | `BLACKBOX_MEMORY_FILE`, `BLACKBOX_MEMORY_SCHEMA=blackbox.memory/v1`, `BLACKBOX_CONTINUITY=1` (+ legacy `BLACKBOX_RESUME_*`) |
+| Files | `.blackbox/MEMORY.md` + `MEMORY.json`; `RESUME.*` are identical content copies |
+| CLI | `memory show\|set`, `resolve`, `claim acquire\|release\|status`, `ack` |
+| MCP | `blackbox_memory`, `blackbox_claim`, `blackbox_resolve`, `blackbox_memory_update` |
+| Gate | `gate_mode=warn\|require_ack` on **explicit** `blackbox run` only; `BLACKBOX_ACK=1` or `blackbox ack` |
+| Claims | One project claim under `.blackbox/state.lock`; `auto_claim` default false |
+
+**Honesty:** blackbox delivers memory on supervised paths; it does not force a model to *read* it without vendor cooperation or optional require_ack on explicit `run`.
 
 **Agent session start (recommended):**
 

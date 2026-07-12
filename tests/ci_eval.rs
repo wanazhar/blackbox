@@ -42,6 +42,8 @@ async fn ci_artifact_dir_writes_run_and_postmortem() {
         ci: false, // don't process::exit in test
         artifact_dir: Some(artifacts.clone()),
         resume_injection: None,
+        claim_id_note: None,
+        ambient: false,
         command: vec!["true".into()],
     };
 

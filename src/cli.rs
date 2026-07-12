@@ -103,8 +103,115 @@ pub enum Command {
     Status(StatusArgs),
     /// Agent handoff: status + resume pack when attention is needed
     Handoff(HandoffArgs),
+    /// Project memory pack (1.2 memory bus)
+    Memory(MemoryArgs),
+    /// Clear unresolved failure attention
+    Resolve(ResolveArgs),
+    /// Project claim acquire / release / status
+    Claim(ClaimArgs),
+    /// Acknowledge memory handoff (satisfies gate_mode=require_ack once)
+    Ack,
     /// MCP stdio server (tools for status/handoff/postmortem/search/…)
     Mcp,
+}
+
+#[derive(Args, Default)]
+pub struct MemoryArgs {
+    #[command(subcommand)]
+    pub action: Option<MemoryAction>,
+
+    /// Approximate max tokens for the pack
+    #[arg(long, default_value_t = 4000)]
+    pub max_tokens: usize,
+}
+
+#[derive(Subcommand, Clone)]
+pub enum MemoryAction {
+    /// Show project memory pack
+    Show(MemoryShowArgs),
+    /// Set intentional memory fields (redacted)
+    Set(MemorySetArgs),
+}
+
+impl Default for MemoryAction {
+    fn default() -> Self {
+        Self::Show(MemoryShowArgs::default())
+    }
+}
+
+#[derive(Args, Default, Clone)]
+pub struct MemoryShowArgs {
+    #[arg(long, default_value_t = 4000)]
+    pub max_tokens: usize,
+}
+
+#[derive(Args, Clone, Default)]
+pub struct MemorySetArgs {
+    /// Set project goal (empty string clears when used with --clear-goal)
+    #[arg(long)]
+    pub goal: Option<String>,
+    /// Replace open items list (repeatable; omit all with --clear-open)
+    #[arg(long = "open")]
+    pub open: Vec<String>,
+    /// Clear open_items
+    #[arg(long)]
+    pub clear_open: bool,
+    /// Clear goal
+    #[arg(long)]
+    pub clear_goal: bool,
+    /// Set plan summary
+    #[arg(long)]
+    pub plan: Option<String>,
+}
+
+#[derive(Args, Default)]
+pub struct ResolveArgs {
+    /// Run id to mark resolved (default: sticky unresolved_failure_id)
+    pub run_id: Option<String>,
+    /// Also clear open_items WIP
+    #[arg(long)]
+    pub clear_wip: bool,
+    /// Also clear goal
+    #[arg(long)]
+    pub clear_goal: bool,
+}
+
+#[derive(Args)]
+pub struct ClaimArgs {
+    #[command(subcommand)]
+    pub action: ClaimAction,
+}
+
+#[derive(Subcommand, Clone)]
+pub enum ClaimAction {
+    Acquire(ClaimAcquireArgs),
+    Release(ClaimReleaseArgs),
+    Status,
+    Heartbeat(ClaimHeartbeatArgs),
+}
+
+#[derive(Args, Clone, Default)]
+pub struct ClaimAcquireArgs {
+    #[arg(long)]
+    pub goal: Option<String>,
+    #[arg(long)]
+    pub ttl_secs: Option<u64>,
+    #[arg(long)]
+    pub holder: Option<String>,
+}
+
+#[derive(Args, Clone, Default)]
+pub struct ClaimReleaseArgs {
+    #[arg(long)]
+    pub holder: Option<String>,
+}
+
+#[derive(Args, Clone, Default)]
+pub struct ClaimHeartbeatArgs {
+    #[arg(long)]
+    pub holder: Option<String>,
+    #[arg(long)]
+    pub ttl_secs: Option<u64>,
 }
 
 #[derive(Args, Default)]
@@ -316,6 +423,7 @@ pub struct RunArgs {
     pub no_auto_resume: bool,
 
     /// Force auto-resume injection even if config disables it
+    /// (this invocation behaves as continuity=always for inject)
     #[arg(long)]
     pub auto_resume: bool,
 
@@ -334,6 +442,14 @@ pub struct RunArgs {
     /// Prepared resume injection (filled by CLI, not a user flag).
     #[arg(skip)]
     pub resume_injection: Option<crate::resume_inject::ResumeInjection>,
+
+    /// Claim id note for run.notes (filled by CLI when auto_claim acquires).
+    #[arg(skip)]
+    pub claim_id_note: Option<String>,
+
+    /// When true, this path is ambient maybe-run (never hard-block on gate_mode).
+    #[arg(skip)]
+    pub ambient: bool,
 }
 
 #[derive(Args)]
@@ -436,6 +552,14 @@ pub struct EnableArgs {
     /// Shell for snippets/install: fish, bash, zsh, powershell (default: detect)
     #[arg(long)]
     pub shell: Option<String>,
+
+    /// Set capture.continuity (always|attention|off). New projects default always.
+    #[arg(long, value_name = "MODE")]
+    pub continuity: Option<String>,
+
+    /// Alias for --continuity always (opt into full memory bus)
+    #[arg(long)]
+    pub memory_bus: bool,
 }
 
 #[derive(Args)]
@@ -629,6 +753,10 @@ impl Cli {
             Command::Context(args) => cmd_context(self, args).await,
             Command::Status(args) => cmd_status(self, args).await,
             Command::Handoff(args) => cmd_handoff(self, args).await,
+            Command::Memory(args) => cmd_memory(self, args).await,
+            Command::Resolve(args) => cmd_resolve(self, args).await,
+            Command::Claim(args) => cmd_claim(self, args).await,
+            Command::Ack => cmd_ack(self).await,
             Command::Mcp => cmd_mcp(self).await,
         }
     }
@@ -759,7 +887,13 @@ fn is_bookkeeping(kind: &str) -> bool {
 // ── Commands ──────────────────────────────────────────────────────
 
 async fn cmd_run(cli: &Cli, args: &RunArgs) -> anyhow::Result<()> {
+    use crate::config::{resolve_continuity, ClaimPolicy, ContinuityMode, GateMode};
     use crate::run::RunSupervisor;
+    use crate::state::{
+        apply_run_outcome, claim_acquire, claim_holder_id, claim_release_for_run,
+        consume_ack_if_present, release_or_rebind_claim, with_state_lock, OutcomeExtras,
+        ProjectState,
+    };
 
     if args.insecure_raw {
         eprintln!("warning: --insecure-raw stores unredacted terminal bytes");
@@ -785,35 +919,87 @@ async fn cmd_run(cli: &Cli, args: &RunArgs) -> anyhow::Result<()> {
         redact: !args.no_redact,
     };
 
-    // Prepare auto-resume injection when enabled.
-    let mut args = args.clone();
-    let want_resume = if args.no_auto_resume {
-        false
-    } else if args.auto_resume {
-        true
-    } else {
-        crate::resume_inject::auto_resume_enabled(
-            discovery.as_ref().and_then(|d| d.config.as_ref()),
-        )
-    };
-    if want_resume {
+    let cfg_ref = discovery.as_ref().and_then(|d| d.config.as_ref());
+    let continuity = resolve_continuity(cfg_ref, args.no_auto_resume, args.auto_resume);
+    let max_tok = cfg_ref
+        .map(|c| c.capture.memory_max_tokens_effective() as usize)
+        .unwrap_or(4000);
+    let gate_mode = cfg_ref
+        .map(|c| c.capture.gate_mode)
+        .unwrap_or(GateMode::Off);
+    let auto_claim = cfg_ref.map(|c| c.capture.auto_claim).unwrap_or(false) || args.ci;
+    let claim_ttl = cfg_ref.map(|c| c.capture.claim_ttl_secs).unwrap_or(1800);
+    let claim_policy = cfg_ref
+        .map(|c| c.capture.claim_policy)
+        .unwrap_or(ClaimPolicy::Warn);
+
+    // L5 gate (explicit blackbox run only — never hard-block ambient maybe-run)
+    if !args.ambient && gate_mode != GateMode::Off {
         if let Some(ref disc) = discovery {
-            let max_tok = disc
-                .config
-                .as_ref()
-                .map(|c| c.capture.resume_max_tokens as usize)
-                .unwrap_or(4000);
-            match crate::resume_inject::prepare_resume_injection(
-                store.as_ref(),
+            let sticky = ProjectState::load(&disc.paths.root)
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+            if !sticky.attention_level.is_none() || sticky.attention_needed {
+                match gate_mode {
+                    GateMode::Warn => {
+                        if !cli.json {
+                            eprintln!(
+                                "warning: gate_mode=warn — attention={:?}; run blackbox handoff --json",
+                                sticky.attention_level
+                            );
+                        }
+                    }
+                    GateMode::RequireAck => {
+                        if !consume_ack_if_present(&disc.paths.root) {
+                            anyhow::bail!(
+                                "gate_mode=require_ack: run `blackbox handoff --json` then `blackbox ack` \
+                                 (or set BLACKBOX_ACK=1) before blackbox run"
+                            );
+                        }
+                    }
+                    GateMode::Off => {}
+                }
+            }
+            // Claim conflict soft/hard
+            if let Some(ref c) = sticky.active_claim {
+                if c.is_active(chrono::Utc::now()) {
+                    let msg = format!(
+                        "project claim held by {} until {}",
+                        c.holder,
+                        c.expires_at.to_rfc3339()
+                    );
+                    if claim_policy == ClaimPolicy::BlockRecord && !args.ambient {
+                        anyhow::bail!("claim.policy=block_record: {msg}");
+                    } else if !cli.json {
+                        eprintln!("warning: {msg}");
+                    }
+                }
+            }
+        }
+    }
+
+    // Prepare continuity injection when enabled.
+    let mut args = args.clone();
+    if continuity != ContinuityMode::Off {
+        if let Some(ref disc) = discovery {
+            match crate::resume_inject::prepare_continuity_injection(
+                Some(store.as_ref()),
                 &disc.paths.root,
-                max_tok,
+                crate::resume_inject::ContinuityPrepareOpts {
+                    max_tokens: max_tok,
+                    continuity,
+                    project_root: disc.project_root.clone(),
+                    store_db: disc.paths.db_path.clone(),
+                    end_of_run_write: false,
+                },
             )
             .await
             {
                 Ok(Some(inj)) => {
                     if !cli.json {
                         eprintln!(
-                            "auto-resume: injecting context from failed run {} ({})",
+                            "continuity: injecting project memory (prior {}, {})",
                             inj.short_id,
                             inj.file_path.display()
                         );
@@ -821,7 +1007,29 @@ async fn cmd_run(cli: &Cli, args: &RunArgs) -> anyhow::Result<()> {
                     args.resume_injection = Some(inj);
                 }
                 Ok(None) => {}
-                Err(e) => tracing::warn!(error = %e, "auto-resume prepare failed"),
+                Err(e) => tracing::warn!(error = %e, "continuity prepare failed"),
+            }
+        }
+    }
+
+    // Auto-claim when configured (or --ci)
+    if auto_claim {
+        if let Some(ref disc) = discovery {
+            let (holder, kind) = claim_holder_id(None, None, args.ci);
+            match claim_acquire(&disc.paths.root, &holder, &kind, None, None, claim_ttl) {
+                Ok(Ok(c)) => {
+                    args.claim_id_note = Some(c.id.clone());
+                    tracing::info!(claim = %c.id, "auto_claim acquired");
+                }
+                Ok(Err(conflict)) => {
+                    if claim_policy == ClaimPolicy::BlockRecord && !args.ambient {
+                        anyhow::bail!("auto_claim conflict: {conflict}");
+                    }
+                    if !cli.json {
+                        eprintln!("warning: auto_claim: {conflict}");
+                    }
+                }
+                Err(e) => tracing::warn!(error = %e, "auto_claim failed"),
             }
         }
     }
@@ -829,16 +1037,68 @@ async fn cmd_run(cli: &Cli, args: &RunArgs) -> anyhow::Result<()> {
     let supervisor = RunSupervisor::new(Arc::clone(&store)).with_policy(policy);
     let run = supervisor.execute(&args).await?;
 
-    // Sticky project state for agent handoff (best-effort).
+    // Sticky project state under state.lock + MEMORY refresh (1.2).
     if let Some(ref disc) = discovery {
-        let mut state = crate::state::ProjectState::load(&disc.paths.root)
-            .ok()
-            .flatten()
-            .unwrap_or_default();
-        state.record_run(&run);
-        if let Err(e) = state.save(&disc.paths.root) {
-            tracing::warn!(error = %e, "failed to write .blackbox/state.json");
+        let run_for_state = run.clone();
+        let claim_note = args.claim_id_note.clone();
+        let git_dirty = crate::memory::live_git_status(&disc.project_root).dirty;
+        let files_touched_nonempty = {
+            if let Ok(events) = store.get_events(&run_for_state.id).await {
+                events.iter().any(|e| {
+                    e.kind.starts_with("filesystem.")
+                        && !e.kind.contains("observer")
+                        && !e.kind.contains("snapshot")
+                })
+            } else {
+                false
+            }
+        };
+
+        if let Err(e) = with_state_lock(&disc.paths.root, |state| {
+            let claim_released = release_or_rebind_claim(state, &run_for_state);
+            let _ = claim_note; // claim id already used at acquire; release is by run_id
+            apply_run_outcome(
+                state,
+                &run_for_state,
+                OutcomeExtras {
+                    git_dirty,
+                    files_touched_nonempty,
+                    claim_released,
+                    ..Default::default()
+                },
+            );
+            // Goal extract: use run name if goal empty
+            if state.intent.goal.is_none() {
+                if let Some(ref n) = run_for_state.name {
+                    if !n.is_empty() {
+                        state.intent.goal = Some(n.clone());
+                    }
+                }
+            }
+            Ok(())
+        }) {
+            tracing::warn!(error = %e, "failed to update sticky state under lock");
         }
+
+        // Release auto-claim held for this run (best-effort outside, also under lock path)
+        if args.claim_id_note.is_some() {
+            let _ = claim_release_for_run(&disc.paths.root, &run.id);
+        }
+
+        // End-of-run MEMORY refresh when continuity ≠ off
+        if let Err(e) = crate::resume_inject::refresh_memory_files_end_of_run(
+            Some(store.as_ref()),
+            &disc.paths.root,
+            &disc.project_root,
+            &disc.paths.db_path,
+            continuity,
+            max_tok,
+        )
+        .await
+        {
+            tracing::warn!(error = %e, "end-of-run MEMORY refresh failed");
+        }
+
         // Opportunistic retention when configured.
         if let Some(ref cfg) = disc.config {
             if cfg.retention.auto_apply {
@@ -2144,6 +2404,8 @@ async fn cmd_fork(cli: &Cli, args: &ForkArgs) -> anyhow::Result<()> {
             ci: false,
             artifact_dir: None,
             resume_injection: None,
+            claim_id_note: None,
+            ambient: false,
             command: cmd,
         };
         return cmd_run(cli, &run_args).await;
@@ -2830,6 +3092,7 @@ async fn cmd_enable(cli: &Cli, args: &EnableArgs) -> anyhow::Result<()> {
     std::fs::create_dir_all(&bb)?;
     let config_path = bb.join("config.toml");
 
+    let is_new = !config_path.exists();
     let mut cfg = if let Some(existing) = BlackboxConfig::load_from_path(&config_path)? {
         let mut c = existing;
         c.enabled = true;
@@ -2841,6 +3104,25 @@ async fn cmd_enable(cli: &Cli, args: &EnableArgs) -> anyhow::Result<()> {
     // Daily-driver defaults for new / re-enabled projects
     if cfg.retention.keep_runs == 0 {
         cfg.retention.keep_runs = 50;
+    }
+    // Continuity: new projects always; re-enable preserves; flags opt-in
+    if let Some(ref mode) = args.continuity {
+        let m = crate::config::ContinuityMode::parse(mode)
+            .ok_or_else(|| anyhow::anyhow!("unknown --continuity {mode:?}"))?;
+        cfg.capture.continuity = Some(m);
+        cfg.capture.auto_resume = m != crate::config::ContinuityMode::Off;
+    } else if args.memory_bus {
+        cfg.capture.continuity = Some(crate::config::ContinuityMode::Always);
+        cfg.capture.auto_resume = true;
+    } else if is_new {
+        // New project: memory bus on
+        cfg.capture.continuity = Some(crate::config::ContinuityMode::Always);
+        cfg.capture.auto_resume = true;
+    }
+    // Re-enable without flags: preserve existing/derived continuity (do not flip)
+    // Always serialize both keys when writing
+    if cfg.capture.continuity.is_none() {
+        cfg.capture.continuity = Some(cfg.capture.continuity_from_config());
     }
     cfg.write_to_path(&config_path)?;
     // Ensure dirs for store
@@ -2998,6 +3280,285 @@ async fn cmd_mcp(cli: &Cli) -> anyhow::Result<()> {
     crate::mcp::run_mcp_stdio(cli.store.as_deref()).await
 }
 
+async fn cmd_memory(cli: &Cli, args: &MemoryArgs) -> anyhow::Result<()> {
+    use crate::memory::{build_project_memory, format_memory_markdown, MemoryBuildOptions};
+    use crate::redaction::scanner::SecretScanner;
+    use crate::redaction::RedactionConfig;
+    use crate::state::{with_state_lock, ProjectState};
+
+    let action = args.action.clone().unwrap_or_default();
+    match action {
+        MemoryAction::Show(show) => {
+            let discovery = discover(cli)?;
+            let store = if discovery.paths.db_path.exists() {
+                Some(open_store(cli)?)
+            } else {
+                None
+            };
+            let sticky = ProjectState::load(&discovery.paths.root)?.unwrap_or_default();
+            let max_tokens = if show.max_tokens != 4000 {
+                show.max_tokens
+            } else {
+                args.max_tokens
+            };
+            let pack = build_project_memory(
+                store.as_ref().map(|s| s as &dyn TraceStore),
+                &sticky,
+                MemoryBuildOptions {
+                    max_tokens,
+                    purpose: "project-memory".into(),
+                    continuity_mode: discovery
+                        .config
+                        .as_ref()
+                        .map(|c| c.capture.continuity_from_config().as_str().into())
+                        .unwrap_or_else(|| "off".into()),
+                    project_root: discovery.project_root.clone(),
+                    store_db: discovery.paths.db_path.clone(),
+                    skip_porcelain_if_none: sticky.attention_level.is_none(),
+                },
+            )
+            .await?;
+            if cli.json {
+                return output::emit_ok("memory", &pack);
+            }
+            print!("{}", format_memory_markdown(&pack));
+            Ok(())
+        }
+        MemoryAction::Set(set) => {
+            let discovery = discover(cli)?;
+            let scanner = SecretScanner::new(RedactionConfig::default());
+            with_state_lock(&discovery.paths.root, |state| {
+                if set.clear_goal {
+                    state.intent.goal = None;
+                } else if let Some(ref g) = set.goal {
+                    state.intent.goal = if g.is_empty() {
+                        None
+                    } else {
+                        Some(scanner.redact(g))
+                    };
+                }
+                if set.clear_open {
+                    state.intent.open_items.clear();
+                } else if !set.open.is_empty() {
+                    state.intent.open_items =
+                        set.open.iter().map(|s| scanner.redact(s)).take(8).collect();
+                }
+                if let Some(ref p) = set.plan {
+                    state.intent.plan_summary = if p.is_empty() {
+                        None
+                    } else {
+                        Some(scanner.redact(p))
+                    };
+                }
+                // Recompute WIP attention when open items change
+                if !state.intent.open_items.is_empty() && state.unresolved_failure_id.is_none() {
+                    state.attention_level = crate::state::AttentionLevel::Continue;
+                    state.attention_reason = Some("wip".into());
+                    state.attention_needed = true;
+                } else if state.intent.open_items.is_empty()
+                    && state.unresolved_failure_id.is_none()
+                    && state.active_claim.is_none()
+                {
+                    // Don't clear dirty-based wip here (live git); leave level if failure/claim
+                }
+                state.updated_at = chrono::Utc::now();
+                Ok(())
+            })?;
+            if cli.json {
+                let sticky = ProjectState::load(&discovery.paths.root)?.unwrap_or_default();
+                return output::emit_ok("memory_set", &sticky);
+            }
+            println!("memory updated");
+            Ok(())
+        }
+    }
+}
+
+async fn cmd_resolve(cli: &Cli, args: &ResolveArgs) -> anyhow::Result<()> {
+    use crate::core::run::{Run, RunStatus};
+    use crate::state::{apply_run_outcome, with_state_lock, OutcomeExtras};
+
+    let discovery = discover(cli)?;
+    let result = with_state_lock(&discovery.paths.root, |state| {
+        let fid = args
+            .run_id
+            .clone()
+            .or_else(|| state.unresolved_failure_id.clone())
+            .or_else(|| state.last_failure.as_ref().map(|r| r.id.clone()));
+        // Synthetic success run carrying resolve
+        let mut run = Run::new(
+            vec!["blackbox".into(), "resolve".into()],
+            discovery.project_root.display().to_string(),
+        );
+        run.status = RunStatus::Succeeded;
+        run.exit_code = Some(0);
+        run.ended_at = Some(chrono::Utc::now());
+        if let Some(ref id) = fid {
+            run.parent_run_id = Some(id.clone());
+            run.tags.push(format!("resolves:{id}"));
+        }
+        apply_run_outcome(
+            state,
+            &run,
+            OutcomeExtras {
+                resolve_failure: true,
+                clear_wip: args.clear_wip,
+                ..Default::default()
+            },
+        );
+        if args.clear_goal {
+            state.intent.goal = None;
+        }
+        Ok(state.unresolved_failure_id.clone())
+    })?;
+
+    if cli.json {
+        #[derive(serde::Serialize)]
+        struct R {
+            resolved: bool,
+            unresolved_failure_id: Option<String>,
+        }
+        return output::emit_ok(
+            "resolve",
+            &R {
+                resolved: result.is_none(),
+                unresolved_failure_id: result,
+            },
+        );
+    }
+    if result.is_none() {
+        println!("resolved: no unresolved failure");
+    } else {
+        println!("resolve applied (remaining unresolved: {result:?})");
+    }
+    Ok(())
+}
+
+async fn cmd_claim(cli: &Cli, args: &ClaimArgs) -> anyhow::Result<()> {
+    use crate::state::{
+        claim_acquire, claim_heartbeat, claim_holder_id, claim_release, ProjectState,
+    };
+
+    let discovery = discover(cli)?;
+    let ttl_default = discovery
+        .config
+        .as_ref()
+        .map(|c| c.capture.claim_ttl_secs)
+        .unwrap_or(1800);
+
+    match &args.action {
+        ClaimAction::Acquire(a) => {
+            let (default_holder, kind) = claim_holder_id(None, None, false);
+            let holder = a.holder.clone().unwrap_or(default_holder);
+            let ttl = a.ttl_secs.unwrap_or(ttl_default);
+            match claim_acquire(
+                &discovery.paths.root,
+                &holder,
+                &kind,
+                None,
+                a.goal.clone(),
+                ttl,
+            )? {
+                Ok(c) => {
+                    if cli.json {
+                        return output::emit_ok("claim_acquire", &c);
+                    }
+                    println!(
+                        "claim acquired id={} holder={} until {}",
+                        c.id,
+                        c.holder,
+                        c.expires_at.to_rfc3339()
+                    );
+                }
+                Err(conflict) => {
+                    if cli.json {
+                        #[derive(serde::Serialize)]
+                        struct E {
+                            ok: bool,
+                            conflict: String,
+                        }
+                        return output::emit_ok(
+                            "claim_acquire",
+                            &E {
+                                ok: false,
+                                conflict,
+                            },
+                        );
+                    }
+                    anyhow::bail!("{conflict}");
+                }
+            }
+            Ok(())
+        }
+        ClaimAction::Release(a) => {
+            let released = claim_release(&discovery.paths.root, a.holder.as_deref())?;
+            if cli.json {
+                return output::emit_ok("claim_release", &released);
+            }
+            match released {
+                Some(c) => println!("released claim {}", c.id),
+                None => println!("no active claim"),
+            }
+            Ok(())
+        }
+        ClaimAction::Status => {
+            let sticky = ProjectState::load(&discovery.paths.root)?.unwrap_or_default();
+            if cli.json {
+                return output::emit_ok("claim_status", &sticky.active_claim);
+            }
+            match sticky.active_claim {
+                Some(c) => println!(
+                    "active claim holder={} kind={} until {} run={:?}",
+                    c.holder, c.holder_kind, c.expires_at, c.run_id
+                ),
+                None => println!("no active claim"),
+            }
+            Ok(())
+        }
+        ClaimAction::Heartbeat(a) => {
+            let (default_holder, _) = claim_holder_id(None, None, false);
+            let holder = a.holder.clone().unwrap_or(default_holder);
+            let ttl = a.ttl_secs.unwrap_or(ttl_default);
+            let ok = claim_heartbeat(&discovery.paths.root, &holder, ttl)?;
+            if cli.json {
+                #[derive(serde::Serialize)]
+                struct H {
+                    ok: bool,
+                }
+                return output::emit_ok("claim_heartbeat", &H { ok });
+            }
+            println!(
+                "{}",
+                if ok {
+                    "heartbeat ok"
+                } else {
+                    "no claim for holder"
+                }
+            );
+            Ok(())
+        }
+    }
+}
+
+async fn cmd_ack(cli: &Cli) -> anyhow::Result<()> {
+    let discovery = discover(cli)?;
+    let path = crate::state::write_ack(&discovery.paths.root)?;
+    if cli.json {
+        #[derive(serde::Serialize)]
+        struct A {
+            path: String,
+        }
+        return output::emit_ok(
+            "ack",
+            &A {
+                path: path.display().to_string(),
+            },
+        );
+    }
+    println!("ack written: {}", path.display());
+    Ok(())
+}
+
 async fn cmd_status(cli: &Cli, args: &StatusArgs) -> anyhow::Result<()> {
     use crate::status::{build_status, format_status_text, StatusOptions};
 
@@ -3016,6 +3577,7 @@ async fn cmd_status(cli: &Cli, args: &StatusArgs) -> anyhow::Result<()> {
             include_resume: args.resume,
             max_tokens: args.max_tokens,
             force_resume: false,
+            include_project_memory: args.resume,
         },
     )
     .await?;
@@ -3044,6 +3606,8 @@ async fn cmd_handoff(cli: &Cli, args: &HandoffArgs) -> anyhow::Result<()> {
             include_resume: true,
             max_tokens: args.max_tokens,
             force_resume: args.always,
+            // 1.2: project_memory by default when enabled
+            include_project_memory: true,
         },
     )
     .await?;
@@ -3052,8 +3616,8 @@ async fn cmd_handoff(cli: &Cli, args: &HandoffArgs) -> anyhow::Result<()> {
         return output::emit_ok("handoff", &view);
     }
     print!("{}", format_status_text(&view));
-    if view.resume_pack.is_none() && !view.attention.needed {
-        println!("  (no resume pack — nothing needs attention; pass --always to force)");
+    if view.project_memory.is_none() && view.resume_pack.is_none() && !view.attention.needed {
+        println!("  (no memory/resume pack — nothing needs attention; pass --always to force)");
     }
     Ok(())
 }
@@ -3282,6 +3846,34 @@ async fn cmd_doctor(cli: &Cli, args: &DoctorArgs) -> anyhow::Result<()> {
         },
     };
 
+    let sticky = crate::state::ProjectState::load(&discovery.paths.root)
+        .ok()
+        .flatten();
+    let continuity_mode = discovery
+        .config
+        .as_ref()
+        .map(|c| c.capture.continuity_from_config().as_str().to_string());
+    let memory_path = paths.root.join("MEMORY.json");
+    let memory_file_present = Some(memory_path.exists());
+    let memory_age_secs = memory_path
+        .metadata()
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.elapsed().ok())
+        .map(|d| d.as_secs());
+    let claims_active = Some(
+        sticky
+            .as_ref()
+            .and_then(|s| s.active_claim.as_ref())
+            .is_some(),
+    );
+    let unresolved_failure_id = sticky
+        .as_ref()
+        .and_then(|s| s.unresolved_failure_id.clone());
+    let attention_level = sticky
+        .as_ref()
+        .map(|s| s.attention_level.as_str().to_string());
+
     if cli.json {
         let view = views::DoctorView {
             version: env!("CARGO_PKG_VERSION").to_string(),
@@ -3304,6 +3896,12 @@ async fn cmd_doctor(cli: &Cli, args: &DoctorArgs) -> anyhow::Result<()> {
             shell_integration_hint:
                 "functions call maybe-run; install via blackbox enable --install-shell".into(),
             blackbox_on_path: on_path,
+            continuity_mode,
+            memory_file_present,
+            memory_age_secs,
+            claims_active,
+            unresolved_failure_id,
+            attention_level,
         };
         return output::emit_ok("doctor", &view);
     }

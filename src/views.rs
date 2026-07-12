@@ -248,6 +248,19 @@ pub struct DoctorView {
     pub config: DoctorConfigView,
     pub shell_integration_hint: String,
     pub blackbox_on_path: bool,
+    // 1.2 memory plane (M7)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub continuity_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_file_present: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_age_secs: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub claims_active: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unresolved_failure_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attention_level: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

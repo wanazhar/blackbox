@@ -8,6 +8,7 @@ pub mod core;
 pub mod export;
 pub mod maybe_run;
 pub mod mcp;
+pub mod memory;
 pub mod output;
 pub mod pipeline;
 pub mod pricing;

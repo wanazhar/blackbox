@@ -124,30 +124,32 @@ impl RunSupervisor {
             tracing::debug!(adapter = adapter_id, "applied adapter launch preparation");
         }
 
-        // Auto-resume: inject prior failure context when configured.
+        // Continuity: inject project memory when prepared by CLI.
         let mut resume_env: HashMap<String, String> = HashMap::new();
+        // Build notes once: adapter[;insecure_raw][;continuity:…][;claim:…]  (never clobber)
+        let mut note_owned: Vec<String> = vec![format!("adapter:{adapter_id}")];
+        if self.policy.insecure_raw {
+            note_owned.push("insecure_raw".into());
+        }
         if let Some(ref inj) = args.resume_injection {
             spawn_cmd = crate::resume_inject::apply_to_launch(&spawn_cmd, &mut resume_env, inj);
             tracing::info!(
                 prior_run = %inj.short_id,
-                "auto-resume: injected prior failure context into launch"
+                "continuity: injected project memory into launch"
             );
-            let note = run.notes.take().unwrap_or_default();
-            run.notes = Some(if note.is_empty() {
-                format!("auto_resume:{}", inj.short_id)
-            } else {
-                format!("{}; auto_resume:{}", note, inj.short_id)
-            });
-        }
-        run.notes = Some(format!(
-            "adapter:{}{}",
-            adapter_id,
-            if self.policy.insecure_raw {
-                ";insecure_raw"
-            } else {
-                ""
+            note_owned.push(format!("continuity:{}", inj.short_id));
+            // parent_run_id only when attention ≥ continue
+            if inj.attention_level.at_least_continue() {
+                if let Some(ref pred) = inj.predecessor_run_id {
+                    run.parent_run_id = Some(pred.clone());
+                }
             }
-        ));
+        }
+        if let Some(ref claim_id) = args.claim_id_note {
+            note_owned.push(format!("claim:{claim_id}"));
+        }
+        let note_refs: Vec<&str> = note_owned.iter().map(|s| s.as_str()).collect();
+        run.notes = Some(crate::util::merge_run_notes(run.notes.take(), &note_refs));
 
         self.store
             .insert_run(run)
@@ -839,12 +841,10 @@ impl RunSupervisor {
         run.next_sequence = writer.next_sequence();
         if let Some(sid) = session_id {
             run.session_id = Some(sid.clone());
-            let note = run.notes.take().unwrap_or_default();
-            run.notes = Some(if note.is_empty() {
-                format!("session:{}", sid)
-            } else {
-                format!("{}; session:{}", note, sid)
-            });
+            run.notes = Some(crate::util::merge_run_notes(
+                run.notes.take(),
+                &[&format!("session:{sid}")],
+            ));
         }
         // Adapter + usage rollup (schema v6)
         if let Some(notes) = run.notes.as_deref() {

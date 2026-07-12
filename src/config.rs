@@ -171,6 +171,93 @@ impl Default for BlackboxConfig {
     }
 }
 
+/// Continuity / memory-bus inject mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ContinuityMode {
+    /// Every record launch injects project memory.
+    #[default]
+    Always,
+    /// Inject only when sticky attention_level != none (1.1-compatible).
+    Attention,
+    /// No inject / no end-of-run memory I/O.
+    Off,
+}
+
+impl ContinuityMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Always => "always",
+            Self::Attention => "attention",
+            Self::Off => "off",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "always" => Some(Self::Always),
+            "attention" => Some(Self::Attention),
+            "off" | "false" | "0" | "no" => Some(Self::Off),
+            _ => None,
+        }
+    }
+}
+
+/// Gate mode for explicit `blackbox run` only (never blocks maybe-run).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum GateMode {
+    #[default]
+    Off,
+    Warn,
+    RequireAck,
+}
+
+impl GateMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Warn => "warn",
+            Self::RequireAck => "require_ack",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "off" | "false" | "0" | "no" => Some(Self::Off),
+            "warn" => Some(Self::Warn),
+            "require_ack" | "require-ack" | "ack" => Some(Self::RequireAck),
+            _ => None,
+        }
+    }
+}
+
+/// Claim conflict policy on explicit run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ClaimPolicy {
+    #[default]
+    Warn,
+    BlockRecord,
+}
+
+impl ClaimPolicy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Warn => "warn",
+            Self::BlockRecord => "block_record",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "warn" => Some(Self::Warn),
+            "block_record" | "block" => Some(Self::BlockRecord),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CaptureConfig {
     /// Basenames of commands auto-wrapped by shell functions / maybe-run.
@@ -179,13 +266,30 @@ pub struct CaptureConfig {
     /// Tags applied to ambient (maybe-run) captures.
     #[serde(default = "default_auto_tags")]
     pub default_tags: Vec<String>,
-    /// When true (or BLACKBOX_AUTO_RESUME=1), inject prior failure resume pack
-    /// into the next harness launch (prompt + env).
+    /// Deprecated alias; when `continuity` key absent, true→attention, false→off.
     #[serde(default = "default_true")]
     pub auto_resume: bool,
-    /// Max tokens for auto-resume packs written under `.blackbox/RESUME.*`.
+    /// Max tokens for auto-resume / memory packs written under `.blackbox/`.
     #[serde(default = "default_resume_tokens")]
     pub resume_max_tokens: u32,
+    /// Continuity plane mode (1.2). When absent from TOML, derived from auto_resume.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continuity: Option<ContinuityMode>,
+    /// Memory pack token budget; falls back to resume_max_tokens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_max_tokens: Option<u32>,
+    /// Gate mode for explicit blackbox run only.
+    #[serde(default)]
+    pub gate_mode: GateMode,
+    /// Auto-acquire project claim on record launch (default false).
+    #[serde(default)]
+    pub auto_claim: bool,
+    /// Claim TTL seconds when auto_claim or explicit acquire without TTL.
+    #[serde(default = "default_claim_ttl")]
+    pub claim_ttl_secs: u64,
+    /// Soft warn vs block explicit run on claim conflict.
+    #[serde(default)]
+    pub claim_policy: ClaimPolicy,
 }
 
 fn default_wrap() -> Vec<String> {
@@ -209,6 +313,10 @@ fn default_resume_tokens() -> u32 {
     4000
 }
 
+fn default_claim_ttl() -> u64 {
+    1800
+}
+
 impl Default for CaptureConfig {
     fn default() -> Self {
         Self {
@@ -216,8 +324,73 @@ impl Default for CaptureConfig {
             default_tags: default_auto_tags(),
             auto_resume: true,
             resume_max_tokens: default_resume_tokens(),
+            // New project defaults written by enable: continuity=always
+            continuity: Some(ContinuityMode::Always),
+            memory_max_tokens: None,
+            gate_mode: GateMode::Off,
+            auto_claim: false,
+            claim_ttl_secs: default_claim_ttl(),
+            claim_policy: ClaimPolicy::Warn,
         }
     }
+}
+
+impl CaptureConfig {
+    /// Effective continuity mode from config only (no CLI/env).
+    pub fn continuity_from_config(&self) -> ContinuityMode {
+        if let Some(c) = self.continuity {
+            return c;
+        }
+        // Key absent: derive from auto_resume (1.1 mental model)
+        if self.auto_resume {
+            ContinuityMode::Attention
+        } else {
+            ContinuityMode::Off
+        }
+    }
+
+    pub fn memory_max_tokens_effective(&self) -> u32 {
+        self.memory_max_tokens
+            .unwrap_or(self.resume_max_tokens)
+            .max(1)
+    }
+}
+
+/// Resolve effective continuity for this invocation.
+///
+/// Precedence (highest wins):
+/// 1. CLI `--no-auto-resume` → Off; `--auto-resume` → Always
+/// 2. Env `BLACKBOX_CONTINUITY=always|attention|off`
+/// 3. Env `BLACKBOX_AUTO_RESUME=0|false|off|no` → Off; `=1|true|on|yes` → Attention (if no continuity env)
+/// 4. Config `capture.continuity` if present
+/// 5. Config derived from `auto_resume`
+pub fn resolve_continuity(
+    cfg: Option<&BlackboxConfig>,
+    cli_no_auto_resume: bool,
+    cli_auto_resume: bool,
+) -> ContinuityMode {
+    if cli_no_auto_resume {
+        return ContinuityMode::Off;
+    }
+    if cli_auto_resume {
+        return ContinuityMode::Always;
+    }
+    if let Ok(v) = std::env::var("BLACKBOX_CONTINUITY") {
+        if let Some(m) = ContinuityMode::parse(&v) {
+            return m;
+        }
+    }
+    if let Ok(v) = std::env::var("BLACKBOX_AUTO_RESUME") {
+        let v = v.to_ascii_lowercase();
+        if v == "0" || v == "false" || v == "off" || v == "no" {
+            return ContinuityMode::Off;
+        }
+        if v == "1" || v == "true" || v == "on" || v == "yes" {
+            return ContinuityMode::Attention;
+        }
+    }
+    cfg.map(|c| c.capture.continuity_from_config())
+        .unwrap_or(ContinuityMode::Off)
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

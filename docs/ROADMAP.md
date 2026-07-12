@@ -37,6 +37,21 @@ Design source of truth: [`docs/plan/adoption-1.1.md`](plan/adoption-1.1.md).
 |---|---|
 | **1.0.0** | Capability daily-driver: enable → capture → fail → handoff / MCP / auto-resume |
 | **1.1.0** | Adoption bar **plus** former post-1.0 backlog (adapters, CI/eval, pricing opt-in, sandbox restore, shell soak, Windows soft kill) |
+| **1.2.0** | **Agent Memory Bus / Continuity plane** — default launch delivers project memory; sticky v2 + claims + M6 attention |
+
+### Memory bus bar (1.2 — M1–M7)
+
+| # | Criterion | Target |
+|---|---|---|
+| **M1** | Materialize + inject on launch paths | `continuity=always` injects; `attention` clean skips launch inject; end-of-run always refreshes MEMORY when ≠ off |
+| **M2a** | Pack structural quality | CI suite `tests/memory_pack_quality.rs` |
+| **M3** | Side effects surface | `side_effects_top`, `destructive_paths`, `secret_redaction_events` |
+| **M4** | Multi-agent claim MVP | One project claim under `state.lock`; exclusive acquire |
+| **M5** | Sessions disposable | Pack from store+sticky; degraded sticky-only if store fails |
+| **M6** | Silent failure discipline | `apply_run_outcome`; unrelated success does not clear failure |
+| **M7** | Trust settled | Redaction on MEMORY paths; doctor memory plane fields |
+
+Design: [`docs/plan/agent-memory-bus-1.2.md`](plan/agent-memory-bus-1.2.md). **A1–A7 remain permanent.**
 
 ### 1.0 shipped (capability)
 
@@ -72,11 +87,24 @@ Design source of truth: [`docs/plan/adoption-1.1.md`](plan/adoption-1.1.md).
 | Real-shell soak | **done** — `tests/shell_soak.rs` (bash install → wrap → record) |
 | Richer native log pollers | **done** — per-harness roots/filters + plaintext for aider |
 | Windows signal / PowerShell install | **done** — taskkill soft/hard; `powershell` shell kind |
-| 1.1.0 version bump + publish | **this release** |
+| 1.1.0 version bump + publish | **done** |
 
-## Backlog (post-1.1)
+### 1.2 work (Agent Memory Bus)
 
-Residual polish only (core items folded into 1.1):
+| Theme | Status |
+|---|---|
+| Project memory pack + budget limits | **done** (`src/memory.rs`) |
+| Sticky v2 + M6 + state.lock | **done** (`src/state.rs`) |
+| Continuity inject + enable migration | **done** (`resume_inject`, config, enable) |
+| Claims MVP | **done** (CLI + MCP) |
+| Gate modes (explicit run only) | **done** |
+| Status/handoff/MCP/skill | **done** |
+| M2a quality suite | **done** (`tests/memory_pack_quality.rs`) |
+| 1.2.0 version bump | **this release** |
+
+## Backlog (post-1.2)
+
+Residual polish (path-scoped claims, auto TODO open_items, CLAUDE.md L2b deferred):
 
 | Priority | Theme | Notes |
 |---|---|---|

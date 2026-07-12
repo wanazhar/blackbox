@@ -1,34 +1,30 @@
-//! Auto-resume: inject prior failure context into the next harness launch.
+//! Continuity / auto-resume: inject project memory into the next harness launch.
 
 use std::path::{Path, PathBuf};
 
-use crate::config::BlackboxConfig;
-use crate::context::{build_context_pack, ContextOptions, ContextPackView};
-use crate::core::run::RunStatus;
-use crate::state::ProjectState;
+use crate::config::{resolve_continuity, BlackboxConfig, ContinuityMode};
+use crate::memory::{
+    build_project_memory, compact_memory_preamble, write_memory_files, MemoryBuildOptions,
+    ProjectMemoryPack, MEMORY_SCHEMA,
+};
+use crate::state::{AttentionLevel, ProjectState};
 use crate::storage::TraceStore;
 
-/// Env vars set for auto-resume (also discoverable by harnesses/agents).
+/// Env vars set for auto-resume / continuity (also discoverable by harnesses/agents).
 pub const ENV_AUTO_RESUME: &str = "BLACKBOX_AUTO_RESUME";
 pub const ENV_RESUME_FILE: &str = "BLACKBOX_RESUME_FILE";
 pub const ENV_RESUME_RUN_ID: &str = "BLACKBOX_RESUME_RUN_ID";
 pub const ENV_RESUME_HINT: &str = "BLACKBOX_RESUME_HINT";
+pub const ENV_MEMORY_FILE: &str = "BLACKBOX_MEMORY_FILE";
+pub const ENV_MEMORY_SCHEMA: &str = "BLACKBOX_MEMORY_SCHEMA";
+pub const ENV_CONTINUITY: &str = "BLACKBOX_CONTINUITY";
 
-/// Whether auto-resume is active (config + env).
+/// Whether auto-resume is active (config + env) — 1.1 compat (true when continuity ≠ off).
 pub fn auto_resume_enabled(cfg: Option<&BlackboxConfig>) -> bool {
-    if let Ok(v) = std::env::var(ENV_AUTO_RESUME) {
-        let v = v.to_ascii_lowercase();
-        if v == "0" || v == "false" || v == "off" || v == "no" {
-            return false;
-        }
-        if v == "1" || v == "true" || v == "on" || v == "yes" {
-            return true;
-        }
-    }
-    cfg.map(|c| c.capture.auto_resume).unwrap_or(false)
+    resolve_continuity(cfg, false, false) != ContinuityMode::Off
 }
 
-/// Materialized resume injection for a launch.
+/// Materialized continuity injection for a launch.
 #[derive(Debug, Clone)]
 pub struct ResumeInjection {
     pub run_id: String,
@@ -36,78 +32,148 @@ pub struct ResumeInjection {
     pub file_path: PathBuf,
     pub preamble: String,
     pub hint: String,
-    pub pack: ContextPackView,
+    /// Legacy single-run-shaped fields kept for apply_to_launch / tests.
+    pub pack: crate::context::ContextPackView,
+    /// Full project memory pack (1.2).
+    pub memory: ProjectMemoryPack,
+    /// Predecessor for parent_run_id when attention ≥ continue.
+    pub predecessor_run_id: Option<String>,
+    pub attention_level: AttentionLevel,
 }
 
-/// Build resume injection from sticky state + store when attention is needed.
+/// Options for continuity prepare.
+#[derive(Debug, Clone)]
+pub struct ContinuityPrepareOpts {
+    pub max_tokens: usize,
+    pub continuity: ContinuityMode,
+    pub project_root: PathBuf,
+    pub store_db: PathBuf,
+    /// End-of-run write path: always write MEMORY when continuity ≠ off.
+    pub end_of_run_write: bool,
+}
+
+impl Default for ContinuityPrepareOpts {
+    fn default() -> Self {
+        Self {
+            max_tokens: 4000,
+            continuity: ContinuityMode::Always,
+            project_root: PathBuf::from("."),
+            store_db: PathBuf::from(".blackbox/blackbox.db"),
+            end_of_run_write: false,
+        }
+    }
+}
+
+/// Build resume injection from sticky state + store when continuity requires launch inject.
+///
+/// 1.1-compatible entry: uses attention/failure gate equivalent to continuity=attention.
 pub async fn prepare_resume_injection(
     store: &dyn TraceStore,
     blackbox_root: &Path,
     max_tokens: usize,
 ) -> anyhow::Result<Option<ResumeInjection>> {
-    let sticky = ProjectState::load(blackbox_root)?.unwrap_or_default();
-    if !sticky.attention_needed {
-        // Also check last_run status from sticky
+    prepare_continuity_injection(
+        Some(store),
+        blackbox_root,
+        ContinuityPrepareOpts {
+            max_tokens,
+            continuity: ContinuityMode::Attention,
+            project_root: blackbox_root
+                .parent()
+                .unwrap_or(blackbox_root)
+                .to_path_buf(),
+            store_db: blackbox_root.join("blackbox.db"),
+            end_of_run_write: false,
+        },
+    )
+    .await
+}
+
+/// Prepare continuity injection (launch path).
+///
+/// Returns None when continuity is off, or attention-only with attention_level=none.
+pub async fn prepare_continuity_injection(
+    store: Option<&dyn TraceStore>,
+    blackbox_root: &Path,
+    opts: ContinuityPrepareOpts,
+) -> anyhow::Result<Option<ResumeInjection>> {
+    if opts.continuity == ContinuityMode::Off {
+        return Ok(None);
+    }
+
+    // Load sticky under brief lock for consistent snapshot
+    let sticky = match crate::state::with_state_lock(blackbox_root, |state| {
+        state.expire_claim_if_needed(chrono::Utc::now());
+        Ok(state.clone())
+    }) {
+        Ok(s) => s,
+        Err(_) => ProjectState::load(blackbox_root)?.unwrap_or_default(),
+    };
+
+    // Launch inject gate
+    if opts.continuity == ContinuityMode::Attention && sticky.attention_level.is_none() {
+        // Also honor 1.1: last_run failed/cancelled even if level unset on stale sticky
         let bad = sticky
             .last_run
             .as_ref()
             .map(|r| r.status == "failed" || r.status == "cancelled")
             .unwrap_or(false);
-        if !bad {
+        if !bad && !sticky.attention_needed {
             return Ok(None);
         }
     }
 
-    let target_id = sticky
-        .last_run
-        .as_ref()
-        .filter(|r| r.status == "failed" || r.status == "cancelled")
-        .or(sticky.last_failure.as_ref())
-        .map(|r| r.id.clone());
-
-    let Some(run_id) = target_id else {
-        return Ok(None);
-    };
-
-    let Some(run) = store.get_run(&run_id).await? else {
-        return Ok(None);
-    };
-    if !matches!(run.status, RunStatus::Failed | RunStatus::Cancelled) {
-        // Prefer DB truth if sticky is stale
-        if !sticky.attention_needed {
-            return Ok(None);
-        }
-    }
-
-    let pack = build_context_pack(
+    let pack = build_project_memory(
         store,
-        &run,
-        ContextOptions {
-            max_tokens,
-            include_transcript: true,
+        &sticky,
+        MemoryBuildOptions {
+            max_tokens: opts.max_tokens,
+            purpose: "for-resume".into(),
+            continuity_mode: opts.continuity.as_str().into(),
+            project_root: opts.project_root.clone(),
+            store_db: opts.store_db.clone(),
+            skip_porcelain_if_none: sticky.attention_level.is_none(),
         },
     )
     .await?;
 
-    std::fs::create_dir_all(blackbox_root)?;
-    let file_path = blackbox_root.join("RESUME.md");
-    let preamble = format_resume_preamble(&pack);
-    std::fs::write(&file_path, &preamble)?;
+    let file_path = write_memory_files(blackbox_root, &pack, true)?;
+    // Touch memory_updated_at best-effort
+    let _ = crate::state::with_state_lock(blackbox_root, |state| {
+        state.memory_updated_at = Some(chrono::Utc::now());
+        Ok(())
+    });
 
-    // Also write JSON pack for machine agents
-    let json_path = blackbox_root.join("RESUME.json");
-    let _ = std::fs::write(
-        &json_path,
-        serde_json::to_string_pretty(&pack).unwrap_or_default(),
-    );
+    let run_id = pack
+        .focus_run_id
+        .clone()
+        .or_else(|| pack.last_run.as_ref().map(|r| r.id.clone()))
+        .unwrap_or_default();
+    let short = if run_id.is_empty() {
+        "none".into()
+    } else {
+        crate::util::short_id(&run_id).to_string()
+    };
 
-    let short = crate::util::short_id(&run_id).to_string();
+    let preamble = compact_memory_preamble(&pack, &file_path);
     let hint = format!(
-        "Prior blackbox run {short} needs attention (status={:?}, exit={:?}). Resume pack: {}",
-        run.status,
-        run.exit_code,
+        "blackbox project memory (attention={}, continuity={}). Full pack: {}",
+        pack.attention_level,
+        pack.continuity_mode,
         file_path.display()
     );
+
+    let predecessor_run_id = if sticky.attention_level.at_least_continue() {
+        pack.predecessor_run
+            .as_ref()
+            .map(|r| r.id.clone())
+            .or(pack.focus_run_id.clone())
+    } else {
+        None
+    };
+
+    // Legacy ContextPackView bridge for older apply paths / tests
+    let legacy = memory_to_context_pack(&pack, &run_id, &short);
 
     Ok(Some(ResumeInjection {
         run_id,
@@ -115,76 +181,104 @@ pub async fn prepare_resume_injection(
         file_path,
         preamble,
         hint,
-        pack,
+        pack: legacy,
+        memory: pack,
+        predecessor_run_id,
+        attention_level: sticky.attention_level,
     }))
 }
 
-fn format_resume_preamble(pack: &ContextPackView) -> String {
-    let mut out = String::new();
-    out.push_str("# blackbox resume context\n\n");
-    out.push_str(&format!("{}\n\n", pack.headline));
-    out.push_str(&format!(
-        "Attention: {} · tokens≈{}{}\n\n",
-        pack.attention_reason,
-        pack.approx_tokens,
-        if pack.truncated { " (truncated)" } else { "" }
-    ));
-    out.push_str(&format!("## Next action\n{}\n\n", pack.next_action));
-    if !pack.failed_tools.is_empty() {
-        out.push_str("## Failed tools\n");
-        for t in &pack.failed_tools {
-            out.push_str(&format!("- seq={} {} {}\n", t.sequence, t.name, t.detail));
-        }
-        out.push('\n');
+/// End-of-run: always refresh MEMORY files when continuity ≠ off.
+pub async fn refresh_memory_files_end_of_run(
+    store: Option<&dyn TraceStore>,
+    blackbox_root: &Path,
+    project_root: &Path,
+    store_db: &Path,
+    continuity: ContinuityMode,
+    max_tokens: usize,
+) -> anyhow::Result<Option<PathBuf>> {
+    if continuity == ContinuityMode::Off {
+        return Ok(None);
     }
-    if !pack.errors_top.is_empty() {
-        out.push_str("## Top errors\n");
-        for e in pack.errors_top.iter().take(8) {
-            out.push_str(&format!(
-                "- seq={} [{}] {}\n",
-                e.sequence, e.error_type, e.message
-            ));
-        }
-        out.push('\n');
-    }
-    if !pack.last_tools.is_empty() {
-        out.push_str(&format!(
-            "## Last tools\n{}\n\n",
-            pack.last_tools.join(", ")
-        ));
-    }
-    if !pack.filesystem_writes.is_empty() {
-        out.push_str("## Filesystem activity\n");
-        for w in pack.filesystem_writes.iter().take(15) {
-            out.push_str(&format!("- {w}\n"));
-        }
-        out.push('\n');
-    }
-    if let Some(ref cmd) = pack.resume_command {
-        out.push_str(&format!(
-            "## Suggested resume command\n`{}`\n\n",
-            cmd.join(" ")
-        ));
-    }
-    if let Some(ref tail) = pack.transcript_tail {
-        out.push_str("## Transcript tail\n```\n");
-        out.push_str(tail);
-        if !tail.ends_with('\n') {
-            out.push('\n');
-        }
-        out.push_str("```\n\n");
-    }
-    out.push_str(
-        "Continue the task. Do not re-do completed work unless needed. \
-         Fix the failure and verify.\n",
-    );
-    out
+    let sticky = ProjectState::load(blackbox_root)?.unwrap_or_default();
+    let pack = build_project_memory(
+        store,
+        &sticky,
+        MemoryBuildOptions {
+            max_tokens,
+            purpose: "project-memory".into(),
+            continuity_mode: continuity.as_str().into(),
+            project_root: project_root.to_path_buf(),
+            store_db: store_db.to_path_buf(),
+            skip_porcelain_if_none: sticky.attention_level.is_none(),
+        },
+    )
+    .await?;
+    let path = write_memory_files(blackbox_root, &pack, true)?;
+    let _ = crate::state::with_state_lock(blackbox_root, |state| {
+        state.memory_updated_at = Some(chrono::Utc::now());
+        Ok(())
+    });
+    Ok(Some(path))
 }
 
-/// Apply resume injection to a launch command + environment.
+fn memory_to_context_pack(
+    pack: &ProjectMemoryPack,
+    run_id: &str,
+    short_id: &str,
+) -> crate::context::ContextPackView {
+    use crate::summary::{GitSummary, SummaryView, ToolsSummary};
+    use crate::views::ResumeView;
+    crate::context::ContextPackView {
+        run_id: run_id.to_string(),
+        short_id: short_id.to_string(),
+        purpose: pack.purpose.clone(),
+        headline: pack.headline.clone(),
+        next_action: pack.next_action.clone(),
+        attention_reason: pack.attention_reason.clone(),
+        summary: pack.summary.clone().unwrap_or(SummaryView {
+            run_id: run_id.to_string(),
+            short_id: short_id.to_string(),
+            status: crate::core::run::RunStatus::Unknown,
+            exit_code: None,
+            duration_ms: None,
+            command: vec![],
+            tags: vec![],
+            tools: ToolsSummary {
+                total: 0,
+                failed: 0,
+                names: vec![],
+            },
+            errors: vec![],
+            side_effects: vec![],
+            git: GitSummary {
+                start: None,
+                end: None,
+            },
+            resume: ResumeView {
+                available: false,
+                command: None,
+            },
+            truncated: false,
+            events_scanned: 0,
+            total_events: None,
+            hints: vec![],
+        }),
+        failed_tools: pack.failed_tools.clone(),
+        errors_top: pack.errors_top.clone(),
+        last_tools: pack.last_tools.clone(),
+        filesystem_writes: pack.files_touched.clone(),
+        transcript_tail: pack.transcript_tail.clone(),
+        resume_command: pack.resume_command.clone(),
+        approx_tokens: pack.approx_tokens,
+        truncated: pack.truncated,
+    }
+}
+
+/// Apply continuity injection to a launch command + environment.
 ///
-/// - Sets BLACKBOX_RESUME_* env vars
-/// - For Claude `-p` / `--print` prompts: prepends a short resume header to the prompt text
+/// - Sets BLACKBOX_RESUME_* and BLACKBOX_MEMORY_* env vars
+/// - For Claude `-p` / `--print` prompts: prepends compact memory preamble
 /// - For Codex `exec <prompt>`: prepends to the trailing prompt arg when present
 pub fn apply_to_launch(
     command: &[String],
@@ -197,6 +291,12 @@ pub fn apply_to_launch(
     );
     env.insert(ENV_RESUME_RUN_ID.to_string(), inj.run_id.clone());
     env.insert(ENV_RESUME_HINT.to_string(), inj.hint.clone());
+    env.insert(
+        ENV_MEMORY_FILE.to_string(),
+        inj.file_path.display().to_string(),
+    );
+    env.insert(ENV_MEMORY_SCHEMA.to_string(), MEMORY_SCHEMA.to_string());
+    env.insert(ENV_CONTINUITY.to_string(), "1".to_string());
 
     let mut cmd = command.to_vec();
     if cmd.is_empty() {
@@ -209,14 +309,15 @@ pub fn apply_to_launch(
         .unwrap_or(cmd[0].as_str())
         .to_ascii_lowercase();
 
-    // Compact preamble for argv (avoid huge prompts)
-    let compact = compact_preamble(inj);
+    let compact = if inj.preamble.is_empty() {
+        compact_memory_preamble(&inj.memory, &inj.file_path)
+    } else {
+        inj.preamble.clone()
+    };
 
     if basename.contains("claude") {
-        // Find -p / --print value and prepend
         prepend_prompt_after_flag(&mut cmd, &["-p", "--print"], &compact);
     } else if basename.contains("codex") {
-        // `codex exec "prompt"` — last non-flag arg after exec
         if let Some(exec_idx) = cmd.iter().position(|a| a == "exec") {
             if exec_idx + 1 < cmd.len() {
                 let prompt_idx = cmd.len() - 1;
@@ -226,7 +327,6 @@ pub fn apply_to_launch(
             }
         }
     } else if basename == "aider" || basename.contains("gemini") || basename.contains("grok") {
-        // Best-effort: prepend to last non-flag arg
         if let Some(i) = cmd
             .iter()
             .rposition(|a| !a.starts_with('-') && a != &cmd[0])
@@ -238,33 +338,6 @@ pub fn apply_to_launch(
     }
 
     cmd
-}
-
-fn compact_preamble(inj: &ResumeInjection) -> String {
-    let mut s = format!(
-        "[blackbox resume {}] Prior run failed (exit={:?}). See {} for full context.\n",
-        inj.short_id,
-        inj.pack.summary.exit_code,
-        inj.file_path.display()
-    );
-    if !inj.pack.failed_tools.is_empty() {
-        s.push_str("Failed tools: ");
-        let names: Vec<_> = inj
-            .pack
-            .failed_tools
-            .iter()
-            .map(|t| t.name.as_str())
-            .collect();
-        s.push_str(&names.join(", "));
-        s.push('\n');
-    }
-    s.push_str("Continue from that failure; do not restart from scratch unless necessary.");
-    // Cap argv injection size
-    if s.len() > 1500 {
-        s.truncate(s.floor_char_boundary(1500));
-        s.push('…');
-    }
-    s
 }
 
 fn prepend_prompt_after_flag(cmd: &mut [String], flags: &[&str], preamble: &str) {
@@ -299,7 +372,19 @@ mod tests {
     #[test]
     fn auto_resume_env_off() {
         std::env::set_var(ENV_AUTO_RESUME, "0");
+        std::env::remove_var("BLACKBOX_CONTINUITY");
         assert!(!auto_resume_enabled(None));
         std::env::remove_var(ENV_AUTO_RESUME);
+    }
+
+    #[test]
+    fn continuity_cli_auto_resume_forces_always() {
+        std::env::remove_var("BLACKBOX_CONTINUITY");
+        std::env::remove_var(ENV_AUTO_RESUME);
+        assert_eq!(
+            resolve_continuity(None, false, true),
+            ContinuityMode::Always
+        );
+        assert_eq!(resolve_continuity(None, true, false), ContinuityMode::Off);
     }
 }

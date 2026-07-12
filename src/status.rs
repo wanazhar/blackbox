@@ -5,7 +5,8 @@ use serde::Serialize;
 use crate::config::ProjectDiscovery;
 use crate::context::{build_context_pack, ContextOptions, ContextPackView};
 use crate::core::run::RunStatus;
-use crate::state::{ProjectState, RunPointer};
+use crate::memory::{build_project_memory, MemoryBuildOptions, ProjectMemoryPack};
+use crate::state::{AttentionLevel, ProjectState, RunPointer};
 use crate::storage::TraceStore;
 
 #[derive(Debug, Serialize)]
@@ -24,6 +25,9 @@ pub struct StatusView {
     /// Present when resume pack is requested and a target run exists.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resume_pack: Option<ContextPackView>,
+    /// Project memory pack (1.2); present when enabled and built.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_memory: Option<ProjectMemoryPack>,
 }
 
 #[derive(Debug, Serialize)]
@@ -48,6 +52,8 @@ pub struct RetentionStatusView {
 #[derive(Debug, Serialize)]
 pub struct AttentionView {
     pub needed: bool,
+    /// Additive 1.2 field.
+    pub level: AttentionLevel,
     pub reason: Option<String>,
     pub run_id: Option<String>,
 }
@@ -58,6 +64,8 @@ pub struct StatusOptions {
     pub max_tokens: usize,
     /// When true, attach resume pack for last_run even without attention (handoff).
     pub force_resume: bool,
+    /// Attach project_memory when project enabled (handoff default).
+    pub include_project_memory: bool,
 }
 
 impl Default for StatusOptions {
@@ -66,6 +74,7 @@ impl Default for StatusOptions {
             include_resume: false,
             max_tokens: 4000,
             force_resume: false,
+            include_project_memory: false,
         }
     }
 }
@@ -103,16 +112,24 @@ pub async fn build_status(
         .map(|r| r.status == "failed" || r.status == "cancelled")
         .unwrap_or(false);
 
-    let attention_needed = sticky.attention_needed || last_is_bad;
+    let mut attention_level = sticky.attention_level;
+    if attention_level.is_none() && (sticky.attention_needed || last_is_bad) {
+        attention_level = AttentionLevel::Continue;
+    }
+    let attention_needed = !attention_level.is_none();
+
+    // Status attention.run_id: unresolved failure first, else last_run when wip/continue
     let attention_run_id = if attention_needed {
-        if last_is_bad {
-            last_run.as_ref().map(|r| r.id.clone())
-        } else {
-            last_failure
-                .as_ref()
-                .map(|r| r.id.clone())
-                .or_else(|| last_run.as_ref().map(|r| r.id.clone()))
-        }
+        sticky.unresolved_failure_id.clone().or_else(|| {
+            if last_is_bad {
+                last_run.as_ref().map(|r| r.id.clone())
+            } else {
+                last_failure
+                    .as_ref()
+                    .map(|r| r.id.clone())
+                    .or_else(|| last_run.as_ref().map(|r| r.id.clone()))
+            }
+        })
     } else {
         None
     };
@@ -138,6 +155,7 @@ pub async fn build_status(
 
     let attention = AttentionView {
         needed: attention_needed,
+        level: attention_level,
         reason: attention_reason,
         run_id: attention_run_id,
     };
@@ -153,6 +171,7 @@ pub async fn build_status(
     if attention.needed {
         if let Some(ref id) = attention.run_id {
             let short = crate::util::short_id(id);
+            next_commands.push("blackbox memory show --json".into());
             next_commands.push(format!(
                 "blackbox context {short} --for-resume --json --max-tokens {}",
                 opts.max_tokens
@@ -161,6 +180,7 @@ pub async fn build_status(
             next_commands.push("blackbox handoff --json".into());
         }
     } else if last_run.is_some() {
+        next_commands.push("blackbox memory show --json".into());
         next_commands.push("blackbox runs --json".into());
         next_commands.push("blackbox postmortem latest --json".into());
     } else {
@@ -225,10 +245,32 @@ pub async fn build_status(
         }
     }
 
+    let mut project_memory = None;
+    let enabled = cfg.enabled && discovery.config.is_some();
+    if opts.include_project_memory && enabled {
+        let continuity = cfg.capture.continuity_from_config();
+        if let Ok(pack) = build_project_memory(
+            store,
+            &sticky,
+            MemoryBuildOptions {
+                max_tokens: opts.max_tokens,
+                purpose: "handoff".into(),
+                continuity_mode: continuity.as_str().into(),
+                project_root: discovery.project_root.clone(),
+                store_db: discovery.paths.db_path.clone(),
+                skip_porcelain_if_none: sticky.attention_level.is_none(),
+            },
+        )
+        .await
+        {
+            project_memory = Some(pack);
+        }
+    }
+
     Ok(StatusView {
         project_root: discovery.project_root.display().to_string(),
         store_db: discovery.paths.db_path.display().to_string(),
-        enabled: cfg.enabled && discovery.config.is_some(),
+        enabled,
         wrap: cfg.capture.wrap,
         shell_integration: ShellIntegrationView {
             detected_shell: shell.as_str().into(),
@@ -248,6 +290,7 @@ pub async fn build_status(
         next_commands,
         agent_instructions,
         resume_pack,
+        project_memory,
     })
 }
 
@@ -285,7 +328,8 @@ pub fn format_status_text(v: &StatusView) -> String {
     }
     if v.attention.needed {
         out.push_str(&format!(
-            "  ATTENTION: {}\n",
+            "  ATTENTION [{}]: {}\n",
+            v.attention.level.as_str(),
             v.attention
                 .reason
                 .as_deref()
@@ -301,6 +345,20 @@ pub fn format_status_text(v: &StatusView) -> String {
         out.push_str("  next:\n");
         for c in &v.next_commands {
             out.push_str(&format!("    {c}\n"));
+        }
+    }
+    if let Some(ref pack) = v.project_memory {
+        out.push_str(&format!(
+            "  project_memory: attached (≈{} tokens{}, attention={})\n",
+            pack.approx_tokens,
+            if pack.truncated { ", truncated" } else { "" },
+            pack.attention_level
+        ));
+        if !pack.headline.is_empty() {
+            out.push_str(&format!("    headline: {}\n", pack.headline));
+        }
+        if !pack.next_action.is_empty() {
+            out.push_str(&format!("    next_action: {}\n", pack.next_action));
         }
     }
     if let Some(ref pack) = v.resume_pack {

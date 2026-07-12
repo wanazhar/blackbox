@@ -67,3 +67,52 @@ pub fn is_bookkeeping(kind: &str) -> bool {
 pub fn short_id(id: &str) -> &str {
     &id[..8.min(id.len())]
 }
+
+/// Merge run notes segments without clobbering prior parts.
+///
+/// Segments are joined with `"; "`. Empty parts are skipped. Duplicate exact
+/// segments already present in `existing` are not re-appended.
+pub fn merge_run_notes(existing: Option<String>, parts: &[&str]) -> String {
+    let mut segments: Vec<String> = existing
+        .unwrap_or_default()
+        .split(';')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    for p in parts {
+        let p = p.trim();
+        if p.is_empty() {
+            continue;
+        }
+        if !segments.iter().any(|s| s == p) {
+            segments.push(p.to_string());
+        }
+    }
+    segments.join("; ")
+}
+
+#[cfg(test)]
+mod notes_tests {
+    use super::merge_run_notes;
+
+    #[test]
+    fn merge_preserves_continuity_and_adapter() {
+        let n = merge_run_notes(Some("auto_resume:abcdef12".into()), &["adapter:claude"]);
+        assert!(n.contains("auto_resume:abcdef12"));
+        assert!(n.contains("adapter:claude"));
+        let n2 = merge_run_notes(Some(n), &["session:xyz"]);
+        assert!(n2.contains("adapter:claude"));
+        assert!(n2.contains("session:xyz"));
+        assert!(n2.contains("auto_resume:abcdef12"));
+    }
+
+    #[test]
+    fn merge_skips_duplicates() {
+        let n = merge_run_notes(
+            Some("adapter:claude".into()),
+            &["adapter:claude", "claim:1"],
+        );
+        assert_eq!(n.matches("adapter:claude").count(), 1);
+        assert!(n.contains("claim:1"));
+    }
+}

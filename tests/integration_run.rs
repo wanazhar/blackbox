@@ -65,6 +65,8 @@ async fn records_tool_events_from_fake_claude() {
         ci: false,
         artifact_dir: None,
         resume_injection: None,
+        claim_id_note: None,
+        ambient: false,
         command: vec![claude.to_string_lossy().into(), "-p".into(), "hi".into()],
     };
 
@@ -150,6 +152,8 @@ async fn redacts_secret_in_command_argv() {
         ci: false,
         artifact_dir: None,
         resume_injection: None,
+        claim_id_note: None,
+        ambient: false,
         command: vec![
             "sh".into(),
             "-c".into(),
@@ -196,6 +200,8 @@ async fn tags_persist_on_run() {
         ci: false,
         artifact_dir: None,
         resume_injection: None,
+        claim_id_note: None,
+        ambient: false,
         command: vec!["true".into()],
     };
     let run = supervisor.execute(&args).await.unwrap();
@@ -238,6 +244,8 @@ async fn portable_export_import_round_trip() {
         ci: false,
         artifact_dir: None,
         resume_injection: None,
+        claim_id_note: None,
+        ambient: false,
         command: vec!["sh".into(), "-c".into(), "echo portable-payload".into()],
     };
     let run = supervisor.execute(&args).await.unwrap();
@@ -283,6 +291,8 @@ async fn export_jsonl_transcript_and_delete_run() {
         ci: false,
         artifact_dir: None,
         resume_injection: None,
+        claim_id_note: None,
+        ambient: false,
         command: vec!["sh".into(), "-c".into(), "echo export-ok".into()],
     };
     let run = supervisor.execute(&args).await.unwrap();

@@ -507,6 +507,7 @@ async fn build_serve_status(
             include_resume,
             max_tokens: 4000,
             force_resume,
+            include_project_memory: include_resume,
         },
     )
     .await

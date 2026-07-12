@@ -1,5 +1,5 @@
 [package]
-name = "blackbox"
+name = "blackbox-recorder"
 version = "0.1.0"
 edition = "2021"
 description = "A flight recorder and debugger for AI-agent runs"
@@ -8,10 +8,18 @@ license = "MIT OR Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/blackbox-dev/blackbox"
 homepage = "https://github.com/blackbox-dev/blackbox"
-documentation = "https://docs.rs/blackbox"
+documentation = "https://docs.rs/blackbox-recorder"
 keywords = ["ai", "agent", "debugger", "trace", "cli"]
 categories = ["command-line-utilities", "development-tools", "asynchronous"]
 exclude = ["blackbox.db", ".blackbox/", "target/"]
+
+[lib]
+name = "blackbox"
+path = "src/lib.rs"
+
+[[bin]]
+name = "blackbox"
+path = "src/main.rs"
 
 [dependencies]
 # CLI
@@ -45,9 +53,10 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 # Filesystem watching
 notify = "6"
 
-# Hashing
+# Hashing / encoding
 sha2 = "0.10"
 hex = "0.4"
+base64 = "0.22"
 
 # Compression
 zstd = { version = "0.13", features = ["experimental"] }

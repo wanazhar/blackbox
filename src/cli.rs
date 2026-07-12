@@ -67,6 +67,37 @@ pub enum Command {
     Completions(CompletionsArgs),
     /// Local web dashboard for browsing runs
     Serve(ServeArgs),
+    /// Sync runs with a shared directory (push/pull portable archives)
+    Sync(SyncArgs),
+}
+
+#[derive(Args)]
+pub struct SyncArgs {
+    #[command(subcommand)]
+    pub action: SyncAction,
+}
+
+#[derive(Subcommand)]
+pub enum SyncAction {
+    /// Export local runs into a sync directory
+    Push(SyncDirArgs),
+    /// Import missing runs from a sync directory
+    Pull(SyncDirArgs),
+}
+
+#[derive(Args)]
+pub struct SyncDirArgs {
+    /// Sync directory (shared via NFS/rsync/cloud drive)
+    #[arg(long, default_value = ".blackbox/sync")]
+    pub dir: String,
+
+    /// Redact secrets when pushing (default: true)
+    #[arg(long, default_value_t = true)]
+    pub redact: bool,
+
+    /// Include secrets in push archives (dangerous)
+    #[arg(long)]
+    pub no_redact: bool,
 }
 
 #[derive(Args, Default)]
@@ -410,6 +441,7 @@ impl Cli {
             Command::Stats(args) => cmd_stats(self, args).await,
             Command::Completions(args) => cmd_completions(args),
             Command::Serve(args) => cmd_serve(self, args).await,
+            Command::Sync(args) => cmd_sync(self, args).await,
         }
     }
 }
@@ -1247,7 +1279,7 @@ async fn cmd_export(cli: &Cli, args: &ExportArgs) -> anyhow::Result<()> {
         ExportFormat::Portable => "portable",
     };
 
-    let output = export_run(&run, &events, format_str, redact).await?;
+    let output = export_run(&store, &run, &events, format_str, redact).await?;
     print!("{}", output);
 
     Ok(())
@@ -1270,9 +1302,10 @@ async fn cmd_import(cli: &Cli, args: &ImportArgs) -> anyhow::Result<()> {
     let new_ids = !args.keep_ids;
     let result = import_portable(&store, &json, new_ids).await?;
     println!(
-        "Imported run {} ({} events{})",
+        "Imported run {} ({} events, {} blobs{})",
         short_id(&result.run_id),
         result.events,
+        result.blobs,
         if result.remapped {
             ", new ids"
         } else {
@@ -1281,6 +1314,44 @@ async fn cmd_import(cli: &Cli, args: &ImportArgs) -> anyhow::Result<()> {
     );
     println!("  blackbox show {}", short_id(&result.run_id));
     println!("  blackbox show {} --transcript", short_id(&result.run_id));
+    Ok(())
+}
+
+async fn cmd_sync(cli: &Cli, args: &SyncArgs) -> anyhow::Result<()> {
+    use crate::sync::{resolve_sync_dir, sync_pull, sync_push};
+
+    let store = open_store(cli)?;
+    match &args.action {
+        SyncAction::Push(d) => {
+            let dir = resolve_sync_dir(&d.dir);
+            let redact = d.redact && !d.no_redact;
+            println!("Sync push → {}", dir.display());
+            let report = sync_push(&store, &dir, redact).await?;
+            println!(
+                "pushed={} skipped={} errors={}",
+                report.pushed,
+                report.skipped,
+                report.errors.len()
+            );
+            for e in report.errors {
+                eprintln!("  ! {e}");
+            }
+        }
+        SyncAction::Pull(d) => {
+            let dir = resolve_sync_dir(&d.dir);
+            println!("Sync pull ← {}", dir.display());
+            let report = sync_pull(&store, &dir).await?;
+            println!(
+                "pulled={} skipped={} errors={}",
+                report.pulled,
+                report.skipped,
+                report.errors.len()
+            );
+            for e in report.errors {
+                eprintln!("  ! {e}");
+            }
+        }
+    }
     Ok(())
 }
 

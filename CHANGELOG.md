@@ -34,10 +34,15 @@ First solid release candidate: a flight recorder you’d actually run on a machi
 - Live run page + `/watch` shortcut
 - Optional shared-secret auth (`--token` / `BLACKBOX_SERVE_TOKEN`)
 
-### Share / import
-- Portable JSON export + `blackbox import` (new ids by default, tag `imported`)
+### Share / sync
+- Portable **v2** JSON export with **embedded blobs** (offline-complete)
+- `blackbox import` accepts v1/v2 (new ids by default, tag `imported`)
+- `blackbox sync push|pull --dir …` multi-machine sync via shared folder
+
+### Packaging
+- crates.io package name: **`blackbox-recorder`** (binary/lib still `blackbox`)
 
 ### Quality
-- Integration tests (fake Claude, secrets, export, tags, portable round-trip)
+- Integration tests (fake Claude, secrets, export, tags, portable, sync)
 - CI: `cargo test` + `clippy -D warnings`
-- `cargo publish --dry-run` packages cleanly (crate name may need rename for crates.io)
+- `cargo publish --dry-run` validates packaging

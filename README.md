@@ -22,7 +22,7 @@ cargo build --release
 # Install onto PATH
 cargo install --path .
 
-# Verify packaging (crates.io name "blackbox" may already be taken)
+# Publish-ready package name: blackbox-recorder (binary still `blackbox`)
 cargo package
 cargo publish --dry-run
 
@@ -31,9 +31,8 @@ blackbox --help
 blackbox doctor   # verify store path + health
 ```
 
-> **Note:** The crate name `blackbox` already exists on crates.io. Publishing
-> this project would require a unique name (e.g. `blackbox-recorder`) and a
-> coordinated rename — dry-run packaging still validates the tree.
+> **crates.io:** The package is published as **`blackbox-recorder`** while the
+> CLI binary and Rust library path remain `blackbox` (`use blackbox::…`).
 
 ## Quick start
 
@@ -96,10 +95,15 @@ blackbox watch latest --idle-exit 30
 # HTML report (client-side filter + dark mode)
 blackbox export latest --format html > report.html
 
-# Portable share (JSON archive) + import
+# Portable share (v2 JSON + embedded blobs) + import
 blackbox export latest --format portable > run.json
 blackbox import run.json                 # new ids + tag "imported"
 blackbox import run.json --keep-ids      # fail if id exists
+
+# Multi-machine sync via shared folder (NFS / rsync / Dropbox)
+blackbox sync push --dir /shared/bb-sync
+# … on another machine with the same folder …
+blackbox sync pull --dir /shared/bb-sync
 
 # Tags
 blackbox run --tag ci --tag smoke -- echo hi
@@ -184,7 +188,8 @@ Export is **redacted by default**. Pass `--no-redact` only for private offline a
 | `completions` | Generate bash/zsh/fish completions |
 | `serve` | Local web dashboard (browse, search, **live SSE**, optional token) |
 | `export` | JSONL / HTML / portable |
-| `import` | Import portable JSON archive |
+| `import` | Import portable JSON archive (v1/v2 + blobs) |
+| `sync` | Push/pull runs to a shared directory |
 | `replay` | Timeline, mock tools, sandbox (seeded workspace) |
 | `fork` | Branch a new run record from a checkpoint |
 

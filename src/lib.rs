@@ -14,6 +14,7 @@ pub mod scrub;
 pub mod search;
 pub mod serve;
 pub mod storage;
+pub mod sync;
 pub mod terminal;
 pub mod transcript;
 pub mod ui;

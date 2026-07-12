@@ -232,7 +232,13 @@ async fn portable_export_import_round_trip() {
     };
     let run = supervisor.execute(&args).await.unwrap();
     let events = store.get_events(&run.id).await.unwrap();
-    let portable = export_run(&run, &events, "portable", true).await.unwrap();
+    let portable = export_run(store.as_ref(), &run, &events, "portable", true)
+        .await
+        .unwrap();
+    assert!(
+        portable.contains("\"version\": 2") || portable.contains("\"version\":2"),
+        "expected portable v2"
+    );
 
     let imported = import_portable(store.as_ref(), &portable, true)
         .await
@@ -267,7 +273,9 @@ async fn export_jsonl_transcript_and_delete_run() {
     let run = supervisor.execute(&args).await.unwrap();
     let events = store.get_events(&run.id).await.unwrap();
 
-    let jsonl = export_run(&run, &events, "jsonl", true).await.unwrap();
+    let jsonl = export_run(store.as_ref(), &run, &events, "jsonl", true)
+        .await
+        .unwrap();
     assert!(jsonl.contains("export-me") || jsonl.contains(&run.id));
     assert!(jsonl.lines().count() >= 2);
 

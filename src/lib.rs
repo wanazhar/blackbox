@@ -9,3 +9,4 @@ pub mod replay;
 pub mod redaction;
 pub mod ui;
 pub mod run;
+pub mod export;

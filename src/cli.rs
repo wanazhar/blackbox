@@ -222,8 +222,41 @@ async fn cmd_diff(args: &DiffArgs) -> anyhow::Result<()> {
 }
 
 async fn cmd_export(args: &ExportArgs) -> anyhow::Result<()> {
-    tracing::info!(run_id = %args.run_id, "export run");
-    anyhow::bail!("export not yet implemented")
+    use crate::storage::sqlite::SqliteStore;
+    use crate::storage::TraceStore;
+    use crate::export::export_run;
+
+    tracing::info!(run_id = %args.run_id, format = ?args.format, redact = %args.redact, "export run");
+
+    let store = SqliteStore::open("blackbox.db")?;
+
+    // Resolve "latest" to the most recent run
+    let run_id = if args.run_id == "latest" {
+        let runs = store.list_runs().await?;
+        runs.first()
+            .map(|r| r.id.clone())
+            .ok_or_else(|| anyhow::anyhow!("no runs recorded"))?
+    } else {
+        args.run_id.clone()
+    };
+
+    let run = store
+        .get_run(&run_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("run not found: {}", run_id))?;
+
+    let events = store.get_events(&run_id).await?;
+
+    let format_str = match args.format {
+        ExportFormat::Jsonl => "jsonl",
+        ExportFormat::Html => anyhow::bail!("HTML export not yet implemented"),
+        ExportFormat::Portable => anyhow::bail!("portable export not yet implemented"),
+    };
+
+    let output = export_run(&run, &events, format_str, args.redact).await?;
+    print!("{}", output);
+
+    Ok(())
 }
 
 async fn cmd_replay(args: &ReplayArgs) -> anyhow::Result<()> {

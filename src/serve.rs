@@ -461,19 +461,15 @@ async fn api_event_stream(
             }
 
             // Load new events from store
-            match st.store.get_events(&st.run_id).await {
-                Ok(events) => {
-                    for e in events {
-                        if st.seen.insert(e.id.clone()) {
-                            if let Ok(data) = serde_json::to_string(&e) {
-                                st.queue.push_back(
-                                    Event::default().event("event").data(data),
-                                );
-                            }
+            if let Ok(events) = st.store.get_events(&st.run_id).await {
+                for e in events {
+                    if st.seen.insert(e.id.clone()) {
+                        if let Ok(data) = serde_json::to_string(&e) {
+                            st.queue
+                                .push_back(Event::default().event("event").data(data));
                         }
                     }
                 }
-                Err(_) => {}
             }
 
             // Status snapshot occasionally

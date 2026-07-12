@@ -242,3 +242,80 @@ Task 21 (CLI Commands) → Task 22 (Harness Adapters)
 ```
 
 Tasks 11-13 can be done in parallel. Tasks 14-16 should be done sequentially. Tasks 18-20 can be done in parallel.
+
+---
+
+# Phase 3 — Overcome Remaining Intentional Limits
+
+**Status**: Phase 1–2 deliver a working recorder, but three capabilities remain simulation-level.
+
+## Remaining Limits
+
+| # | Limit | Why it matters |
+|---|---|---|
+| L1 | **FilesystemCapture is snapshot-only** | Misses mid-run creates/modifies/deletes; correlation with tool calls is weak |
+| L2 | **Adapters do not parse structured output** | Tool calls, session IDs, and harness semantics never become `TraceEvent`s |
+| L3 | **Replay engines only log** | Mock/sandbox/fork do not restore workspaces, re-execute, or create fork runs |
+
+## Phase 3 Tasks
+
+### Task 23 — Live filesystem watching (`notify`)  `[Phase 3A]`
+
+- Replace shallow start/stop snapshots with recursive `notify` watchers.
+- Emit per-path events: `filesystem.created`, `filesystem.modified`,
+  `filesystem.removed`, `filesystem.renamed`.
+- Keep before/after snapshot events as bookends.
+- Ignore high-noise paths: `.git/`, `target/`, `node_modules/`, `.blackbox/`.
+- Bridge notify's sync channel into the async capture `mpsc` stream.
+
+**Files:** `src/capture/filesystem.rs`  
+**Depends on:** none (standalone)  
+**Done when:** a run that creates a file mid-execution records a `filesystem.created` event.
+
+---
+
+### Task 24 — Structured harness output parsing  `[Phase 3B]`
+
+- Extend `HarnessAdapter::parse_output(run_id, chunk)` to produce semantic events.
+- **Claude adapter**: stream-json / NDJSON tool_use & assistant lines; session IDs;
+  tool names (Read, Write, Edit, Bash, Glob, Grep).
+- **Codex adapter**: function_call / tool patterns; session discovery; resume commands.
+- **Generic**: light heuristics only (exit lines, error banners).
+- Wire parsing into `RunSupervisor` PTY pipeline after ANSI normalize + redaction.
+- Implement `discover_session_id` and `build_resume_command` for Claude/Codex.
+
+**Files:** `src/adapters/harness.rs`, `claude.rs`, `codex.rs`, `generic.rs`, `src/run.rs`  
+**Depends on:** none (can parallelize with 23)  
+**Done when:** synthetic tool_use NDJSON in terminal output yields `tool.call` events.
+
+---
+
+### Task 25 — Real replay engines  `[Phase 3C]`
+
+- Enrich `ReplayOutcome` with structured results (mocked counts, sandbox path, forked run id).
+- **MockReplay**: index recorded `Tool` events; re-emit recorded outputs without FS mutation;
+  print a human-readable mock transcript.
+- **SandboxReplay**: create a temp workspace; re-execute allowed process/tool events under
+  `ReplayPolicy` (block ExternalWrite/Destructive); capture exit codes.
+- **ForkManager**: create a new `Run` with `parent_run_id`, optional name, checkpoint
+  context summary persisted; return new run id for follow-on `blackbox run`.
+- **TimelineReplay**: print a readable timeline to stdout (not only tracing logs).
+- Wire store into fork/sandbox CLI paths where needed.
+
+**Files:** `src/replay/*`, `src/cli.rs`  
+**Depends on:** Task 24 preferred (tool events improve mock); works without it  
+**Done when:** `blackbox replay --mock-tools` / `--sandbox` / `fork` produce real side
+effects (temp dir, new run row, mock transcript) instead of log-only simulation.
+
+## Recommended Sequence
+
+```
+Task 23 (Live FS watch)  ──┐
+                           ├──→ Task 25 (Real replay)   [tool events + FS history help]
+Task 24 (Adapter parse)  ──┘
+```
+
+Tasks 23 and 24 are independent and can land as separate commits.
+Task 25 should follow so mock/sandbox can consume tool + filesystem events.
+
+Each task is one self-contained commit that leaves the project compiling and testable.

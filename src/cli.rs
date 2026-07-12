@@ -1557,7 +1557,6 @@ async fn cmd_analyze(cli: &Cli, args: &AnalyzeArgs) -> anyhow::Result<()> {
     use crate::analysis::correlator::EventCorrelator;
     use crate::analysis::error_detector::ErrorDetector;
     use crate::analysis::AnalysisPass;
-    use crate::pipeline::EventWriter;
 
     let store = Arc::new(open_store(cli)?);
     let run_id = resolve_run_id(store.as_ref(), &args.run_id).await?;
@@ -1642,14 +1641,16 @@ async fn cmd_analyze(cli: &Cli, args: &AnalyzeArgs) -> anyhow::Result<()> {
 
     if args.persist && !derived.is_empty() {
         let max_seq = events.iter().map(|e| e.sequence).max().unwrap_or(0);
-        let writer = EventWriter::with_start(store.clone(), run_id.clone(), max_seq + 1);
         let n = derived.len();
-        for d in derived {
-            writer.write(d).await?;
+        // Assign sequence numbers before batch insert
+        for (i, d) in derived.iter_mut().enumerate() {
+            d.sequence = max_seq + 1 + i as u64;
         }
+        // Persist all derived events atomically in a single transaction
+        store.insert_events_batch(&derived).await?;
         // Keep run.next_sequence coherent
         if let Ok(Some(mut run)) = store.get_run(&run_id).await {
-            run.next_sequence = writer.next_sequence();
+            run.next_sequence = max_seq + 1 + n as u64;
             if let Err(e) = store.update_run(&run).await {
                 eprintln!("warning: failed to update run sequence: {e}");
             }
@@ -1815,6 +1816,13 @@ async fn cmd_watch(cli: &Cli, args: &WatchArgs) -> anyhow::Result<()> {
 
     let mut last_new = Instant::now();
     let interval = Duration::from_millis(args.interval_ms.max(100));
+    if args.interval_ms < 100 {
+        eprintln!(
+            "warning: --interval-ms {} is below the recommended minimum of 100ms; \
+             polling too frequently may cause high CPU usage",
+            args.interval_ms
+        );
+    }
     loop {
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {
@@ -1913,6 +1921,9 @@ async fn cmd_purge(cli: &Cli, args: &PurgeArgs) -> anyhow::Result<()> {
 
     if !args.yes {
         anyhow::bail!("purge is destructive; pass --yes to confirm");
+    }
+    if args.keep == Some(0) {
+        anyhow::bail!("--keep 0 would delete ALL runs; refusing (use --keep N with N >= 1)");
     }
     if args.keep.is_none() && !args.pending && !args.failed {
         anyhow::bail!("specify at least one of --keep N, --pending, --failed");

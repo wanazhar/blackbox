@@ -1,3 +1,7 @@
+use std::sync::LazyLock;
+use crate::redaction::scanner::SecretScanner;
+use crate::redaction::RedactionConfig;
+
 use std::path::{Path, PathBuf};
 use parking_lot::Mutex;
 
@@ -14,6 +18,11 @@ use crate::storage::TraceStore;
 
 /// Current schema version. Bump when migrations change.
 const SCHEMA_VERSION: i32 = 3;
+
+/// Default scanner for redacting secrets in FTS index content.
+static FTS_SCANNER: LazyLock<SecretScanner> =
+    LazyLock::new(|| SecretScanner::new(RedactionConfig::default()));
+
 
 /// SQLite-backed trace store with content-addressed blob storage.
 ///
@@ -900,7 +909,22 @@ impl TraceStore for SqliteStore {
         let key = reference.key.clone();
         task::spawn_blocking(move || -> anyhow::Result<Vec<u8>> {
             let path = blob_dir.join(&key);
-            std::fs::read(&path).with_context(|| format!("blob not found: {}", path.display()))
+            let data = std::fs::read(&path)
+                .with_context(|| format!("blob not found: {}", path.display()))?;
+            // Verify integrity: SHA-256 of the data must match the
+            // content-addressed key. A mismatch indicates corruption or
+            // tampering on disk.
+            let mut hasher = Sha256::new();
+            hasher.update(&data);
+            let computed = hex::encode(hasher.finalize());
+            if computed != key {
+                anyhow::bail!(
+                    "blob integrity mismatch: expected key {} but computed SHA-256 {}",
+                    key,
+                    computed
+                );
+            }
+            Ok(data)
         })
         .await?
     }
@@ -950,6 +974,45 @@ impl TraceStore for SqliteStore {
         }
         Ok(())
     }
+    async fn insert_events_batch(&self, events: &[TraceEvent]) -> anyhow::Result<()> {
+        if events.is_empty() {
+            return Ok(());
+        }
+        let events: Vec<TraceEvent> = events.to_vec();
+        {
+            let conn = self.lock();
+            let tx = conn.unchecked_transaction()
+                .context("failed to start transaction for insert_events_batch")?;
+            for event in &events {
+                tx.execute(
+                    "INSERT INTO events (id, run_id, parent_event_id, sequence, source, kind, started_at, ended_at, duration_ms, status, side_effect, input_blob, output_blob, error_blob, metadata)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                    params![
+                        event.id,
+                        event.run_id,
+                        event.parent_event_id,
+                        event.sequence as i64,
+                        serde_json::to_string(&event.source).unwrap_or_default(),
+                        event.kind,
+                        event.started_at.to_rfc3339(),
+                        event.ended_at.map(|t| t.to_rfc3339()),
+                        event.duration_ms.map(|d| d as i64),
+                        serde_json::to_string(&event.status).unwrap_or_default(),
+                        serde_json::to_string(&event.side_effect).unwrap_or_default(),
+                        event.input_blob,
+                        event.output_blob,
+                        event.error_blob,
+                        serde_json::to_string(&event.metadata).unwrap_or_default(),
+                    ],
+                )
+                .context("failed to insert event in batch")?;
+                let _ = fts_upsert_in_tx(&tx, event);
+            }
+            tx.commit().context("failed to commit insert_events_batch transaction")?;
+        }
+        tokio::task::yield_now().await;
+        Ok(())
+    }
  }
 fn event_search_body(event: &TraceEvent) -> String {
     // Only include metadata values in the body column; kind, source, and
@@ -967,7 +1030,9 @@ fn event_search_body(event: &TraceEvent) -> String {
             other => body.push_str(&other.to_string()),
         }
     }
-    body
+    // Redact secrets before indexing in FTS to prevent leaking
+    // credentials through full-text search results.
+    FTS_SCANNER.redact(&body)
 }
 
 fn fts_upsert(conn: &Connection, event: &TraceEvent) -> anyhow::Result<()> {

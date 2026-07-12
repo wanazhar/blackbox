@@ -116,6 +116,10 @@ async fn auth_middleware(
     let headers = response.headers_mut();
     headers.insert("x-content-type-options", "nosniff".parse().unwrap());
     headers.insert("x-frame-options", "DENY".parse().unwrap());
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'".parse().unwrap(),
+    );
     response
 }
 
@@ -648,7 +652,7 @@ async fn api_event_stream(
         StreamState {
             store,
             run_id,
-            seen: HashSet::new(),
+            seen: BoundedSeen::new(),
             queue: VecDeque::new(),
             ticks_idle: 0,
             finished: false,
@@ -722,10 +726,50 @@ async fn api_event_stream(
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
 }
 
+/// Bounded set of seen event IDs to prevent unbounded memory growth
+/// in long-running SSE streams. When capacity is reached, the oldest
+/// entries are evicted.
+struct BoundedSeen {
+    seen: HashSet<String>,
+    order: VecDeque<String>,
+    capacity: usize,
+}
+
+impl BoundedSeen {
+    const MAX_ENTRIES: usize = 10_000;
+
+    fn new() -> Self {
+        Self {
+            seen: HashSet::new(),
+            order: VecDeque::new(),
+            capacity: Self::MAX_ENTRIES,
+        }
+    }
+
+    /// Returns true if the id was newly inserted (not previously seen).
+    fn insert(&mut self, id: String) -> bool {
+        if self.seen.insert(id.clone()) {
+            self.order.push_back(id);
+            self.evict();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn evict(&mut self) {
+        while self.seen.len() > self.capacity {
+            if let Some(oldest) = self.order.pop_front() {
+                self.seen.remove(&oldest);
+            }
+        }
+    }
+}
+
 struct StreamState {
     store: Arc<SqliteStore>,
     run_id: String,
-    seen: HashSet<String>,
+    seen: BoundedSeen,
     queue: VecDeque<Event>,
     ticks_idle: u32,
     finished: bool,

@@ -398,39 +398,57 @@ impl RunSupervisor {
             drop(w);
         });
 
-        // H-20/H-21: SIGKILL escalation -- on Ctrl+C, send SIGINT then SIGKILL after grace.
+        // H-20/H-21: SIGKILL escalation -- on Ctrl+C or SIGTERM, send SIGINT then SIGKILL after grace.
         let signal_child_pid = child_pid;
         let signal_handle = tokio::spawn(async move {
-            loop {
-                if tokio::signal::ctrl_c().await.is_err() {
+            #[cfg(unix)]
+            {
+                use tokio::signal::unix::{signal, SignalKind};
+                let mut sigterm = match signal(SignalKind::terminate()) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        tracing::debug!(error = %e, "SIGTERM handler unavailable");
+                        // Fall back to ctrl_c only
+                        loop {
+                            if tokio::signal::ctrl_c().await.is_err() {
+                                break;
+                            }
+                            forward_sigint(signal_child_pid).await;
+                            tokio::time::sleep(Duration::from_millis(SIGGRACE_MS)).await;
+                            escalate_sigkill(signal_child_pid).await;
+                            break;
+                        }
+                        return;
+                    }
+                };
+                loop {
+                    tokio::select! {
+                        _ = tokio::signal::ctrl_c() => {}
+                        _ = sigterm.recv() => {
+                            tracing::info!("received SIGTERM, forwarding to child");
+                        }
+                    }
+                    if signal_child_pid == 0 {
+                        continue;
+                    }
+                    forward_sigint(signal_child_pid).await;
+                    // Wait SIGGRACE_MS, then escalate to SIGKILL if still alive.
+                    tokio::time::sleep(Duration::from_millis(SIGGRACE_MS)).await;
+                    escalate_sigkill(signal_child_pid).await;
                     break;
                 }
+            }
+            #[cfg(not(unix))]
+            {
+                if tokio::signal::ctrl_c().await.is_err() {
+                    return;
+                }
                 if signal_child_pid == 0 {
-                    continue;
+                    return;
                 }
-                tracing::debug!(pid = signal_child_pid, "forwarding SIGINT to child");
-                // SAFETY: signal_child_pid was obtained from process::Command output and is a valid
-                // child PID. The negative PID sends the signal to the entire process group, which is
-                // the intended behavior for forwarding Ctrl+C to the child and its subprocesses.
-                let ret = unsafe { libc::kill(-(signal_child_pid as i32), libc::SIGINT) };
-                if ret != 0 {
-                    // SAFETY: Same PID as above; falling back to sending SIGINT to the child process
-                    // directly when the process-group kill fails (e.g., child has no process group).
-                    let ret2 = unsafe { libc::kill(signal_child_pid as i32, libc::SIGINT) };
-                    if ret2 != 0 {
-                        tracing::warn!(
-                            pid = signal_child_pid,
-                            errno = std::io::Error::last_os_error().to_string(),
-                            "failed to forward SIGINT"
-                        );
-                    }
-                }
-                // Wait SIGGRACE_MS, then escalate to SIGKILL if still alive.
+                forward_sigint(signal_child_pid).await;
                 tokio::time::sleep(Duration::from_millis(SIGGRACE_MS)).await;
-                tracing::debug!(pid = signal_child_pid, "SIGKILL escalation after SIGINT timeout");
-                let _ = unsafe { libc::kill(-(signal_child_pid as i32), libc::SIGKILL) };
-                let _ = unsafe { libc::kill(signal_child_pid as i32, libc::SIGKILL) };
-                break;
+                escalate_sigkill(signal_child_pid).await;
             }
         });
 
@@ -831,4 +849,30 @@ impl RunSupervisor {
         let _ = stdin_is_tty;
         Ok(())
     }
+}
+
+/// Forward SIGINT to a child process (process group first, fallback to direct).
+async fn forward_sigint(pid: u32) {
+    tracing::debug!(pid, "forwarding SIGINT to child");
+    // SAFETY: signal_child_pid was obtained from process::Command output and is a valid
+    // child PID. The negative PID sends the signal to the entire process group.
+    let ret = unsafe { libc::kill(-(pid as i32), libc::SIGINT) };
+    if ret != 0 {
+        // SAFETY: Same PID; falling back to direct process signal when process-group kill fails.
+        let ret2 = unsafe { libc::kill(pid as i32, libc::SIGINT) };
+        if ret2 != 0 {
+            tracing::warn!(
+                pid,
+                errno = std::io::Error::last_os_error().to_string(),
+                "failed to forward SIGINT"
+            );
+        }
+    }
+}
+
+/// Escalate to SIGKILL after grace period (both process group and direct).
+async fn escalate_sigkill(pid: u32) {
+    tracing::debug!(pid, "SIGKILL escalation after timeout");
+    let _ = unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
+    let _ = unsafe { libc::kill(pid as i32, libc::SIGKILL) };
 }

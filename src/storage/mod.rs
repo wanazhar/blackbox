@@ -86,4 +86,15 @@ pub trait TraceStore: Send + Sync + 'static {
     ) -> anyhow::Result<Option<Vec<(String, String, f64)>>> {
         Ok(None)
     }
+
+    /// Insert multiple events atomically within a single transaction.
+    ///
+    /// Default implementation falls back to individual inserts (non-atomic).
+    /// Backends SHOULD override with a transactional batch for atomicity.
+    async fn insert_events_batch(&self, events: &[TraceEvent]) -> anyhow::Result<()> {
+        for event in events {
+            self.insert_event(event).await?;
+        }
+        Ok(())
+    }
 }

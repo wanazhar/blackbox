@@ -1,5 +1,8 @@
+use anyhow::Context;
+
 use crate::core::event::TraceEvent;
 use crate::core::run::Run;
+use crate::storage::TraceStore;
 
 /// Export a run and its events as a self-contained portable JSON archive.
 ///
@@ -38,6 +41,89 @@ pub fn export_portable(
     });
 
     Ok(serde_json::to_string_pretty(&output)?)
+}
+
+/// Result of importing a portable archive.
+#[derive(Debug, Clone)]
+pub struct ImportResult {
+    pub run_id: String,
+    pub events: usize,
+    pub remapped: bool,
+}
+
+/// Import a portable JSON archive into the store.
+///
+/// If `new_ids` is true (default for safety), assigns a fresh run id and
+/// rewrites event `run_id` / generates new event ids. If false, keeps ids
+/// and fails if the run already exists.
+pub async fn import_portable(
+    store: &dyn TraceStore,
+    json: &str,
+    new_ids: bool,
+) -> anyhow::Result<ImportResult> {
+    let root: serde_json::Value =
+        serde_json::from_str(json).context("invalid portable JSON")?;
+    let version = root
+        .get("version")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    if version != 1 {
+        anyhow::bail!("unsupported portable version: {version} (expected 1)");
+    }
+
+    let mut run: Run = serde_json::from_value(
+        root.get("run")
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("missing run object"))?,
+    )
+    .context("invalid run payload")?;
+
+    let mut events: Vec<TraceEvent> = serde_json::from_value(
+        root.get("events")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!([])),
+    )
+    .context("invalid events payload")?;
+
+    let remapped;
+    if new_ids {
+        let old_id = run.id.clone();
+        run.id = uuid::Uuid::new_v4().to_string();
+        run.parent_run_id = run.parent_run_id.or(Some(old_id.clone()));
+        if let Some(notes) = run.notes.take() {
+            run.notes = Some(format!("imported from {old_id}; {notes}"));
+        } else {
+            run.notes = Some(format!("imported from {old_id}"));
+        }
+        if !run.tags.iter().any(|t| t == "imported") {
+            run.tags.push("imported".into());
+        }
+        for ev in &mut events {
+            ev.id = uuid::Uuid::new_v4().to_string();
+            ev.run_id = run.id.clone();
+        }
+        remapped = true;
+    } else {
+        if store.get_run(&run.id).await?.is_some() {
+            anyhow::bail!(
+                "run {} already exists (pass --new-ids or delete first)",
+                &run.id[..8.min(run.id.len())]
+            );
+        }
+        remapped = false;
+    }
+
+    events.sort_by_key(|e| e.sequence);
+    store.insert_run(&run).await?;
+    for ev in &events {
+        store.insert_event(ev).await?;
+    }
+
+    Ok(ImportResult {
+        run_id: run.id,
+        events: events.len(),
+        remapped,
+    })
 }
 
 fn redact_run(val: &mut serde_json::Value) {
@@ -154,5 +240,31 @@ mod tests {
         assert_eq!(arr[0]["sequence"], 1);
         assert_eq!(arr[1]["sequence"], 2);
         assert_eq!(arr[2]["sequence"], 3);
+    }
+
+    #[tokio::test]
+    async fn portable_round_trip_new_ids() {
+        use crate::storage::sqlite::SqliteStore;
+        use std::sync::Arc;
+
+        let store = Arc::new(SqliteStore::open_memory().unwrap());
+        let run = make_run();
+        store.insert_run(&run).await.unwrap();
+        store.insert_event(&make_event(1)).await.unwrap();
+        store.insert_event(&make_event(2)).await.unwrap();
+
+        let events = store.get_events(&run.id).await.unwrap();
+        let json = export_portable(&run, &events, false).unwrap();
+
+        let result = import_portable(store.as_ref(), &json, true)
+            .await
+            .unwrap();
+        assert_ne!(result.run_id, run.id);
+        assert_eq!(result.events, 2);
+        assert!(result.remapped);
+
+        let imported = store.get_run(&result.run_id).await.unwrap().unwrap();
+        assert!(imported.tags.contains(&"imported".into()));
+        assert_eq!(store.get_events(&result.run_id).await.unwrap().len(), 2);
     }
 }

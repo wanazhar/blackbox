@@ -30,9 +30,14 @@ First solid release candidate: a flight recorder you’d actually run on a machi
 ### Web dashboard
 - `blackbox serve` local UI + JSON API
 - Live SSE stream: `/api/runs/{id}/events/stream`
+- Live run list SSE: `/api/runs/stream` (index auto-updates)
 - Live run page + `/watch` shortcut
 - Optional shared-secret auth (`--token` / `BLACKBOX_SERVE_TOKEN`)
 
+### Share / import
+- Portable JSON export + `blackbox import` (new ids by default, tag `imported`)
+
 ### Quality
-- Integration tests (fake Claude, secrets, export, tags)
+- Integration tests (fake Claude, secrets, export, tags, portable round-trip)
 - CI: `cargo test` + `clippy -D warnings`
+- `cargo publish --dry-run` packages cleanly (crate name may need rename for crates.io)

@@ -55,6 +55,7 @@ pub async fn serve(store: Arc<SqliteStore>, opts: ServeOptions) -> anyhow::Resul
         .route("/runs/{id}/export.html", get(run_export_html))
         .route("/watch", get(watch_latest_page))
         .route("/api/runs", get(api_runs))
+        .route("/api/runs/stream", get(api_runs_stream))
         .route("/api/runs/{id}", get(api_run))
         .route("/api/runs/{id}/events", get(api_events))
         .route("/api/runs/{id}/events/stream", get(api_event_stream))
@@ -121,38 +122,7 @@ async fn index(State(state): State<AppState>) -> Result<Html<String>, AppError> 
     let runs = state.store.list_runs().await?;
     let mut rows = String::new();
     for run in runs.iter().take(100) {
-        let label = run
-            .name
-            .clone()
-            .unwrap_or_else(|| run.command.join(" "));
-        let status = format!("{:?}", run.status);
-        let tags = if run.tags.is_empty() {
-            String::new()
-        } else {
-            format!(
-                "<span class=\"tags\">{}</span>",
-                html_escape(&run.tags.join(", "))
-            )
-        };
-        rows.push_str(&format!(
-            r#"<tr>
-  <td class="mono"><a href="/runs/{id}">{short}</a></td>
-  <td><span class="badge">{status}</span> <a class="muted" href="/runs/{id}/live">live</a></td>
-  <td>{exit}</td>
-  <td>{label} {tags}</td>
-  <td class="muted">{started}</td>
-</tr>"#,
-            id = urlencoding(&run.id),
-            short = html_escape(&run.id[..8.min(run.id.len())]),
-            status = html_escape(&status),
-            exit = run
-                .exit_code
-                .map(|c| c.to_string())
-                .unwrap_or_else(|| "-".into()),
-            label = html_escape(&label),
-            tags = tags,
-            started = html_escape(&run.started_at.to_rfc3339()),
-        ));
+        rows.push_str(&run_row_html(run));
     }
 
     Ok(Html(shell(
@@ -165,17 +135,94 @@ async fn index(State(state): State<AppState>) -> Result<Html<String>, AppError> 
   </form>
   <a class="btn" href="/watch">Live watch</a>
   <a class="btn secondary" href="/api/runs">JSON API</a>
+  <span class="muted" id="stream">live list: connecting…</span>
 </div>
-<p class="muted">{n} run(s) · store {db}</p>
+<p class="muted"><span id="count">{n}</span> run(s) · store {db}</p>
 <table>
   <thead><tr><th>ID</th><th>Status</th><th>Exit</th><th>Label</th><th>Started</th></tr></thead>
-  <tbody>{rows}</tbody>
-</table>"#,
+  <tbody id="runs">{rows}</tbody>
+</table>
+<script>
+const tbody = document.getElementById('runs');
+const countEl = document.getElementById('count');
+const streamEl = document.getElementById('stream');
+const rows = new Map();
+// seed from initial DOM
+for (const tr of tbody.querySelectorAll('tr[data-id]')) {{
+  rows.set(tr.dataset.id, tr);
+}}
+function upsert(run) {{
+  const id = run.id;
+  const short = id.slice(0, 8);
+  const label = run.name || (run.command || []).join(' ');
+  const status = run.status || '?';
+  const exit = run.exit_code == null ? '-' : String(run.exit_code);
+  const started = run.started_at || '';
+  const tags = (run.tags && run.tags.length) ? `<span class="tags">${{run.tags.join(', ')}}</span>` : '';
+  let tr = rows.get(id);
+  if (!tr) {{
+    tr = document.createElement('tr');
+    tr.dataset.id = id;
+    tbody.insertBefore(tr, tbody.firstChild);
+    rows.set(id, tr);
+    countEl.textContent = String(rows.size);
+    tr.classList.add('flash');
+  }}
+  tr.innerHTML = `<td class="mono"><a href="/runs/${{id}}">${{short}}</a></td>
+<td><span class="badge">${{status}}</span> <a class="muted" href="/runs/${{id}}/live">live</a></td>
+<td>${{exit}}</td><td></td><td class="muted">${{started}}</td>`;
+  tr.children[3].textContent = label + ' ';
+  if (tags) tr.children[3].insertAdjacentHTML('beforeend', tags);
+}}
+const qs = new URLSearchParams(location.search);
+const token = qs.get('token');
+const url = '/api/runs/stream' + (token ? ('?token=' + encodeURIComponent(token)) : '');
+const es = new EventSource(url);
+es.addEventListener('run', (e) => {{ try {{ upsert(JSON.parse(e.data)); }} catch(_){{}} }});
+es.addEventListener('open', () => {{ streamEl.textContent = 'live list: connected'; }});
+es.onerror = () => {{ streamEl.textContent = 'live list: reconnecting…'; }};
+</script>
+<style>.flash {{ animation: flash 1.2s ease; }} @keyframes flash {{ from {{ background: color-mix(in srgb, var(--accent) 35%, transparent); }} to {{ background: transparent; }} }}</style>"#,
             n = runs.len(),
             db = html_escape(&state.store.db_path().display().to_string()),
             rows = rows,
         ),
     )))
+}
+
+fn run_row_html(run: &crate::core::run::Run) -> String {
+    let label = run
+        .name
+        .clone()
+        .unwrap_or_else(|| run.command.join(" "));
+    let status = format!("{:?}", run.status);
+    let tags = if run.tags.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "<span class=\"tags\">{}</span>",
+            html_escape(&run.tags.join(", "))
+        )
+    };
+    format!(
+        r#"<tr data-id="{id}">
+  <td class="mono"><a href="/runs/{id}">{short}</a></td>
+  <td><span class="badge">{status}</span> <a class="muted" href="/runs/{id}/live">live</a></td>
+  <td>{exit}</td>
+  <td>{label} {tags}</td>
+  <td class="muted">{started}</td>
+</tr>"#,
+        id = urlencoding(&run.id),
+        short = html_escape(&run.id[..8.min(run.id.len())]),
+        status = html_escape(&status),
+        exit = run
+            .exit_code
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "-".into()),
+        label = html_escape(&label),
+        tags = tags,
+        started = html_escape(&run.started_at.to_rfc3339()),
+    )
 }
 
 async fn run_page(
@@ -415,6 +462,62 @@ async fn search_page(
 async fn api_runs(State(state): State<AppState>) -> Result<Json<serde_json::Value>, AppError> {
     let runs = state.store.list_runs().await?;
     Ok(Json(serde_json::to_value(runs)?))
+}
+
+/// SSE stream of run snapshots (initial + updates / new runs).
+async fn api_runs_stream(
+    State(state): State<AppState>,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let store = state.store.clone();
+    let stream = stream::unfold(
+        RunsStreamState {
+            store,
+            known: std::collections::HashMap::new(),
+            bootstrapped: false,
+        },
+        |mut st| async move {
+            let runs = match st.store.list_runs().await {
+                Ok(r) => r,
+                Err(_) => {
+                    tokio::time::sleep(Duration::from_millis(800)).await;
+                    return Some((Ok(Event::default().event("ping").data("ok")), st));
+                }
+            };
+
+            for run in runs.iter().take(100) {
+                let fingerprint = format!(
+                    "{:?}|{:?}|{}",
+                    run.status,
+                    run.exit_code,
+                    run.tags.join(",")
+                );
+                let changed = st
+                    .known
+                    .get(&run.id)
+                    .map(|f| f != &fingerprint)
+                    .unwrap_or(true);
+                if changed {
+                    st.known.insert(run.id.clone(), fingerprint);
+                    if let Ok(data) = serde_json::to_string(run) {
+                        // One SSE frame per tick; remaining changes flush next poll.
+                        return Some((Ok(Event::default().event("run").data(data)), st));
+                    }
+                }
+            }
+
+            st.bootstrapped = true;
+            tokio::time::sleep(Duration::from_millis(750)).await;
+            Some((Ok(Event::default().event("ping").data("ok")), st))
+        },
+    );
+    Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+struct RunsStreamState {
+    store: Arc<SqliteStore>,
+    known: std::collections::HashMap<String, String>,
+    #[allow(dead_code)]
+    bootstrapped: bool,
 }
 
 async fn api_run(

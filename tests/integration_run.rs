@@ -211,6 +211,41 @@ async fn tags_persist_on_run() {
 }
 
 #[tokio::test]
+async fn portable_export_import_round_trip() {
+    use blackbox::export::export_run;
+    use blackbox::export::portable::import_portable;
+
+    let ws = temp_workspace();
+    let db = ws.join("test.db");
+    let blobs = ws.join("blobs");
+    let store = SqliteStore::open_with_blobs(&db, &blobs).unwrap();
+    let store: Arc<dyn TraceStore> = Arc::new(store);
+    let supervisor = RunSupervisor::new(store.clone());
+
+    let args = RunArgs {
+        name: Some("portable-src".into()),
+        project: Some(ws.to_string_lossy().into()),
+        tag: vec!["orig".into()],
+        insecure_raw: false,
+        no_redact: false,
+        command: vec!["sh".into(), "-c".into(), "echo portable-payload".into()],
+    };
+    let run = supervisor.execute(&args).await.unwrap();
+    let events = store.get_events(&run.id).await.unwrap();
+    let portable = export_run(&run, &events, "portable", true).await.unwrap();
+
+    let imported = import_portable(store.as_ref(), &portable, true)
+        .await
+        .unwrap();
+    assert_ne!(imported.run_id, run.id);
+    let loaded = store.get_run(&imported.run_id).await.unwrap().unwrap();
+    assert!(loaded.tags.contains(&"imported".into()));
+    assert!(!store.get_events(&imported.run_id).await.unwrap().is_empty());
+
+    let _ = std::fs::remove_dir_all(&ws);
+}
+
+#[tokio::test]
 async fn export_jsonl_transcript_and_delete_run() {
     use blackbox::export::export_run;
 

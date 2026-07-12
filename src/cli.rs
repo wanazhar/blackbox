@@ -37,6 +37,8 @@ pub enum Command {
     Diff(DiffArgs),
     /// Export a run trace (redacted by default)
     Export(ExportArgs),
+    /// Import a portable JSON archive into the store
+    Import(ImportArgs),
     /// Replay a run (timeline, mock, sandbox, or live)
     Replay(ReplayArgs),
     /// Fork a new run from recorded context
@@ -309,6 +311,16 @@ pub struct ExportArgs {
 }
 
 #[derive(Args)]
+pub struct ImportArgs {
+    /// Path to portable JSON file, or "-" for stdin
+    pub path: String,
+
+    /// Keep original ids (fails if run already exists). Default: assign new ids.
+    #[arg(long)]
+    pub keep_ids: bool,
+}
+
+#[derive(Args)]
 pub struct ReplayArgs {
     /// Run ID, unique prefix, or "latest"
     pub run_id: String,
@@ -383,6 +395,7 @@ impl Cli {
             Command::Inspect(args) => cmd_inspect(self, args).await,
             Command::Diff(args) => cmd_diff(self, args).await,
             Command::Export(args) => cmd_export(self, args).await,
+            Command::Import(args) => cmd_import(self, args).await,
             Command::Replay(args) => cmd_replay(self, args).await,
             Command::Fork(args) => cmd_fork(self, args).await,
             Command::Analyze(args) => cmd_analyze(self, args).await,
@@ -1237,6 +1250,37 @@ async fn cmd_export(cli: &Cli, args: &ExportArgs) -> anyhow::Result<()> {
     let output = export_run(&run, &events, format_str, redact).await?;
     print!("{}", output);
 
+    Ok(())
+}
+
+async fn cmd_import(cli: &Cli, args: &ImportArgs) -> anyhow::Result<()> {
+    use crate::export::portable::import_portable;
+
+    let json = if args.path == "-" {
+        use std::io::Read;
+        let mut buf = String::new();
+        std::io::stdin().read_to_string(&mut buf)?;
+        buf
+    } else {
+        std::fs::read_to_string(&args.path)
+            .map_err(|e| anyhow::anyhow!("read {}: {e}", args.path))?
+    };
+
+    let store = open_store(cli)?;
+    let new_ids = !args.keep_ids;
+    let result = import_portable(&store, &json, new_ids).await?;
+    println!(
+        "Imported run {} ({} events{})",
+        short_id(&result.run_id),
+        result.events,
+        if result.remapped {
+            ", new ids"
+        } else {
+            ", original ids"
+        }
+    );
+    println!("  blackbox show {}", short_id(&result.run_id));
+    println!("  blackbox show {} --transcript", short_id(&result.run_id));
     Ok(())
 }
 

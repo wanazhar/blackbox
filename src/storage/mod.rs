@@ -60,4 +60,18 @@ pub trait TraceStore: Send + Sync + 'static {
 
     /// Retrieve blob content by reference.
     async fn load_blob(&self, reference: &BlobReference) -> anyhow::Result<Vec<u8>>;
+
+    // ── Search ──
+
+    /// Full-text search over events when the backend supports it (e.g. SQLite FTS5).
+    ///
+    /// Returns `(event_id, run_id, rank)` ordered by relevance, or `None` if
+    /// the backend has no FTS index (caller should fall back to scanning).
+    async fn fts_event_ids(
+        &self,
+        _query: &str,
+        _limit: usize,
+    ) -> anyhow::Result<Option<Vec<(String, String, f64)>>> {
+        Ok(None)
+    }
 }

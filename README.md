@@ -101,6 +101,14 @@ blackbox stats
 blackbox completions fish > ~/.config/fish/completions/blackbox.fish
 # bash:  blackbox completions bash > /etc/bash_completion.d/blackbox
 # zsh:   blackbox completions zsh > "${fpath[1]}/_blackbox"
+
+# Local web dashboard (FTS-backed search in-browser)
+blackbox serve
+# → http://127.0.0.1:7788
+blackbox serve --bind 127.0.0.1:9000 --reindex
+
+# Rebuild full-text index
+blackbox doctor --reindex
 ```
 
 ### Record an agent
@@ -154,6 +162,7 @@ Export is **redacted by default**. Pass `--no-redact` only for private offline a
 | `tags` / `tag` | List tags; add/remove tags on a run |
 | `stats` | Aggregate store dashboard |
 | `completions` | Generate bash/zsh/fish completions |
+| `serve` | Local web dashboard (browse + search + API) |
 | `export` | JSONL / HTML / portable |
 | `replay` | Timeline, mock tools, sandbox (seeded workspace) |
 | `fork` | Branch a new run record from a checkpoint |

@@ -46,7 +46,7 @@ pub enum Command {
     /// Re-redact secrets in historical traces (at-rest cleanup)
     Scrub(ScrubArgs),
     /// Diagnose store path, schema, and environment
-    Doctor,
+    Doctor(DoctorArgs),
     /// Delete one or more runs
     Rm(RmArgs),
     /// Purge runs by policy (keep N, pending forks, failed, …)
@@ -63,6 +63,26 @@ pub enum Command {
     Stats(StatsArgs),
     /// Generate shell completions
     Completions(CompletionsArgs),
+    /// Local web dashboard for browsing runs
+    Serve(ServeArgs),
+}
+
+#[derive(Args, Default)]
+pub struct DoctorArgs {
+    /// Rebuild the FTS5 full-text index
+    #[arg(long)]
+    pub reindex: bool,
+}
+
+#[derive(Args)]
+pub struct ServeArgs {
+    /// Bind address (default 127.0.0.1:7788)
+    #[arg(long, default_value = "127.0.0.1:7788")]
+    pub bind: String,
+
+    /// Rebuild FTS index before serving
+    #[arg(long)]
+    pub reindex: bool,
 }
 
 #[derive(Args)]
@@ -363,7 +383,7 @@ impl Cli {
             Command::Fork(args) => cmd_fork(self, args).await,
             Command::Analyze(args) => cmd_analyze(self, args).await,
             Command::Scrub(args) => cmd_scrub(self, args).await,
-            Command::Doctor => cmd_doctor(self).await,
+            Command::Doctor(args) => cmd_doctor(self, args).await,
             Command::Rm(args) => cmd_rm(self, args).await,
             Command::Purge(args) => cmd_purge(self, args).await,
             Command::Search(args) => cmd_search(self, args).await,
@@ -372,6 +392,7 @@ impl Cli {
             Command::Tag(args) => cmd_tag(self, args).await,
             Command::Stats(args) => cmd_stats(self, args).await,
             Command::Completions(args) => cmd_completions(args),
+            Command::Serve(args) => cmd_serve(self, args).await,
         }
     }
 }
@@ -1498,9 +1519,13 @@ async fn cmd_search(cli: &Cli, args: &SearchArgs) -> anyhow::Result<()> {
         hits.len(),
         args.max_runs
     );
+    let backend = hits
+        .first()
+        .map(|h| h.backend)
+        .unwrap_or("scan");
     println!(
-        "{:<10} {:<8} {:<22} {:<6} SNIPPET",
-        "RUN", "SCORE", "KIND", "SEQ"
+        "{:<10} {:<8} {:<22} {:<6} SNIPPET  [{}]",
+        "RUN", "SCORE", "KIND", "SEQ", backend
     );
     println!("{}", "-".repeat(90));
     for h in hits {
@@ -1724,7 +1749,7 @@ async fn cmd_purge(cli: &Cli, args: &PurgeArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn cmd_doctor(cli: &Cli) -> anyhow::Result<()> {
+async fn cmd_doctor(cli: &Cli, args: &DoctorArgs) -> anyhow::Result<()> {
     use crate::redaction::scanner::SecretScanner;
     use crate::redaction::RedactionConfig;
 
@@ -1733,13 +1758,26 @@ async fn cmd_doctor(cli: &Cli) -> anyhow::Result<()> {
 
     let project = std::env::current_dir().ok();
     let paths = BlackboxPaths::resolve(project.as_deref(), cli.store.as_deref())?;
-    println!("cwd:        {}", project.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "?".into()));
+    println!(
+        "cwd:        {}",
+        project
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "?".into())
+    );
     println!("db path:    {}", paths.db_path.display());
     println!("blob dir:   {}", paths.blob_dir.display());
     println!("db exists:  {}", paths.db_path.exists());
     println!("blobs dir:  {}", paths.blob_dir.exists());
 
     if let Ok(store) = open_store(cli) {
+        if args.reindex {
+            match store.reindex_fts() {
+                Ok(n) => println!("fts reindex: {n} events"),
+                Err(e) => println!("fts reindex: failed ({e})"),
+            }
+        }
+
         let runs = store.list_runs().await?;
         let running = runs
             .iter()
@@ -1751,7 +1789,13 @@ async fn cmd_doctor(cli: &Cli) -> anyhow::Result<()> {
             .unwrap_or(0);
         println!("blob files: {}", blob_count);
 
-        // Quick secret scan of recent run commands
+        // Probe FTS
+        match store.fts_event_ids("tool", 1).await {
+            Ok(Some(_)) => println!("fts5:       available"),
+            Ok(None) => println!("fts5:       unavailable"),
+            Err(e) => println!("fts5:       error ({e})"),
+        }
+
         let scanner = SecretScanner::new(RedactionConfig::default());
         let mut dirty = 0usize;
         for run in runs.iter().take(20) {
@@ -1782,9 +1826,25 @@ async fn cmd_doctor(cli: &Cli) -> anyhow::Result<()> {
         "  BLACKBOX_FORCE_JSON = {}",
         std::env::var("BLACKBOX_FORCE_JSON").unwrap_or_else(|_| "(unset)".into())
     );
-    println!("  RUST_LOG            = {}", std::env::var("RUST_LOG").unwrap_or_else(|_| "(unset)".into()));
+    println!(
+        "  RUST_LOG            = {}",
+        std::env::var("RUST_LOG").unwrap_or_else(|_| "(unset)".into())
+    );
 
     println!();
-    println!("ok — use `blackbox run -- echo hi` to verify capture");
+    println!("ok — blackbox serve  ·  blackbox run -- echo hi");
     Ok(())
+}
+
+async fn cmd_serve(cli: &Cli, args: &ServeArgs) -> anyhow::Result<()> {
+    let store = open_store(cli)?;
+    if args.reindex {
+        let n = store.reindex_fts()?;
+        println!("Reindexed FTS ({n} events)");
+    }
+    let addr: std::net::SocketAddr = args
+        .bind
+        .parse()
+        .map_err(|e| anyhow::anyhow!("invalid --bind address: {e}"))?;
+    crate::serve::serve(Arc::new(store), addr).await
 }

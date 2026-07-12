@@ -5,6 +5,9 @@ edition = "2021"
 description = "A flight recorder and debugger for AI-agent runs"
 authors = ["blackbox team"]
 license = "MIT OR Apache-2.0"
+readme = "README.md"
+keywords = ["ai", "agent", "debugger", "trace", "cli"]
+categories = ["command-line-utilities", "development-tools", "asynchronous"]
 
 [dependencies]
 # CLI
@@ -59,6 +62,10 @@ async-trait = "0.1"
 
 # Terminal utilities
 term_size = "0.3"
+
+# Local web dashboard
+axum = { version = "0.8", default-features = true, features = ["macros"] }
+tower = "0.5"
 
 [profile.release]
 opt-level = 3

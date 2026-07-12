@@ -13,7 +13,7 @@ use crate::core::run::Run;
 use crate::storage::TraceStore;
 
 /// Current schema version. Bump when migrations change.
-const SCHEMA_VERSION: i32 = 2;
+const SCHEMA_VERSION: i32 = 3;
 
 /// SQLite-backed trace store with content-addressed blob storage.
 ///
@@ -161,10 +161,72 @@ impl SqliteStore {
             conn.execute("INSERT INTO schema_version (version) VALUES (2)", [])?;
         }
 
+        if current < 3 {
+            Self::migrate_v3(&conn)?;
+            conn.execute("INSERT INTO schema_version (version) VALUES (3)", [])?;
+        }
+
         // Ensure we never claim a higher version than we support
         let _ = SCHEMA_VERSION;
 
         Ok(())
+    }
+
+    /// V3: FTS5 index over events for structured full-text search.
+    fn migrate_v3(conn: &Connection) -> anyhow::Result<()> {
+        conn.execute_batch(
+            "
+            CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(
+                event_id UNINDEXED,
+                run_id UNINDEXED,
+                kind,
+                source,
+                status,
+                body,
+                tokenize = 'porter unicode61'
+            );
+            ",
+        )
+        .context("failed to create events_fts")?;
+
+        // Backfill from existing events
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, run_id, parent_event_id, sequence, source, kind, started_at, ended_at,
+                        duration_ms, status, side_effect, input_blob, output_blob, error_blob, metadata
+                 FROM events",
+            )
+            .context("failed to prepare events backfill")?;
+        let events: Vec<TraceEvent> = stmt
+            .query_map([], event_from_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(stmt);
+
+        for ev in &events {
+            fts_upsert(conn, ev)?;
+        }
+        tracing::info!(count = events.len(), "FTS index backfilled");
+        Ok(())
+    }
+
+    /// Rebuild the full-text index from scratch (e.g. after bulk import).
+    pub fn reindex_fts(&self) -> anyhow::Result<usize> {
+        let conn = self.lock()?;
+        conn.execute("DELETE FROM events_fts", [])?;
+        let mut stmt = conn.prepare(
+            "SELECT id, run_id, parent_event_id, sequence, source, kind, started_at, ended_at,
+                    duration_ms, status, side_effect, input_blob, output_blob, error_blob, metadata
+             FROM events",
+        )?;
+        let events: Vec<TraceEvent> = stmt
+            .query_map([], event_from_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(stmt);
+        let n = events.len();
+        for ev in &events {
+            fts_upsert(&conn, ev)?;
+        }
+        Ok(n)
     }
 
     /// V1: core tables (runs, events, checkpoints, blobs metadata).
@@ -410,6 +472,7 @@ impl TraceStore for SqliteStore {
         let deleted = {
             let conn = self.lock()?;
             // FK order: events and checkpoints before runs
+            let _ = conn.execute("DELETE FROM events_fts WHERE run_id = ?1", params![run_id]);
             conn.execute("DELETE FROM events WHERE run_id = ?1", params![run_id])
                 .context("failed to delete events")?;
             conn.execute(
@@ -452,6 +515,8 @@ impl TraceStore for SqliteStore {
                 ],
             )
             .context("failed to insert event")?;
+            // Best-effort FTS (table may be missing on ancient DBs mid-migrate)
+            let _ = fts_upsert(&conn, &event);
         }
         tokio::task::yield_now().await;
         Ok(())
@@ -523,9 +588,50 @@ impl TraceStore for SqliteStore {
             if n == 0 {
                 anyhow::bail!("event not found for update: {}", event.id);
             }
+            let _ = fts_upsert(&conn, &event);
         }
         tokio::task::yield_now().await;
         Ok(())
+    }
+
+    async fn fts_event_ids(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> anyhow::Result<Option<Vec<(String, String, f64)>>> {
+        let match_q = build_fts_match(query);
+        if match_q.is_empty() {
+            return Ok(Some(Vec::new()));
+        }
+        let limit = limit.max(1) as i64;
+        let result = {
+            let conn = self.lock()?;
+            let mut stmt = match conn.prepare(
+                "SELECT event_id, run_id, rank
+                 FROM events_fts
+                 WHERE events_fts MATCH ?1
+                 ORDER BY rank
+                 LIMIT ?2",
+            ) {
+                Ok(s) => s,
+                Err(_) => return Ok(None), // FTS unavailable
+            };
+            let rows = stmt.query_map(params![match_q, limit], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, f64>(2).unwrap_or(0.0),
+                ))
+            });
+            match rows {
+                Ok(iter) => Ok(Some(
+                    iter.filter_map(|r| r.ok()).collect::<Vec<_>>(),
+                )),
+                Err(e) => Err(e.into()),
+            }
+        };
+        tokio::task::yield_now().await;
+        result
     }
 
     async fn insert_checkpoint(&self, cp: &Checkpoint) -> anyhow::Result<()> {
@@ -616,6 +722,67 @@ impl TraceStore for SqliteStore {
         })
         .await?
     }
+}
+
+// ── FTS helpers ───────────────────────────────────────────────────
+
+fn event_search_body(event: &TraceEvent) -> String {
+    let mut body = format!(
+        "{} {:?} {:?}",
+        event.kind, event.source, event.status
+    );
+    for (k, v) in &event.metadata {
+        body.push(' ');
+        body.push_str(k);
+        body.push(' ');
+        match v {
+            serde_json::Value::String(s) => body.push_str(s),
+            other => body.push_str(&other.to_string()),
+        }
+    }
+    body
+}
+
+fn fts_upsert(conn: &Connection, event: &TraceEvent) -> anyhow::Result<()> {
+    // Replace existing row for this event_id
+    let _ = conn.execute(
+        "DELETE FROM events_fts WHERE event_id = ?1",
+        params![event.id],
+    );
+    conn.execute(
+        "INSERT INTO events_fts(event_id, run_id, kind, source, status, body)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            event.id,
+            event.run_id,
+            event.kind,
+            format!("{:?}", event.source),
+            format!("{:?}", event.status),
+            event_search_body(event),
+        ],
+    )
+    .context("failed to upsert events_fts")?;
+    Ok(())
+}
+
+/// Build an FTS5 MATCH query: all alphanumeric terms AND-ed.
+fn build_fts_match(query: &str) -> String {
+    let terms: Vec<String> = query
+        .split_whitespace()
+        .filter_map(|t| {
+            let cleaned: String = t
+                .chars()
+                .filter(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | '/'))
+                .collect();
+            if cleaned.len() < 2 {
+                None
+            } else {
+                // Quote tokens so punctuation-safe
+                Some(format!("\"{}\"", cleaned.replace('"', "")))
+            }
+        })
+        .collect();
+    terms.join(" AND ")
 }
 
 // ── Row deserialization helpers ───────────────────────────────────
@@ -773,5 +940,21 @@ mod tests {
         assert!(store.get_events(&run.id).await.unwrap().is_empty());
         assert!(store.get_checkpoints(&run.id).await.unwrap().is_empty());
         assert!(!store.delete_run(&run.id).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn fts_finds_tool_name() {
+        let store = SqliteStore::open_memory().unwrap();
+        let run = Run::new(vec!["x".into()], "/tmp".into());
+        store.insert_run(&run).await.unwrap();
+        let mut ev = TraceEvent::new(&run.id, EventSource::Tool, "tool.call");
+        ev.status = EventStatus::Running;
+        ev.metadata
+            .insert("tool_name".into(), serde_json::json!("WebSearch"));
+        store.insert_event(&ev).await.unwrap();
+
+        let hits = store.fts_event_ids("WebSearch", 10).await.unwrap().unwrap();
+        assert!(!hits.is_empty());
+        assert_eq!(hits[0].0, ev.id);
     }
 }

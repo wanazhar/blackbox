@@ -24,11 +24,12 @@ impl EventCorrelator {
             return None;
         }
 
-        // NOTE: This is O(n²) worst-case (every event compared against all
-        // predecessors). The 30s window break below limits the inner loop
-        // to a constant bound in practice, making the amortized cost O(n)
-        // for typical trace workloads. A BTreeMap-based rewrite would be
-        // cleaner but is deferred to avoid regression risk this pass.
+        // NOTE: Linear scan bounded by the 30s time window below, keeping
+        // amortized cost O(n) for typical traces. The batch analyze() method
+        // uses find_parent_btree which provides O(n log n) via BTreeMap.
+
+        // Prefer same-source previous event within a tight window,
+        // otherwise any previous event within a wider window.
 
         // Prefer same-source previous event within a tight window,
         // otherwise any previous event within a wider window.

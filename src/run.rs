@@ -4,8 +4,9 @@ use anyhow::Context;
 use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
 use tokio::sync::mpsc;
 
+use crate::capture::git::GitCapture;
 use crate::capture::pty::PtyCapture;
-use crate::capture::CaptureLayer;
+use crate::capture::{CaptureLayer, merge_layers};
 use crate::cli::RunArgs;
 use crate::core::event::{EventSource, EventStatus, TraceEvent};
 use crate::core::run::{Run, RunStatus};
@@ -82,11 +83,27 @@ impl RunSupervisor {
         // Drop pair — closes slave and master fds in parent.
         drop(pair);
 
-        // ── 3. Start PtyCapture ──────────────────────────────────
+        // ── 3. Start Capture Layers ───────────────────────────────
         let mut pty_capture = PtyCapture::new();
-        let mut event_rx = pty_capture.start(&run).await?;
+        let mut git_capture = GitCapture::new();
+
+        let pty_rx = pty_capture.start(&run).await?;
+        let git_rx = git_capture.start(&run).await?;
+
+        // Merge all capture layer channels into a single event stream
+        let mut merged_rx = merge_layers(vec![pty_rx, git_rx]);
 
         let run_id = run.id.clone();
+
+        // Task: store merged events from all capture layers
+        let store_event_writer = self.store.clone();
+        let event_writer_handle = tokio::spawn(async move {
+            while let Some(ev) = merged_rx.recv().await {
+                if let Err(e) = store_event_writer.insert_event(&ev).await {
+                    tracing::error!(error = %e, "failed to persist capture event");
+                }
+            }
+        });
 
         // Set up a channel for PTY output bytes
         let (pty_out_tx, mut pty_out_rx) = mpsc::channel::<Vec<u8>>(256);
@@ -163,13 +180,12 @@ impl RunSupervisor {
         // Wait for reader task to drain
         let _ = reader_handle.await;
 
-        // Signal PtyCapture to stop
+        // Signal capture layers to stop
         let _ = pty_capture.stop().await;
+        let _ = git_capture.stop().await;
 
-        // Drain any remaining events from PtyCapture
-        while let Ok(ev) = event_rx.try_recv() {
-            let _ = self.store.insert_event(&ev).await;
-        }
+        // Wait for event writer to finish
+        let _ = event_writer_handle.await;
 
         // Wait for writer task to finish
         let segments = writer_handle.await.unwrap_or(0);

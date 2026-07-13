@@ -1,91 +1,116 @@
-# Repository Guidelines
+# Repository guidelines
 
-## Project Overview
+This document is for contributors and coding agents who need to understand the blackbox codebase — architecture patterns, module responsibilities, coding conventions, and how to add new features.
 
-**blackbox** is a Rust flight recorder and debugger for AI-agent runs. It launches agent commands (Claude, Codex, or generic), captures terminal output and structured events via PTY supervision, stores traces in SQLite + content-addressed blobs, and provides CLI, TUI, and a local web dashboard for inspection.
+---
 
-**Quality bar:** secrets never at rest by default; monotonic event sequencing; payloads as blobs; project-local `.blackbox/` store; safe export/sync defaults; agent handoff via `status`/`handoff` after failures; **1.2 memory bus** delivers project memory on supervised launches. See `docs/ROADMAP.md` and `README.md`.
+## Project overview
+
+**blackbox** is a Rust flight recorder, debugger, and project memory bus for AI-agent runs. It launches agent commands (Claude, Codex, or generic), captures terminal output and structured events via PTY supervision, stores traces in SQLite + content-addressed blobs, and provides CLI, TUI, and a local web dashboard for inspection.
 
 **Package naming:** crates.io package is `blackbox-recorder`; the binary and library crate path remain `blackbox`.
 
-## Architecture & Data Flow
+---
+
+## Architecture
 
 ```
-CLI (clap) → RunSupervisor → CaptureLayers (Git, FS, Process) + PTY I/O
-                    │              │
-                    │         mpsc merge → EventWriter (seq + persist)
-                    │              │
-              PTY path ──→ normalize → redact → blob → adapter parse
-                    │                         → EventWriter
+CLI (clap) → RunSupervisor → CaptureLayers (PTY, Git, FS, Process) + mpsc merge
                     │
-              TraceStore (SQLite + .blackbox/blobs/ + FTS5)
+               EventWriter (sequence + persist + dedup)
                     │
-         ┌──────────┼──────────────┬────────────┐
-    AnalysisPass  Export/Import  Serve/SSE   UI / CLI
-                  Sync (dir/HTTP/S3)
+          TraceStore (SQLite + .blackbox/blobs/ + FTS5)
+                    │
+     ┌──────────────┼────────────────┬──────────────┐
+AnalysisPass   Export/Import    Serve/SSE      UI / CLI
+                Sync (dir/HTTP/S3)
 ```
 
-**Core data model:**
-- `TraceEvent` — universal trace substrate. Large payloads in `output_blob` keys; metadata holds previews only.
-- `Run` — one recorded session (command redacted at rest, cwd, status, exit, parent fork, tags).
-- `Checkpoint` — start/end snapshots (env blob, git commit/diff, harness session).
-- `BlobReference` — SHA-256 content-addressed storage.
+### Core data flow
 
-**Capture:** layers emit events; `EventWriter` is the single sequencer. Terminal I/O is handled in `RunSupervisor` (normalize → redact → blob → adapter parse). Native log pollers attach for Claude/Codex session files when present.
+1. **CLI** parses args with clap, resolves store path, dispatches to subcommand
+2. **RunSupervisor** creates a `Run` record, starts capture layers (PTY, Git, FS, Process)
+3. Each layer emits `TraceEvent` values into independent `mpsc` channels
+4. `merge_layers()` combines channels into one merged stream
+5. **EventWriter** owns the monotonic sequence counter, deduplicates tool events, persists to store
+6. PTY output pipeline: RawRecorder → AnsiNormalizer → redaction → blob → adapter parse → EventWriter
+7. On run end: stop layers, write checkpoint, `apply_run_outcome()` to sticky state, refresh memory files
 
-**Storage:** `SqliteStore` with on-disk blobs and FTS5. Opening the store recovers abandoned `Running` runs → `Failed`.
+---
 
-## Key Directories
+## Module map
 
-| Path | Purpose |
-|---|---|
-| `src/core/` | TraceEvent, Run, Checkpoint, BlobReference |
-| `src/config.rs` | Store path resolution + capture policy |
-| `src/pipeline/` | EventWriter (monotonic sequence) |
-| `src/capture/` | CaptureLayer trait + PTY/Git/FS/Process |
-| `src/storage/` | TraceStore + SqliteStore (+ FTS) |
-| `src/terminal/` | RawRecorder, AnsiNormalizer, coalescing |
-| `src/analysis/` | ErrorDetector, SideEffectClassifier, EventCorrelator |
-| `src/adapters/` | Claude, Codex, Generic; native log poller; parse |
-| `src/replay/` | Fork, Sandbox, Mock, Timeline |
-| `src/redaction/` | SecretScanner, EnvironmentRedactor, ExportRedactor |
-| `src/export/` | JSONL, HTML, Portable (v1/v2) |
-| `src/ui/` | ratatui TUI |
-| `src/cli.rs` | Clap CLI (all subcommands) |
-| `src/run.rs` | RunSupervisor |
-| `src/serve.rs` | Local axum dashboard + SSE + sync API |
-| `src/sync.rs` | Directory / HTTP / S3 push-pull |
-| `src/search.rs` | FTS-backed search |
-| `src/scrub.rs` | At-rest re-redaction + blob GC |
-| `src/resume.rs` | Fork/resume helpers |
-| `src/resume_inject.rs` | Continuity / memory launch inject |
-| `src/memory.rs` | ProjectMemoryPack (blackbox.memory/v1) |
-| `src/state.rs` | Sticky v2 + state.lock + M6 + claims |
-| `src/transcript.rs` | Transcript rebuild for CLI |
-| `tests/` | Integration tests |
-| `docs/` | ROADMAP, PUBLISH; `docs/history/` is archival only |
+| Path | Purpose | Key types |
+|---|---|---|
+| `src/core/` | Data model | `TraceEvent`, `Run`, `Checkpoint`, `BlobReference` |
+| `src/capture/` | CaptureLayer trait + impls | `CaptureLayer`, PTY/Git/FS/Process |
+| `src/pipeline/` | Event sequencing + dedup | `EventWriter` |
+| `src/storage/` | Storage abstraction + SQLite | `TraceStore` trait, `SqliteStore` |
+| `src/terminal/` | PTY I/O handling | `RawRecorder`, `AnsiNormalizer`, coalescing |
+| `src/redaction/` | Secret scanning + redaction | `SecretScanner`, `EnvironmentRedactor` |
+| `src/adapters/` | Harness detection + parsing | `HarnessAdapter`, claude/codex/generic/aider/gemini/cursor/opencode/grok |
+| `src/analysis/` | Event analysis passes | `ErrorDetector`, `SideEffectClassifier`, `EventCorrelator` |
+| `src/replay/` | Replay engines | `Fork`, `Sandbox`, `Mock`, `Timeline` |
+| `src/export/` | Export formats | JSONL, HTML, Portable (v1/v2) |
+| `src/ui/` | TUI | ratatui event/run/timeline views |
+| `src/run.rs` | PTY supervision orchestrator | `RunSupervisor` |
+| `src/config.rs` | Store path + capture policy | `BlackboxPaths`, `BlackboxConfig`, `ContinuityMode` |
+| `src/state.rs` | Sticky project state | `ProjectState`, `apply_run_outcome`, `AttentionLevel`, claims |
+| `src/memory.rs` | Project memory pack | `ProjectMemoryPack`, `build_project_memory`, `shrink_pack` |
+| `src/resume_inject.rs` | Continuity launch inject | `ResumeInjection`, `ContinuityPrepareOpts` |
+| `src/mcp.rs` | MCP stdio server | JSON-RPC 2.0 tools |
+| `src/cli.rs` | CLI definition | clap `Parser` + `Subcommand` |
+| `src/status.rs` | Status/handoff builder | `build_status` |
+| `src/serve.rs` | Web dashboard | Axum routes, SSE, JSON API |
+| `src/sync.rs` | Dir/HTTP/S3 sync | Push/pull backends |
+| `src/search.rs` | FTS search | Search runner |
+| `src/scrub.rs` | Re-redaction + GC | Scrub + blob GC |
+| `src/summary.rs` | Run summary builder | `build_summary` |
+| `src/transcript.rs` | Transcript rebuild | Transcript from store |
+| `src/views.rs` | JSON view types | All `*View` structs for `--json` |
+| `src/output.rs` | Output formatting | JSON envelope, human formatting |
+| `src/util.rs` | Shared helpers | `short_id`, `truncate` |
+| `src/trajectory.rs` | Run comparison | LCP, divergence, diff |
 
-## Development Commands
+## Key traits
 
-```bash
-cargo build
-cargo build --release
-cargo run -- <subcommand>
-cargo test
-cargo clippy --all-targets -- -D warnings
-cargo fmt
-cargo check
-cargo publish --dry-run   # packaging check; see docs/PUBLISH.md
+```rust
+#[async_trait]
+pub trait CaptureLayer: Send + 'static {
+    fn name(&self) -> &'static str;
+    async fn start(&mut self, run: &Run) -> anyhow::Result<mpsc::Receiver<TraceEvent>>;
+    async fn stop(&mut self) -> anyhow::Result<()>;
+}
+
+#[async_trait]
+pub trait TraceStore: Send + Sync + 'static {
+    // Runs: insert/update/get/list/delete
+    // Events: insert/get/limited/get/update/count/batch
+    // Checkpoints: insert/get
+    // Blobs: store/load/move/all_keys/delete_keys
+    // Search: fts_event_ids
+}
+
+#[async_trait]
+pub trait AnalysisPass: Send + 'static {
+    fn name(&self) -> &'static str;
+    async fn analyze(&self, events: &[TraceEvent]) -> anyhow::Result<Vec<TraceEvent>>;
+}
+
+#[async_trait]
+pub trait HarnessAdapter: Send + Sync + 'static {
+    fn detect(&self, run: &Run, env: &HashMap<String, String>) -> bool;
+    fn parse(&self, event: &mut TraceEvent);
+    fn launch_command(&self, command: &[String]) -> Option<Vec<String>>;
+}
 ```
-
-No Makefile or justfile — use cargo directly. Stable Rust, edition 2021.
 
 ## Conventions
 
 - **`anyhow::Result`** for fallible ops at the CLI/integration boundary
-- **tokio** full features; manual Runtime in `main.rs` (not `#[tokio::main]`)
+- **tokio** full features; manual `Runtime` in `main.rs` (not `#[tokio::main]`)
 - **`#[async_trait]`** for trait objects (`CaptureLayer`, `TraceStore`, `AnalysisPass`, `ReplayEngine`, `HarnessAdapter`)
-- **Redact-before-write** default; `--insecure-raw` / `--no-redact` are opt-in danger flags
+- **Redact-before-write** default; `--insecure-raw`/`--no-redact` are opt-in danger flags
 - Export and sync **redact by default**; `--no-redact` to disable
 - Prefer project-local `.blackbox/` over root `blackbox.db` (legacy only if the file already exists)
 
@@ -97,28 +122,84 @@ No Makefile or justfile — use cargo directly. Stable Rust, edition 2021.
 
 Runtime artifacts (`.blackbox/`, `*.db`, `*.db-wal`, `*.db-shm`) are gitignored. Do not commit them.
 
+## Adding a new subcommand
+
+1. Add variant to `Command` enum in `src/cli.rs` with clap args
+2. Add handler method (or match arm in `execute()`) with the command logic
+3. Return a view struct (for `--json`) or println output
+4. Add view struct to `src/views.rs` if JSON output is needed
+5. Add unit tests in the module's `#[cfg(test)]` section
+6. Add integration test in `tests/` if it touches the store
+7. Update the CLI reference in `docs/reference/cli.md`
+
+## Adding a new harness adapter
+
+1. Add detection logic in `src/adapters/detect.rs` (check argv, env, output patterns)
+2. Create parser module in `src/adapters/` (e.g., `my_harness.rs`)
+3. Add native log poller in `src/adapters/native_logs.rs` if applicable
+4. Register in `src/adapters/mod.rs`
+5. Add to the wrap list default in `src/config.rs`
+6. Test with recorded sessions in `tests/`
+
 ## Testing
 
-- Unit tests: `#[cfg(test)]` modules next to the code they cover
-- Integration tests: `tests/integration_run.rs` (fake harness, secrets, export, tags, portable, sync)
-- `cargo test` runs everything; CI also enforces clippy `-D warnings`
-
-Prefer tests for redaction, store invariants, sequencing, adapters, export/import round-trips, and sync paths.
+| File | What it covers |
+|---|---|
+| `tests/integration_run.rs` | Full run lifecycle, fake harness, secrets, export, tags, portable, sync |
+| `tests/ambient_contract.rs` | A1 gate: OFF/nest/wrap/enable/install-shell/disable |
+| `tests/redaction_gate.rs` | A2 gate: structural IDs survive, secrets die |
+| `tests/memory_pack_quality.rs` | M2a gate: budget, shrink order, failure fields, success-WIP, redaction |
+| `tests/overhead_smoke.rs` | A6 gate: soft wall-time budget for supervising `true` |
+| `tests/shell_soak.rs` | Real bash install -> ambient record -> BLACKBOX_OFF |
+| `tests/ci_eval.rs` | `--ci` exit code propagation |
+| `tests/security.rs` | Security invariants |
+| `tests/test_critical.rs` | Critical path smoke tests |
 
 ## Docs map
 
-| File | Audience |
-|---|---|
-| `README.md` | Users — install, quick start, commands |
-| `CHANGELOG.md` | Release notes |
-| `AGENTS.md` | Contributors / coding agents (this file) |
-| `docs/ROADMAP.md` | Quality bar + remaining work (1.1 adoption bar) |
-| `docs/plan/adoption-1.1.md` | 1.1 design — ambient / redaction / resume / cost (shipped) |
-| `docs/plan/agent-memory-bus-1.2.md` | Active 1.2 design — memory bus / continuity / claims |
-| `docs/ambient-contract.md` | Normative ambient shell + maybe-run contract |
-| `docs/PUBLISH.md` | crates.io publish checklist |
-| `docs/history/*` | Archived plans — not current truth |
+| File | Audience | Content |
+|---|---|---|
+| `README.md` | All users | Project intro, quick start, commands |
+| `CHANGELOG.md` | All users | Release notes |
+| `AGENTS.md` | Contributors | This file |
+| `docs/ROADMAP.md` | All | Quality bar, adoption bar, memory bar, backlog |
+| `docs/guide/getting-started.md` | New users | Step-by-step walkthrough |
+| `docs/guide/configuration.md` | All | CLI flags, env vars, config.toml, pricing |
+| `docs/guide/security.md` | All | Redaction model, safe defaults |
+| `docs/guide/export-and-sync.md` | Users | Export formats, sync backends |
+| `docs/guide/troubleshooting.md` | All | FAQ, common issues, recovery |
+| `docs/reference/cli.md` | Users | Every subcommand with args + examples |
+| `docs/reference/json-api.md` | Devs | JSON envelope + all view schemas |
+| `docs/reference/mcp.md` | Devs | MCP tool reference |
+| `docs/reference/stream-protocol.md` | Devs | NDJSON stream protocol |
+| `docs/reference/memory-pack.md` | Devs | ProjectMemoryPack schema |
+| `docs/reference/portable-format.md` | Users | Export/import format |
+| `docs/internals/architecture.md` | Contributors | Full architecture + data flow |
+| `docs/internals/capture-pipeline.md` | Contributors | Capture layers, PTY I/O, adapters |
+| `docs/internals/storage.md` | Contributors | SQLite schema, blobs, FTS5, GC |
+| `docs/internals/continuity-plane.md` | Contributors | State, memory pack, claims, gates |
+| `docs/plan/*.md` | Historical | Design documents (shipped) |
+| `docs/PUBLISH.md` | Maintainers | crates.io publish checklist |
+
+## Development commands
+
+```bash
+cargo build
+cargo build --release
+cargo run -- <subcommand>
+cargo test
+cargo clippy --all-targets -- -D warnings
+cargo fmt
+cargo check
+cargo publish --dry-run
+```
+
+No Makefile or justfile -- use cargo directly. Stable Rust, edition 2021.
 
 ## Roadmap
 
-**1.0** = capability daily-driver. **1.1** = adoption proof (leave ambient on). **1.2** = Agent Memory Bus (project memory on launch). See `docs/ROADMAP.md` and `docs/plan/agent-memory-bus-1.2.md`. Do not use `docs/history/` task lists as a backlog.
+- **1.0** = capability daily-driver
+- **1.1** = adoption proof (leave ambient on)
+- **1.2** = Agent Memory Bus (project memory on launch)
+
+See `docs/ROADMAP.md` for quality bar and remaining work.

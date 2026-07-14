@@ -1,3 +1,4 @@
+pub mod coverage;
 pub mod filesystem;
 pub mod git;
 pub mod process;

@@ -826,6 +826,49 @@ impl RunSupervisor {
                 Vec::new()
             }
         };
+
+        // ── Capture coverage report ──────────────────────────────────
+        let pty_events = all_events
+            .iter()
+            .filter(|e| e.source == EventSource::Terminal)
+            .count() as u64;
+        let process_events = all_events
+            .iter()
+            .filter(|e| e.source == EventSource::Process)
+            .count() as u64;
+        let git_events = all_events
+            .iter()
+            .filter(|e| e.source == EventSource::Git)
+            .count() as u64;
+        let fs_events = all_events
+            .iter()
+            .filter(|e| e.source == EventSource::Filesystem)
+            .count() as u64;
+        let env_events = all_events
+            .iter()
+            .filter(|e| e.kind == "environment.captured")
+            .count() as u64;
+        let process_tree_available = cfg!(target_os = "linux");
+
+        let coverage = crate::capture::coverage::CaptureCoverage::from_surface_counts(
+            pty_events,
+            process_events,
+            git_events,
+            fs_events,
+            env_events,
+            process_tree_available,
+        );
+        let mut cov_ev = TraceEvent::new(&run.id, EventSource::System, "capture.coverage");
+        cov_ev.status = EventStatus::Success;
+        cov_ev.metadata.insert(
+            "coverage".to_string(),
+            serde_json::to_value(&coverage).unwrap_or_default(),
+        );
+        cov_ev.metadata.insert(
+            "total_events".to_string(),
+            serde_json::json!(coverage.total_events),
+        );
+        let _ = writer.write(cov_ev).await;
         let session_id = adapter.discover_session_id(&all_events);
         if let Some(ref sid) = session_id {
             tracing::info!(session_id = %sid, "discovered harness session");

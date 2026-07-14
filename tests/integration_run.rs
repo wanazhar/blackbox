@@ -63,6 +63,7 @@ async fn records_tool_events_from_fake_claude() {
         no_auto_resume: false,
         auto_resume: false,
         ci: false,
+        observe_only: false,
         artifact_dir: None,
         resume_injection: None,
         claim_id_note: None,
@@ -150,6 +151,7 @@ async fn redacts_secret_in_command_argv() {
         no_auto_resume: false,
         auto_resume: false,
         ci: false,
+        observe_only: false,
         artifact_dir: None,
         resume_injection: None,
         claim_id_note: None,
@@ -198,6 +200,7 @@ async fn tags_persist_on_run() {
         no_auto_resume: false,
         auto_resume: false,
         ci: false,
+        observe_only: false,
         artifact_dir: None,
         resume_injection: None,
         claim_id_note: None,
@@ -242,6 +245,7 @@ async fn portable_export_import_round_trip() {
         no_auto_resume: false,
         auto_resume: false,
         ci: false,
+        observe_only: false,
         artifact_dir: None,
         resume_injection: None,
         claim_id_note: None,
@@ -289,6 +293,7 @@ async fn export_jsonl_transcript_and_delete_run() {
         no_auto_resume: false,
         auto_resume: false,
         ci: false,
+        observe_only: false,
         artifact_dir: None,
         resume_injection: None,
         claim_id_note: None,
@@ -315,6 +320,108 @@ async fn export_jsonl_transcript_and_delete_run() {
     assert!(store.delete_run(&run.id).await.unwrap());
     assert!(store.get_run(&run.id).await.unwrap().is_none());
     assert!(store.get_events(&run.id).await.unwrap().is_empty());
+
+    let _ = std::fs::remove_dir_all(&ws);
+}
+
+#[tokio::test]
+async fn observe_only_does_not_mutate_command() {
+    let ws = temp_workspace();
+    let bin = ws.join("bin");
+    let claude = write_fake_claude(&bin);
+    let db = ws.join("test.db");
+    let blobs = ws.join("blobs");
+
+    let store = SqliteStore::open_with_blobs(&db, &blobs).unwrap();
+    let store: Arc<dyn TraceStore> = Arc::new(store);
+    let supervisor = RunSupervisor::new(store.clone());
+
+    let args = RunArgs {
+        name: Some("observe-only-test".into()),
+        project: Some(ws.to_string_lossy().into()),
+        tag: vec!["observe-only".into()],
+        insecure_raw: false,
+        no_redact: false,
+        no_auto_resume: true,
+        auto_resume: false,
+        ci: false,
+        observe_only: true,
+        artifact_dir: None,
+        command: vec![claude.to_string_lossy().into(), "-p".into(), "hi".into()],
+        resume_injection: None,
+        claim_id_note: None,
+        ambient: false,
+    };
+
+    let run = supervisor
+        .execute(&args)
+        .await
+        .expect("observe-only run succeeds");
+    assert_eq!(run.exit_code, Some(0));
+    assert!(
+        run.notes.as_deref().unwrap_or("").contains("observe-only"),
+        "expected observe-only in notes, got {:?}",
+        run.notes
+    );
+
+    // Verify the stored command does NOT contain --output-format or stream-json
+    // (those would be injected by adapter.prepare_launch when NOT observe-only)
+    let stored_cmd = run.command.join(" ");
+    assert!(
+        !stored_cmd.contains("--output-format"),
+        "observe-only should skip adapter flag injection; command={stored_cmd}"
+    );
+    assert!(
+        !stored_cmd.contains("stream-json"),
+        "observe-only should skip adapter flag injection; command={stored_cmd}"
+    );
+
+    let events = store.get_events(&run.id).await.unwrap();
+    assert!(!events.is_empty(), "expected captured events");
+
+    let _ = std::fs::remove_dir_all(&ws);
+}
+
+#[tokio::test]
+async fn observe_only_notes_no_parent_run() {
+    let ws = temp_workspace();
+    let bin = ws.join("bin");
+    let claude = write_fake_claude(&bin);
+    let db = ws.join("test.db");
+    let blobs = ws.join("blobs");
+
+    let store = SqliteStore::open_with_blobs(&db, &blobs).unwrap();
+    let store: Arc<dyn TraceStore> = Arc::new(store);
+    let supervisor = RunSupervisor::new(store.clone());
+
+    let args = RunArgs {
+        name: Some("observe-only-no-parent".into()),
+        project: Some(ws.to_string_lossy().into()),
+        tag: vec![],
+        insecure_raw: false,
+        no_redact: false,
+        no_auto_resume: true,
+        auto_resume: false,
+        ci: false,
+        observe_only: true,
+        artifact_dir: None,
+        command: vec![claude.to_string_lossy().into(), "-p".into(), "hello".into()],
+        resume_injection: None,
+        claim_id_note: None,
+        ambient: false,
+    };
+
+    let run = supervisor.execute(&args).await.expect("run succeeds");
+    // In observe-only mode, parent_run_id should not be set
+    assert!(
+        run.parent_run_id.is_none(),
+        "observe-only should not set parent_run_id, got {:?}",
+        run.parent_run_id
+    );
+    assert!(
+        run.notes.as_deref().unwrap_or("").contains("observe-only"),
+        "expected observe-only note"
+    );
 
     let _ = std::fs::remove_dir_all(&ws);
 }

@@ -32,6 +32,7 @@ async fn a6_run_true_overhead_bounded() {
         no_auto_resume: true,
         auto_resume: false,
         ci: false,
+        observe_only: false,
         artifact_dir: None,
         resume_injection: None,
         claim_id_note: None,

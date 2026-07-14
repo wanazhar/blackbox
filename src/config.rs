@@ -132,6 +132,8 @@ pub struct CapturePolicy {
     pub insecure_raw: bool,
     /// Redaction enabled (normally true).
     pub redact: bool,
+    /// Hard observe-only mode: no prompt mutation, no continuity, no env injection.
+    pub observe_only: bool,
 }
 
 impl Default for CapturePolicy {
@@ -139,6 +141,7 @@ impl Default for CapturePolicy {
         Self {
             insecure_raw: false,
             redact: true,
+            observe_only: false,
         }
     }
 }
@@ -290,6 +293,11 @@ pub struct CaptureConfig {
     /// Soft warn vs block explicit run on claim conflict.
     #[serde(default)]
     pub claim_policy: ClaimPolicy,
+    /// Hard observe-only mode: record without mutating prompt, argv, environment,
+    /// or session continuity. When true, continuity is effectively off, adapter
+    /// prepare_launch is skipped, and no BLACKBOX_* env vars are injected.
+    #[serde(default)]
+    pub observe_only: bool,
 }
 
 fn default_wrap() -> Vec<String> {
@@ -331,6 +339,7 @@ impl Default for CaptureConfig {
             auto_claim: false,
             claim_ttl_secs: default_claim_ttl(),
             claim_policy: ClaimPolicy::Warn,
+            observe_only: false,
         }
     }
 }

@@ -97,6 +97,7 @@ pub fn run_args_for_record(
         no_auto_resume: false,
         auto_resume: false,
         ci: false,
+        observe_only: false,
         artifact_dir: None,
         command,
         resume_injection: None,

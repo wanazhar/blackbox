@@ -40,6 +40,7 @@ async fn ci_artifact_dir_writes_run_and_postmortem() {
         no_auto_resume: true,
         auto_resume: false,
         ci: false, // don't process::exit in test
+        observe_only: false,
         artifact_dir: Some(artifacts.clone()),
         resume_injection: None,
         claim_id_note: None,

@@ -431,6 +431,10 @@ pub struct RunArgs {
     #[arg(long)]
     pub ci: bool,
 
+    /// Hard observe-only mode: no prompt mutation, no continuity, no env injection.
+    #[arg(long)]
+    pub observe_only: bool,
+
     /// Directory for CI artifacts (run.json, postmortem.json, optional portable export)
     #[arg(long)]
     pub artifact_dir: Option<PathBuf>,
@@ -556,6 +560,11 @@ pub struct EnableArgs {
     /// Set capture.continuity (always|attention|off). New projects default always.
     #[arg(long, value_name = "MODE")]
     pub continuity: Option<String>,
+
+    /// Enable in observe-only mode (recording only, no continuity/memory bus).
+    /// Equivalent to setting `capture.observe_only = true` in config.
+    #[arg(long)]
+    pub observe_only: bool,
 
     /// Alias for --continuity always (opt into full memory bus)
     #[arg(long)]
@@ -917,6 +926,7 @@ async fn cmd_run(cli: &Cli, args: &RunArgs) -> anyhow::Result<()> {
     let policy = CapturePolicy {
         insecure_raw: args.insecure_raw,
         redact: !args.no_redact,
+        observe_only: args.observe_only,
     };
 
     let cfg_ref = discovery.as_ref().and_then(|d| d.config.as_ref());
@@ -1085,18 +1095,20 @@ async fn cmd_run(cli: &Cli, args: &RunArgs) -> anyhow::Result<()> {
             let _ = claim_release_for_run(&disc.paths.root, &run.id);
         }
 
-        // End-of-run MEMORY refresh when continuity ≠ off
-        if let Err(e) = crate::resume_inject::refresh_memory_files_end_of_run(
-            Some(store.as_ref()),
-            &disc.paths.root,
-            &disc.project_root,
-            &disc.paths.db_path,
-            continuity,
-            max_tok,
-        )
-        .await
-        {
-            tracing::warn!(error = %e, "end-of-run MEMORY refresh failed");
+        // End-of-run MEMORY refresh when continuity ≠ off and not observe-only
+        if !args.observe_only {
+            if let Err(e) = crate::resume_inject::refresh_memory_files_end_of_run(
+                Some(store.as_ref()),
+                &disc.paths.root,
+                &disc.project_root,
+                &disc.paths.db_path,
+                continuity,
+                max_tok,
+            )
+            .await
+            {
+                tracing::warn!(error = %e, "end-of-run MEMORY refresh failed");
+            }
         }
 
         // Opportunistic retention when configured.
@@ -2402,6 +2414,7 @@ async fn cmd_fork(cli: &Cli, args: &ForkArgs) -> anyhow::Result<()> {
             no_auto_resume: false,
             auto_resume: false,
             ci: false,
+            observe_only: false,
             artifact_dir: None,
             resume_injection: None,
             claim_id_note: None,
@@ -3114,6 +3127,11 @@ async fn cmd_enable(cli: &Cli, args: &EnableArgs) -> anyhow::Result<()> {
     } else if args.memory_bus {
         cfg.capture.continuity = Some(crate::config::ContinuityMode::Always);
         cfg.capture.auto_resume = true;
+    } else if args.observe_only {
+        // Observe-only: no continuity, no auto-resume, no adapter mutations
+        cfg.capture.observe_only = true;
+        cfg.capture.continuity = Some(crate::config::ContinuityMode::Off);
+        cfg.capture.auto_resume = false;
     } else if is_new {
         // New project: memory bus on
         cfg.capture.continuity = Some(crate::config::ContinuityMode::Always);
@@ -3210,6 +3228,9 @@ async fn cmd_enable(cli: &Cli, args: &EnableArgs) -> anyhow::Result<()> {
     println!("Enabled blackbox for {}", project_root.display());
     println!("  config: {}", config_path.display());
     println!("  wrap:   {}", wrap.join(", "));
+    if cfg.capture.observe_only {
+        println!("  mode:   observe-only (no continuity, no prompt mutation)");
+    }
     println!("  agent:  {}", agent_md.display());
     println!("  tip:    blackbox status --json   ·   blackbox handoff --json");
     println!();

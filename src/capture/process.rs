@@ -8,6 +8,67 @@ use std::collections::HashSet;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
+/// Optional process-layer enrichment controls (safe defaults off/normal).
+///
+/// - `dense_poll`: tighter adaptive poll (25–100 ms vs 50–200 ms)
+/// - `capture_environ`: sample `/proc/<pid>/environ` keys with redacted values
+/// - `child_subreaper`: Linux PR_SET_CHILD_SUBREAPER for best-effort waitpid exit codes
+#[derive(Debug, Clone)]
+pub struct ProcessEnrichOpts {
+    pub dense_poll: bool,
+    pub capture_environ: bool,
+    pub child_subreaper: bool,
+}
+
+impl Default for ProcessEnrichOpts {
+    fn default() -> Self {
+        Self {
+            dense_poll: false,
+            capture_environ: false,
+            // On by default: enables waitpid reaping for reparented children without
+            // requiring eBPF. Opt out with BLACKBOX_PROCESS_SUBREAPER=0.
+            child_subreaper: true,
+        }
+    }
+}
+
+impl ProcessEnrichOpts {
+    /// Resolve from config-like booleans and environment overrides.
+    ///
+    /// Env (override when set):
+    /// - `BLACKBOX_PROCESS_DENSE_POLL=1|0`
+    /// - `BLACKBOX_PROCESS_ENVIRON=1|0`
+    /// - `BLACKBOX_PROCESS_SUBREAPER=1|0`
+    pub fn resolve(dense_poll: bool, capture_environ: bool, child_subreaper: bool) -> Self {
+        let mut opts = Self {
+            dense_poll,
+            capture_environ,
+            child_subreaper,
+        };
+        if let Ok(v) = std::env::var("BLACKBOX_PROCESS_DENSE_POLL") {
+            opts.dense_poll = env_truthy(&v);
+        }
+        if let Ok(v) = std::env::var("BLACKBOX_PROCESS_ENVIRON") {
+            opts.capture_environ = env_truthy(&v);
+        }
+        if let Ok(v) = std::env::var("BLACKBOX_PROCESS_SUBREAPER") {
+            opts.child_subreaper = env_truthy(&v);
+        }
+        opts
+    }
+
+    pub fn from_env() -> Self {
+        Self::resolve(false, false, true)
+    }
+}
+
+fn env_truthy(v: &str) -> bool {
+    matches!(
+        v.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
 /// Process-tree observer.
 ///
 /// Tracks the supervised process lifecycle, records basic process metadata,
@@ -16,11 +77,11 @@ use tokio::sync::mpsc;
 ///
 /// # Limitations (short-lived processes)
 ///
-/// Polling is best-effort (adaptive 50–200 ms). Processes that spawn and exit
-/// between polls may be missed. On Linux, exact argv comes from
-/// `/proc/<pid>/cmdline`. On Windows/macOS, `sysinfo` provides best-effort
-/// argv/cwd/exe/parent. Exit codes for grandchildren are usually unavailable
-/// without waitpid on the process group.
+/// Polling is best-effort (adaptive 50–200 ms, or 25–100 ms with dense_poll).
+/// Processes that spawn and exit between polls may be missed. On Linux, exact
+/// argv comes from `/proc/<pid>/cmdline`. Exit codes for descendants are
+/// best-effort via child-subreaper + waitpid when the process reparents to us;
+/// otherwise `exit_code` is omitted and `exit_code_known=false`.
 #[derive(Debug)]
 pub struct ProcessCapture {
     event_tx: Option<mpsc::Sender<TraceEvent>>,
@@ -34,10 +95,15 @@ pub struct ProcessCapture {
     pid_tx: Option<tokio::sync::oneshot::Sender<u32>>,
     /// Set of PIDs known from previous poll cycle.
     known_pids: HashSet<u32>,
+    opts: ProcessEnrichOpts,
 }
 
 impl ProcessCapture {
     pub fn new() -> Self {
+        Self::with_opts(ProcessEnrichOpts::from_env())
+    }
+
+    pub fn with_opts(opts: ProcessEnrichOpts) -> Self {
         Self {
             event_tx: None,
             run_id: None,
@@ -46,6 +112,7 @@ impl ProcessCapture {
             stop_tx: None,
             pid_tx: None,
             known_pids: HashSet::new(),
+            opts,
         }
     }
 
@@ -125,6 +192,18 @@ impl CaptureLayer for ProcessCapture {
             "process_tree_backend".to_string(),
             serde_json::json!(tree_backend),
         );
+        ev.metadata.insert(
+            "dense_poll".to_string(),
+            serde_json::json!(self.opts.dense_poll),
+        );
+        ev.metadata.insert(
+            "capture_environ".to_string(),
+            serde_json::json!(self.opts.capture_environ),
+        );
+        ev.metadata.insert(
+            "child_subreaper".to_string(),
+            serde_json::json!(self.opts.child_subreaper),
+        );
         tx.send(ev).await?;
         let _ = tx
             .send(crate::capture::health::layer_started(&run.id, "process"))
@@ -140,17 +219,22 @@ impl CaptureLayer for ProcessCapture {
         let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
         let run_id = run.id.clone();
         let event_tx = self.event_tx.clone().unwrap();
+        let opts = self.opts.clone();
         self.pid_tx = Some(pid_tx);
         self.stop_tx = Some(stop_tx);
 
         #[cfg(target_os = "linux")]
         {
+            if opts.child_subreaper {
+                enable_child_subreaper();
+            }
             tokio::spawn(async move {
-                proc_poller_loop(run_id, event_tx, pid_rx, stop_rx).await;
+                proc_poller_loop(run_id, event_tx, pid_rx, stop_rx, opts).await;
             });
         }
         #[cfg(not(target_os = "linux"))]
         {
+            let _ = opts;
             let _ = event_tx
                 .send(crate::capture::health::layer_event(
                     &run_id,
@@ -434,12 +518,121 @@ fn find_descendants(root_pid: u32) -> HashSet<u32> {
 }
 
 #[cfg(target_os = "linux")]
+/// Best-effort: become child subreaper so orphaned descendants reparent to us
+/// and we can `waitpid` their exit codes.
+fn enable_child_subreaper() {
+    // PR_SET_CHILD_SUBREAPER = 36
+    let rc = unsafe { libc::prctl(36, 1i64, 0, 0, 0) };
+    if rc != 0 {
+        tracing::debug!("PR_SET_CHILD_SUBREAPER failed (non-fatal)");
+    }
+}
+
+#[cfg(target_os = "linux")]
+/// Try waitpid(WNOHANG) for a specific pid; also drain any reaped children.
+fn try_reap_exit_code(pid: u32) -> Option<i32> {
+    unsafe {
+        let mut status: libc::c_int = 0;
+        let r = libc::waitpid(pid as libc::pid_t, &mut status, libc::WNOHANG);
+        if r == pid as libc::pid_t {
+            return Some(status_to_exit_code(status));
+        }
+        // Drain any other reaped children (subreaper path) — may not match `pid`.
+        loop {
+            let r = libc::waitpid(-1, &mut status, libc::WNOHANG);
+            if r <= 0 {
+                break;
+            }
+            if r == pid as libc::pid_t {
+                return Some(status_to_exit_code(status));
+            }
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn status_to_exit_code(status: libc::c_int) -> i32 {
+    if libc::WIFEXITED(status) {
+        libc::WEXITSTATUS(status)
+    } else if libc::WIFSIGNALED(status) {
+        // Conventional: 128 + signal
+        128 + libc::WTERMSIG(status)
+    } else {
+        -1
+    }
+}
+
+#[cfg(target_os = "linux")]
+/// Read /proc/<pid>/environ as KEY=value pairs (may fail without ptrace/same-uid).
+fn read_environ(pid: u32) -> Option<std::collections::HashMap<String, String>> {
+    let data = std::fs::read(format!("/proc/{pid}/environ")).ok()?;
+    if data.is_empty() {
+        return None;
+    }
+    let mut map = std::collections::HashMap::new();
+    for part in data.split(|b| *b == 0) {
+        if part.is_empty() {
+            continue;
+        }
+        let Ok(s) = std::str::from_utf8(part) else {
+            continue;
+        };
+        if let Some((k, v)) = s.split_once('=') {
+            map.insert(k.to_string(), v.to_string());
+        }
+    }
+    if map.is_empty() {
+        None
+    } else {
+        Some(map)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn attach_redacted_environ(ev: &mut TraceEvent, pid: u32) {
+    use crate::redaction::environment::EnvironmentRedactor;
+    use crate::redaction::RedactionConfig;
+    let Some(env) = read_environ(pid) else {
+        ev.metadata
+            .insert("environ_available".to_string(), serde_json::json!(false));
+        return;
+    };
+    let redactor = EnvironmentRedactor::new(RedactionConfig::default());
+    let redacted = redactor.redact_env(&env);
+    // Cap payload size: keep at most 40 keys, truncate long values.
+    let mut pairs: Vec<(String, String)> = redacted.into_iter().collect();
+    pairs.sort_by(|a, b| a.0.cmp(&b.0));
+    pairs.truncate(40);
+    let obj: serde_json::Map<String, serde_json::Value> = pairs
+        .into_iter()
+        .map(|(k, v)| {
+            let truncated = if v.len() > 200 {
+                format!("{}…", &v[..200])
+            } else {
+                v
+            };
+            (k, serde_json::Value::String(truncated))
+        })
+        .collect();
+    ev.metadata.insert(
+        "environ".to_string(),
+        serde_json::Value::Object(obj),
+    );
+    ev.metadata
+        .insert("environ_available".to_string(), serde_json::json!(true));
+    ev.metadata
+        .insert("environ_redacted".to_string(), serde_json::json!(true));
+}
+
+#[cfg(target_os = "linux")]
 /// Background polling loop that discovers child processes via /proc.
 async fn proc_poller_loop(
     run_id: String,
     event_tx: mpsc::Sender<TraceEvent>,
     pid_rx: tokio::sync::oneshot::Receiver<u32>,
     mut stop_rx: tokio::sync::watch::Receiver<bool>,
+    opts: ProcessEnrichOpts,
 ) {
     let root_pid = tokio::select! {
         pid = pid_rx => match pid {
@@ -449,8 +642,13 @@ async fn proc_poller_loop(
         _ = stop_rx.changed() => return,
     };
 
-    // Adaptive poll: 50ms while the tree is changing, back off to 200ms when idle.
-    let mut poll_interval = Duration::from_millis(50);
+    // Adaptive poll: dense 25–100ms or normal 50–200ms.
+    let (active_ms, idle_ms) = if opts.dense_poll {
+        (25u64, 100u64)
+    } else {
+        (50u64, 200u64)
+    };
+    let mut poll_interval = Duration::from_millis(active_ms);
     let mut known: HashSet<u32> = HashSet::new();
     known.insert(root_pid);
     let root_pgid = read_pgid_sid(root_pid).0;
@@ -461,6 +659,9 @@ async fn proc_poller_loop(
         let mut ev = TraceEvent::new(&run_id, EventSource::Process, "process.discovered");
         ev.status = EventStatus::Success;
         apply_snapshot_to_event(&mut ev, &snap, CaptureMethod::ProcCmdline);
+        if opts.capture_environ {
+            attach_redacted_environ(&mut ev, root_pid);
+        }
         let _ = event_tx.send(ev).await;
     }
 
@@ -473,6 +674,13 @@ async fn proc_poller_loop(
                     ev.status = EventStatus::Success;
                     ev.metadata.insert("pid".to_string(), serde_json::json!(pid));
                     ev.metadata.insert("reason".to_string(), serde_json::json!("observer_stopped"));
+                    if let Some(code) = try_reap_exit_code(pid) {
+                        ev.metadata.insert("exit_code".to_string(), serde_json::json!(code));
+                        ev.metadata.insert("exit_code_known".to_string(), serde_json::json!(true));
+                        ev.metadata.insert("exit_code_source".to_string(), serde_json::json!("waitpid"));
+                    } else {
+                        ev.metadata.insert("exit_code_known".to_string(), serde_json::json!(false));
+                    }
                     // Best-effort final resource sample
                     if let Some(snap) = read_process_snapshot(pid) {
                         if let Some(rss) = snap.resources.rss_kb {
@@ -490,6 +698,7 @@ async fn proc_poller_loop(
                 snap_ev.metadata.insert("root_pid".to_string(), serde_json::json!(root_pid));
                 snap_ev.metadata.insert("process_count".to_string(), serde_json::json!(known.len()));
                 snap_ev.metadata.insert("backend".to_string(), serde_json::json!("linux_proc"));
+                snap_ev.metadata.insert("dense_poll".to_string(), serde_json::json!(opts.dense_poll));
                 let _ = event_tx.send(snap_ev).await;
                 break;
             }
@@ -518,6 +727,9 @@ async fn proc_poller_loop(
                                     );
                                 }
                             }
+                            if opts.capture_environ {
+                                attach_redacted_environ(&mut ev, pid);
+                            }
                             let _ = event_tx.send(ev).await;
 
                             // Also emit resource sample
@@ -539,7 +751,7 @@ async fn proc_poller_loop(
                     }
                 }
 
-                // Exited processes
+                // Exited processes — best-effort exit codes via subreaper waitpid
                 for &pid in &known {
                     if pid == root_pid { continue; }
                     if !current.contains(&pid) && !process_exists(pid) {
@@ -551,6 +763,17 @@ async fn proc_poller_loop(
                         );
                         ev.status = EventStatus::Success;
                         ev.metadata.insert("pid".to_string(), serde_json::json!(pid));
+                        if let Some(code) = try_reap_exit_code(pid) {
+                            ev.metadata.insert("exit_code".to_string(), serde_json::json!(code));
+                            ev.metadata.insert("exit_code_known".to_string(), serde_json::json!(true));
+                            ev.metadata.insert("exit_code_source".to_string(), serde_json::json!("waitpid"));
+                        } else {
+                            ev.metadata.insert("exit_code_known".to_string(), serde_json::json!(false));
+                            ev.metadata.insert(
+                                "exit_code_source".to_string(),
+                                serde_json::json!("unavailable"),
+                            );
+                        }
                         let _ = event_tx.send(ev).await;
                     }
                 }
@@ -582,11 +805,11 @@ async fn proc_poller_loop(
 
                 if changed {
                     idle_cycles = 0;
-                    poll_interval = Duration::from_millis(50);
+                    poll_interval = Duration::from_millis(active_ms);
                 } else {
                     idle_cycles = idle_cycles.saturating_add(1);
                     if idle_cycles >= 3 {
-                        poll_interval = Duration::from_millis(200);
+                        poll_interval = Duration::from_millis(idle_ms);
                     }
                 }
                 known = current;
@@ -778,6 +1001,43 @@ mod tests {
         let ev = rx.try_recv().unwrap();
         assert_eq!(ev.kind, "process.observer.started");
         assert_eq!(ev.source, EventSource::Process);
+    }
+
+    #[tokio::test]
+    async fn start_records_enrich_opts_in_metadata() {
+        let opts = ProcessEnrichOpts {
+            dense_poll: true,
+            capture_environ: true,
+            child_subreaper: false,
+        };
+        let mut cap = ProcessCapture::with_opts(opts);
+        let run = Run::new(vec!["true".into()], "/tmp".into());
+        let mut rx = cap.start(&run).await.unwrap();
+        let ev = drain_until(&mut rx, "process.observer.started");
+        assert_eq!(
+            ev.metadata.get("dense_poll").and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            ev.metadata
+                .get("capture_environ")
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            ev.metadata
+                .get("child_subreaper")
+                .and_then(|v| v.as_bool()),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn enrich_opts_resolve_from_config() {
+        let opts = ProcessEnrichOpts::resolve(true, false, true);
+        assert!(opts.dense_poll);
+        assert!(!opts.capture_environ);
+        assert!(opts.child_subreaper);
     }
 
     #[tokio::test]

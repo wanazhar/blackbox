@@ -229,7 +229,12 @@ impl RunSupervisor {
         let mut pty_capture = PtyCapture::new();
         let mut git_capture = GitCapture::new().with_store(self.store.clone());
         let mut fs_capture = FilesystemCapture::new();
-        let mut process_capture = ProcessCapture::new();
+        let process_opts = crate::capture::process::ProcessEnrichOpts::resolve(
+            self.policy.process_dense_poll,
+            self.policy.process_environ,
+            self.policy.process_subreaper,
+        );
+        let mut process_capture = ProcessCapture::with_opts(process_opts);
 
         let pty_rx = pty_capture.start(run).await?;
         let git_rx = git_capture.start(run).await?;

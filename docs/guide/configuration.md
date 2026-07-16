@@ -52,6 +52,14 @@ continuity = "always"
 # Prefer: blackbox enable --observe-only
 # observe_only = false
 
+# Process-tree enrichment (optional; safe defaults)
+# denser adaptive poll (25–100ms vs 50–200ms)
+# process_dense_poll = false
+# sample redacted /proc/<pid>/environ into process events (opt-in)
+# process_environ = false
+# Linux child subreaper for best-effort descendant exit codes (default true)
+# process_subreaper = true
+
 # Auto-resume (legacy 1.0 compat): true | false
 # When continuity ≠ off, this is overridden by continuity mode
 auto_resume = true
@@ -144,6 +152,14 @@ None of these are deterministic LLM replay.
 | `BLACKBOX_RESUME_FILE` | Path to RESUME.md (set by blackbox) | — |
 | `BLACKBOX_RESUME_RUN_ID` | Focus run ID (set by blackbox) | — |
 | `BLACKBOX_RESUME_HINT` | Context hint (set by blackbox) | — |
+
+### Process capture enrichment
+
+| Variable | Purpose | Example |
+|---|---|---|
+| `BLACKBOX_PROCESS_DENSE_POLL` | Tighter process poll (25–100 ms) | `1` \| `0` |
+| `BLACKBOX_PROCESS_ENVIRON` | Sample redacted `/proc` environ into process events | `1` \| `0` |
+| `BLACKBOX_PROCESS_SUBREAPER` | Linux child subreaper for waitpid exit codes | `1` \| `0` (default on) |
 
 ### Ambient capture
 

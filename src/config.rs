@@ -134,6 +134,10 @@ pub struct CapturePolicy {
     pub redact: bool,
     /// Hard observe-only mode: no prompt mutation, no continuity, no env injection.
     pub observe_only: bool,
+    /// Process-tree enrichment (dense poll, environ sample, subreaper).
+    pub process_dense_poll: bool,
+    pub process_environ: bool,
+    pub process_subreaper: bool,
 }
 
 impl Default for CapturePolicy {
@@ -142,7 +146,20 @@ impl Default for CapturePolicy {
             insecure_raw: false,
             redact: true,
             observe_only: false,
+            process_dense_poll: false,
+            process_environ: false,
+            process_subreaper: true,
         }
+    }
+}
+
+impl CapturePolicy {
+    /// Overlay process enrich fields from project CaptureConfig.
+    pub fn with_process_from_config(mut self, cfg: &CaptureConfig) -> Self {
+        self.process_dense_poll = cfg.process_dense_poll;
+        self.process_environ = cfg.process_environ;
+        self.process_subreaper = cfg.process_subreaper;
+        self
     }
 }
 
@@ -330,6 +347,17 @@ pub struct CaptureConfig {
     /// prepare_launch is skipped, and no BLACKBOX_* env vars are injected.
     #[serde(default)]
     pub observe_only: bool,
+    /// Denser process-tree poll (25–100 ms vs 50–200 ms). Slightly higher CPU.
+    #[serde(default)]
+    pub process_dense_poll: bool,
+    /// Sample child `/proc/<pid>/environ` (redacted) into process events.
+    /// Off by default — opt-in because environ can be large/sensitive.
+    #[serde(default)]
+    pub process_environ: bool,
+    /// Linux PR_SET_CHILD_SUBREAPER for best-effort descendant exit codes.
+    /// Default true; set false to disable waitpid reaping.
+    #[serde(default = "default_true")]
+    pub process_subreaper: bool,
 }
 
 fn default_wrap() -> Vec<String> {
@@ -373,6 +401,9 @@ impl Default for CaptureConfig {
             claim_ttl_secs: default_claim_ttl(),
             claim_policy: ClaimPolicy::Warn,
             observe_only: true,
+            process_dense_poll: false,
+            process_environ: false,
+            process_subreaper: true,
         }
     }
 }

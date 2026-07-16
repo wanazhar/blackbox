@@ -938,11 +938,15 @@ async fn cmd_run(cli: &Cli, args: &RunArgs) -> anyhow::Result<()> {
     let observe_only = args.observe_only
         || args.ambient
         || cfg_ref.map(|c| c.capture.observe_only).unwrap_or(false);
-    let policy = CapturePolicy {
+    let mut policy = CapturePolicy {
         insecure_raw: args.insecure_raw,
         redact: !args.no_redact,
         observe_only,
+        ..CapturePolicy::default()
     };
+    if let Some(c) = cfg_ref {
+        policy = policy.with_process_from_config(&c.capture);
+    }
 
     let continuity = if observe_only {
         ContinuityMode::Off

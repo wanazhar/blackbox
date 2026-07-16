@@ -213,6 +213,7 @@ impl ProcessNode {
 ///
 /// Accepts `process.discovered`, `process.exec`, `process.spawned`, and
 /// `process.descendant.spawned` (plus legacy kinds) that carry `pid`/`ppid`/`argv`.
+/// Exit codes from `process.exited` (and root from `run.completed`) are applied when present.
 pub fn rebuild_from_events(events: &[TraceEvent]) -> Vec<ProcessNode> {
     #[derive(Clone)]
     struct Info {
@@ -220,16 +221,59 @@ pub fn rebuild_from_events(events: &[TraceEvent]) -> Vec<ProcessNode> {
         command: Vec<String>,
         executable: Option<String>,
         cwd: Option<String>,
+        exit_code: Option<i32>,
+        exit_time: Option<DateTime<Utc>>,
     }
 
     let mut by_pid: HashMap<u32, Info> = HashMap::new();
+    let mut root_exit: Option<i32> = None;
+    let mut root_pid_hint: Option<u32> = None;
 
     for ev in events {
+        // Root exit code from run.completed
+        if ev.kind == "run.completed" {
+            if let Some(code) = ev.metadata.get("exit_code").and_then(|v| v.as_i64()) {
+                root_exit = Some(code as i32);
+            }
+        }
+        if ev.kind == "process.spawned" || ev.kind == "process.discovered" {
+            if let Some(p) = ev.metadata.get("pid").and_then(|v| v.as_u64()) {
+                root_pid_hint.get_or_insert(p as u32);
+            }
+        }
+
         let is_process = ev.source == EventSource::Process || ev.kind.starts_with("process.");
         if !is_process {
             continue;
         }
-        // Prefer spawn/exec/discover; skip pure exits/resources/observers for structure.
+
+        let pid = match ev.metadata.get("pid").and_then(|v| v.as_u64()) {
+            Some(p) => p as u32,
+            None => continue,
+        };
+
+        // Apply exit codes from process.exited without requiring full command meta.
+        if ev.kind.contains("exit") {
+            if let Some(code) = ev.metadata.get("exit_code").and_then(|v| v.as_i64()) {
+                by_pid
+                    .entry(pid)
+                    .and_modify(|info| {
+                        info.exit_code = Some(code as i32);
+                        info.exit_time = Some(ev.started_at);
+                    })
+                    .or_insert(Info {
+                        ppid: 0,
+                        command: Vec::new(),
+                        executable: None,
+                        cwd: None,
+                        exit_code: Some(code as i32),
+                        exit_time: Some(ev.started_at),
+                    });
+            }
+            continue;
+        }
+
+        // Prefer spawn/exec/discover; skip pure resources/observers for structure.
         let useful = matches!(
             ev.kind.as_str(),
             "process.discovered"
@@ -238,7 +282,6 @@ pub fn rebuild_from_events(events: &[TraceEvent]) -> Vec<ProcessNode> {
                 | "process.descendant.spawned"
                 | "process.command"
         ) || (ev.kind.starts_with("process.")
-            && !ev.kind.contains("exit")
             && !ev.kind.contains("observer")
             && !ev.kind.contains("resource")
             && !ev.kind.contains("snapshot"));
@@ -246,10 +289,6 @@ pub fn rebuild_from_events(events: &[TraceEvent]) -> Vec<ProcessNode> {
             continue;
         }
 
-        let pid = match ev.metadata.get("pid").and_then(|v| v.as_u64()) {
-            Some(p) => p as u32,
-            None => continue,
-        };
         let ppid = ev
             .metadata
             .get("ppid")
@@ -325,7 +364,18 @@ pub fn rebuild_from_events(events: &[TraceEvent]) -> Vec<ProcessNode> {
                 command,
                 executable,
                 cwd,
+                exit_code: None,
+                exit_time: None,
             });
+    }
+
+    // Apply root run.completed exit to supervised root when known.
+    if let (Some(code), Some(root)) = (root_exit, root_pid_hint) {
+        by_pid.entry(root).and_modify(|info| {
+            if info.exit_code.is_none() {
+                info.exit_code = Some(code);
+            }
+        });
     }
 
     if by_pid.is_empty() {
@@ -360,9 +410,16 @@ pub fn rebuild_from_events(events: &[TraceEvent]) -> Vec<ProcessNode> {
             return ProcessNode::new(pid, 0, vec!["[cycle]".into()]);
         }
         let info = by_pid.get(&pid);
-        let (ppid, command, executable, cwd) = match info {
-            Some(i) => (i.ppid, i.command.clone(), i.executable.clone(), i.cwd.clone()),
-            None => (0, vec![format!("[{pid}]")], None, None),
+        let (ppid, command, executable, cwd, exit_code, exit_time) = match info {
+            Some(i) => (
+                i.ppid,
+                i.command.clone(),
+                i.executable.clone(),
+                i.cwd.clone(),
+                i.exit_code,
+                i.exit_time,
+            ),
+            None => (0, vec![format!("[{pid}]")], None, None, None, None),
         };
         let mut node = ProcessNode::with_meta(
             pid,
@@ -372,6 +429,8 @@ pub fn rebuild_from_events(events: &[TraceEvent]) -> Vec<ProcessNode> {
             cwd,
             CaptureMethod::ProcPoller,
         );
+        node.invocation.exit_code = exit_code;
+        node.invocation.exit_time = exit_time;
         if let Some(kids) = children.get(&pid) {
             for &child_pid in kids {
                 node.children
@@ -415,8 +474,13 @@ impl ProcessNode {
                 .collect::<Vec<_>>()
                 .join(" ")
         };
+        let exit = self
+            .invocation
+            .exit_code
+            .map(|c| format!(" exit={c}"))
+            .unwrap_or_default();
         lines.push(format!(
-            "{prefix}{connector}{cmd} (pid={})",
+            "{prefix}{connector}{cmd} (pid={}{exit})",
             self.invocation.pid
         ));
         let child_prefix = if is_root {
@@ -564,5 +628,32 @@ mod tests {
         ev.metadata
             .insert("preview".into(), serde_json::json!("hi"));
         assert!(rebuild_from_events(&[ev]).is_empty());
+    }
+
+    #[test]
+    fn rebuild_applies_exit_codes_and_run_completed() {
+        let mut events = vec![
+            proc_ev("process.spawned", 100, 0, &["bash"]),
+            proc_ev("process.exec", 101, 100, &["false"]),
+        ];
+        let mut exited = TraceEvent::new("run", EventSource::Process, "process.exited");
+        exited.metadata.insert("pid".into(), serde_json::json!(101));
+        exited
+            .metadata
+            .insert("exit_code".into(), serde_json::json!(1));
+        events.push(exited);
+        let mut completed = TraceEvent::new("run", EventSource::System, "run.completed");
+        completed
+            .metadata
+            .insert("exit_code".into(), serde_json::json!(0));
+        events.push(completed);
+
+        let roots = rebuild_from_events(&events);
+        assert_eq!(roots.len(), 1);
+        assert_eq!(roots[0].invocation.exit_code, Some(0));
+        assert_eq!(roots[0].children[0].invocation.exit_code, Some(1));
+        let text = roots[0].format_tree();
+        assert!(text.contains("exit=1"));
+        assert!(text.contains("exit=0"));
     }
 }

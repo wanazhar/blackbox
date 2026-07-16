@@ -266,6 +266,7 @@ fn memory_to_context_pack(
             failure_fix_chains: vec![],
             narrative: String::new(),
             capture_coverage: None,
+            retry_waste: vec![],
         }),
         failed_tools: pack.failed_tools.clone(),
         errors_top: pack.errors_top.clone(),

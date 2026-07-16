@@ -5,6 +5,7 @@ use serde::Serialize;
 
 use crate::analysis::error_detector::ErrorDetector;
 use crate::analysis::failure_fix::FailureFixCorrelator;
+use crate::analysis::retry_waste::RetryWasteDetector;
 use crate::core::event::EventStatus;
 use crate::core::run::Run;
 use crate::storage::TraceStore;
@@ -40,6 +41,17 @@ pub struct SummaryView {
     /// Capture coverage summary.
     #[serde(default)]
     pub capture_coverage: Option<CaptureCoverageView>,
+    /// Repeated / non-progressing work findings.
+    #[serde(default)]
+    pub retry_waste: Vec<RetryWasteView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RetryWasteView {
+    pub kind: String,
+    pub detail: String,
+    pub count: usize,
+    pub sample_event_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -146,6 +158,19 @@ pub async fn build_summary(
             retry_occurred: chain.retry_occurred,
             retry_successful: chain.retry_successful,
             confidence: format!("{:?}", chain.confidence),
+        })
+        .collect();
+
+    // ── Repeated / non-progressing work ──────────────────────────────
+    let retry_waste: Vec<RetryWasteView> = RetryWasteDetector::new()
+        .find(&events)
+        .into_iter()
+        .take(10)
+        .map(|f| RetryWasteView {
+            kind: f.kind,
+            detail: f.detail,
+            count: f.count,
+            sample_event_ids: f.sample_event_ids,
         })
         .collect();
 
@@ -282,6 +307,7 @@ pub async fn build_summary(
         git_end: &git_end,
         duration_ms,
         capture_coverage: &capture_coverage,
+        retry_waste: &retry_waste,
         truncated,
         events_scanned,
         total_events: total,
@@ -317,6 +343,7 @@ pub async fn build_summary(
         failure_fix_chains: fix_chains,
         narrative,
         capture_coverage,
+        retry_waste,
     })
 }
 
@@ -334,6 +361,7 @@ struct SummaryNarrativeData<'a> {
     git_end: &'a Option<String>,
     duration_ms: Option<u64>,
     capture_coverage: &'a Option<CaptureCoverageView>,
+    retry_waste: &'a [RetryWasteView],
     truncated: bool,
     events_scanned: usize,
     total_events: Option<usize>,
@@ -462,6 +490,14 @@ fn build_narrative(data: &SummaryNarrativeData) -> String {
         ));
     }
 
+    // Repeated / non-progressing work
+    if !data.retry_waste.is_empty() {
+        n.push_str("Repeated work:\n");
+        for f in data.retry_waste.iter().take(5) {
+            n.push_str(&format!("  - {}\n", f.detail));
+        }
+    }
+
     // Capture coverage
     if let Some(ref cov) = data.capture_coverage {
         n.push_str(&format!(
@@ -543,6 +579,14 @@ pub fn format_summary_text(s: &SummaryView) -> String {
         out.push_str("\n── Narrative ──────────────────────────────────────\n");
         for line in s.narrative.lines() {
             out.push_str(&format!("  {}\n", line));
+        }
+    }
+
+    // Repeated work
+    if !s.retry_waste.is_empty() {
+        out.push_str("\n── Repeated / non-progressing work ────────────────\n");
+        for f in &s.retry_waste {
+            out.push_str(&format!("  [{}×] {}\n", f.count, f.detail));
         }
     }
 

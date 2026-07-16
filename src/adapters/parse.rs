@@ -57,14 +57,99 @@ pub fn tool_call_event(
     ev.side_effect = tool_side_effect(tool_name);
     ev.metadata
         .insert("tool_name".to_string(), serde_json::json!(tool_name));
-    if let Some(input) = input {
-        ev.metadata.insert("input".to_string(), input);
+    if let Some(ref input) = input {
+        // Attach lossless command metadata for shell-like tools when possible.
+        attach_shell_command_meta(&mut ev, tool_name, input);
+        ev.metadata.insert("input".to_string(), input.clone());
     }
     if let Some(id) = tool_use_id {
         ev.metadata
             .insert("tool_use_id".to_string(), serde_json::json!(id));
     }
     ev
+}
+
+/// If this is a shell tool with a command string/array in input, attach
+/// [`CommandMetadata`] so sandbox/analysis never need whitespace reconstruction.
+fn attach_shell_command_meta(
+    ev: &mut TraceEvent,
+    tool_name: &str,
+    input: &serde_json::Value,
+) {
+    use crate::core::command::CommandMetadata;
+
+    let lower = tool_name.to_lowercase();
+    let is_shell = matches!(
+        lower.as_str(),
+        "bash" | "shell" | "run" | "execute" | "terminal" | "cmd"
+    );
+    if !is_shell {
+        // Structured argv tools (e.g. some harnesses pass `args` arrays).
+        if let Some(arr) = input.get("argv").and_then(|v| v.as_array()).or_else(|| {
+            input
+                .get("args")
+                .and_then(|v| v.as_array())
+                .filter(|a| !a.is_empty() && a.iter().all(|x| x.is_string()))
+        }) {
+            let argv: Vec<String> = arr
+                .iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect();
+            if !argv.is_empty() {
+                let cwd = input
+                    .get("cwd")
+                    .or_else(|| input.get("working_directory"))
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
+                CommandMetadata::from_adapter_argv(argv, cwd).apply_to_event(ev);
+            }
+        }
+        return;
+    }
+
+    // Prefer structured argv when the harness provides it.
+    if let Some(arr) = input
+        .get("argv")
+        .and_then(|v| v.as_array())
+        .or_else(|| input.get("command").and_then(|v| v.as_array()))
+        .or_else(|| {
+            input
+                .get("args")
+                .and_then(|v| v.as_array())
+                .filter(|a| !a.is_empty() && a.iter().all(|x| x.is_string()))
+        })
+    {
+        let argv: Vec<String> = arr
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
+        if !argv.is_empty() {
+            let cwd = input
+                .get("cwd")
+                .or_else(|| input.get("working_directory"))
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            CommandMetadata::from_adapter_argv(argv, cwd).apply_to_event(ev);
+            return;
+        }
+    }
+
+    // Shell source string — preserve as shell invocation, not whitespace-split argv.
+    let shell_src = input
+        .get("command")
+        .and_then(|v| v.as_str())
+        .or_else(|| input.get("cmd").and_then(|v| v.as_str()))
+        .or_else(|| input.get("script").and_then(|v| v.as_str()));
+
+    if let Some(src) = shell_src {
+        // Infer shell binary from tool name when possible.
+        let shell = match lower.as_str() {
+            "bash" => Some("bash"),
+            "shell" | "run" | "execute" | "terminal" | "cmd" => Some("bash"),
+            _ => None,
+        };
+        CommandMetadata::from_shell_source(src, shell).apply_to_event(ev);
+    }
 }
 
 /// Build a tool.result event.
@@ -374,6 +459,7 @@ pub fn parse_plaintext(run_id: &str, text: &str, harness: &str) -> Vec<TraceEven
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::command::{CommandFidelity, CommandMetadata};
 
     #[test]
     fn parse_claude_tool_use_line() {
@@ -387,6 +473,62 @@ mod tests {
             Some("Read")
         );
         assert_eq!(events[0].side_effect, SideEffect::Read);
+    }
+
+    #[test]
+    fn bash_tool_emits_shell_command_meta() {
+        let ev = tool_call_event(
+            "run-1",
+            "Bash",
+            Some(serde_json::json!({
+                "command": "cat result.json | jq '.items[]'"
+            })),
+            Some("tu_bash"),
+        );
+        let meta = CommandMetadata::from_event(&ev).expect("command_meta");
+        assert_eq!(
+            meta.shell_source.as_deref(),
+            Some("cat result.json | jq '.items[]'")
+        );
+        assert_eq!(meta.fidelity, CommandFidelity::Inferred);
+        assert_eq!(meta.argv[0], "bash");
+        assert_eq!(meta.argv[1], "-lc");
+        assert!(meta.argv[2].contains("jq"));
+        // Must not whitespace-split the pipeline into fake argv tokens.
+        assert!(!meta.argv.iter().any(|a| a == "|"));
+    }
+
+    #[test]
+    fn bash_tool_with_argv_array_is_exact() {
+        let ev = tool_call_event(
+            "run-1",
+            "Bash",
+            Some(serde_json::json!({
+                "command": ["grep", "hello world", "file.txt"]
+            })),
+            None,
+        );
+        let meta = CommandMetadata::from_event(&ev).expect("command_meta");
+        assert_eq!(meta.fidelity, CommandFidelity::Exact);
+        assert!(meta.lossless);
+        assert_eq!(meta.argv[1], "hello world");
+    }
+
+    #[test]
+    fn non_shell_tool_with_args_array() {
+        let ev = tool_call_event(
+            "run-1",
+            "Execute",
+            Some(serde_json::json!({
+                "args": ["rg", "Session", "src/"],
+                "cwd": "/project"
+            })),
+            None,
+        );
+        // Execute is treated as shell-like by tool name match
+        let meta = CommandMetadata::from_event(&ev);
+        // Execute matches shell names → may use shell path; if args used as argv:
+        assert!(meta.is_some());
     }
 
     #[test]

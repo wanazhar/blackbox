@@ -11,7 +11,7 @@ Blackbox exposes a **Model Context Protocol (MCP)** server over stdio so agents 
 | Job | Tools |
 |---|---|
 | **Session start** | [`blackbox_handoff`](#blackbox_handoff) · [`blackbox_memory`](#blackbox_memory) · [`blackbox_status`](#blackbox_status) |
-| **Debug failure** | [`blackbox_postmortem`](#blackbox_postmortem) · [`blackbox_context`](#blackbox_context) · [`blackbox_runs`](#blackbox_runs) · [`blackbox_search`](#blackbox_search) |
+| **Debug failure** | [`blackbox_fail`](#blackbox_fail) · [`blackbox_postmortem`](#blackbox_postmortem) · [`blackbox_timeline`](#blackbox_timeline) · [`blackbox_anomalies`](#blackbox_anomalies) · [`blackbox_context`](#blackbox_context) · [`blackbox_runs`](#blackbox_runs) · [`blackbox_search`](#blackbox_search) |
 | **Multi-agent** | [`blackbox_claim`](#blackbox_claim) · [`blackbox_resolve`](#blackbox_resolve) · [`blackbox_memory_update`](#blackbox_memory_update) |
 | **Diagnostics** | [`blackbox_doctor`](#blackbox_doctor) |
 
@@ -98,8 +98,8 @@ Responses place JSON payloads in MCP `content[{type:"text", text:"..."}]` (parse
 
 | | |
 |---|---|
-| **When to use** | Explain a failed/succeeded run: headline, next_action, evidence, anomalies. Primary debug tool after a bad run. |
-| **When not to** | You only need raw events → `blackbox_search` / CLI timeline. |
+| **When to use** | Explain a specific run: headline, next_action, evidence, anomalies. |
+| **When not to** | Auto-pick the worst failure → `blackbox_fail`. Raw events → `blackbox_timeline`. |
 | **CLI equivalent** | `blackbox postmortem <run_id\|latest> --json` |
 | **Input** | `run_id?: string` (default `latest`) |
 | **Output** | Summary / postmortem view |
@@ -109,6 +109,46 @@ Responses place JSON payloads in MCP `content[{type:"text", text:"..."}]` (parse
 ```
 
 Guide: [debug-a-failure](../guide/debug-a-failure.md).
+
+---
+
+### `blackbox_fail`
+
+| | |
+|---|---|
+| **When to use** | **Primary debug entry** — auto-focus unresolved failure / last failure / latest. |
+| **When not to** | You already know the run id and only want events → timeline. |
+| **CLI equivalent** | `blackbox fail` / `fail --json` |
+| **Input** | `run_id?: string` (optional explicit), `full?: bool` |
+| **Output** | `{ focus, run_id, short_id, failed, summary, next_commands }` |
+
+Focus order matches CLI: sticky unresolved → last failed/cancelled/non-zero → latest.
+
+---
+
+### `blackbox_timeline`
+
+| | |
+|---|---|
+| **When to use** | After postmortem/fail evidence points at `seq=…` or `tool.call`. |
+| **When not to** | Full narrative only → postmortem/fail. |
+| **CLI equivalent** | `blackbox timeline <run> --semantic` |
+| **Input** | `run_id?: string`, `semantic?: bool` (default true), `kind?: string`, `limit?: int` (default 200) |
+| **Output** | `{ run_id, events[], truncated, total_matched, returned }` |
+
+Bookkeeping kinds filtered when `semantic=true` (`pty.started`, observer start/stop, …).
+
+---
+
+### `blackbox_anomalies`
+
+| | |
+|---|---|
+| **When to use** | Structured markers only (loops, destructive, storms, spikes, silence, fan-out). |
+| **When not to** | Full story → fail/postmortem (already includes anomalies). |
+| **CLI equivalent** | postmortem `.anomalies` / serve `/api/runs/{id}/anomalies` |
+| **Input** | `run_id?: string`, `limit?: int` (events scanned, default 8000) |
+| **Output** | `{ run_id, count, anomalies[], events_scanned }` |
 
 ---
 
@@ -213,8 +253,9 @@ Guide: [debug-a-failure](../guide/debug-a-failure.md).
 2. blackbox_claim { action: "acquire", holder: "<you>" }
    → on conflict, do not clobber
 
-3. blackbox_postmortem { run_id: "latest" }   # if last run failed
-   → follow evidence / anomalies
+3. blackbox_fail {}                          # if last run failed / attention
+   → blackbox_timeline { run_id, semantic: true, kind?: "tool.call" }
+   → blackbox_anomalies { run_id }           # optional deep dive
 
 4. blackbox_memory_update { goal: "…", open_items: ["…"] }
 

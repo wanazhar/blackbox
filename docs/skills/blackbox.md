@@ -63,7 +63,8 @@ MCP equivalents: `blackbox_handoff`, `blackbox_memory`, `blackbox_status` — ca
 | Search | `blackbox search "error" --json` |
 | Record under supervision | `blackbox run -- <cmd>` |
 | Eval / no launch mutation | `blackbox run --eval --artifact-dir ./out -- <cmd>` |
-| One-shot failure story | `blackbox fail` / `fail --json` |
+| One-shot failure story | `blackbox fail` / MCP `blackbox_fail` |
+| Timeline / anomalies | MCP `blackbox_timeline` · `blackbox_anomalies` |
 | First-time project setup | `blackbox setup` / `setup --memory-bus --install-shell` / `setup --harden` |
 | Ack gate | `blackbox ack` or `BLACKBOX_ACK=1` |
 | Enable project | `blackbox enable --memory-bus --install-shell` |
@@ -88,8 +89,16 @@ Escape hatches: `BLACKBOX_OFF=1`, `continuity=off`, `--no-auto-resume`, `blackbo
 
 ## Debug a failure (agent short path)
 
+**Prefer MCP when available:**
+
+1. `blackbox_fail` (auto-focus) or `blackbox_postmortem`
+2. `blackbox_timeline` with `semantic: true` (and `kind: "tool.call"` if needed)
+3. `blackbox_anomalies` for markers only
+
+**CLI:**
+
 ```bash
-blackbox postmortem latest --json
+blackbox fail --json
 blackbox timeline latest --semantic --json
 blackbox handoff --json
 ```

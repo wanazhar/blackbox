@@ -15,6 +15,10 @@ All notable changes to **blackbox** are documented here.
 - **`blackbox fail`**: one-shot failure focus (unresolved → last failure → latest) with
   postmortem + anomalies + next commands; `--json` / `--fail-on-failure`
 
+### 1.3 Phase 2 (T3) — in tree, unreleased
+- **MCP debug spine**: `blackbox_timeline` (semantic/kind/limit), `blackbox_anomalies`,
+  `blackbox_fail` (same focus order as CLI); skill + docs updated
+
 ### Docs
 - **Human-track revamp:** `docs/README.md` index by question; `docs/WRITING.md` style guide
   (competent technical audience — no dumbing down)

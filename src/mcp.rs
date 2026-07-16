@@ -7,6 +7,7 @@ use std::io::{BufRead, BufReader, Write};
 
 use serde_json::{json, Value};
 
+use crate::analysis::detect_anomalies;
 use crate::config::discover_project;
 use crate::context::{build_context_pack, ContextOptions};
 use crate::search::search_store;
@@ -14,6 +15,8 @@ use crate::status::{build_status, StatusOptions};
 use crate::storage::sqlite::{SqliteStore, SCHEMA_VERSION};
 use crate::storage::TraceStore;
 use crate::summary::{build_summary, SummaryOptions};
+use crate::util::{is_bookkeeping, short_id};
+use crate::views::TimelineEventView;
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
 const SERVER_NAME: &str = "blackbox";
@@ -99,7 +102,7 @@ fn initialize_result() -> Value {
             "name": SERVER_NAME,
             "version": SERVER_VERSION
         },
-        "instructions": "Enabled project: call blackbox_handoff or blackbox_memory before other work. Prefer project_memory over re-reading transcripts. Honor active claims. Use blackbox_status for lightweight checks."
+        "instructions": "Enabled project: call blackbox_handoff or blackbox_memory before other work. Prefer project_memory over re-reading transcripts. Honor active claims. On failure: blackbox_postmortem or blackbox_fail, then blackbox_timeline / blackbox_anomalies. Use blackbox_status for lightweight checks."
     })
 }
 
@@ -130,11 +133,46 @@ fn tools_list() -> Value {
             ),
             tool_def(
                 "blackbox_postmortem",
-                "One-command postmortem / summary of a recorded run.",
+                "One-command postmortem / summary of a recorded run (headline, next_action, evidence, anomalies).",
                 json!({
                     "type": "object",
                     "properties": {
                         "run_id": { "type": "string", "description": "Run id, prefix, or 'latest'", "default": "latest" }
+                    }
+                }),
+            ),
+            tool_def(
+                "blackbox_fail",
+                "One-shot failure focus: picks unresolved failure / last failure / latest, returns postmortem + next commands. Prefer when debugging a bad run.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "run_id": { "type": "string", "description": "Optional run id/prefix; omit to auto-focus failure" },
+                        "full": { "type": "boolean", "description": "Larger event window for postmortem", "default": false }
+                    }
+                }),
+            ),
+            tool_def(
+                "blackbox_timeline",
+                "Event timeline for a run (semantic filter by default). Use after postmortem evidence seq=…",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "run_id": { "type": "string", "description": "Run id, prefix, or 'latest'", "default": "latest" },
+                        "semantic": { "type": "boolean", "description": "Hide bookkeeping observer events", "default": true },
+                        "kind": { "type": "string", "description": "Filter by event kind, e.g. tool.call" },
+                        "limit": { "type": "integer", "description": "Max events to return", "default": 200 }
+                    }
+                }),
+            ),
+            tool_def(
+                "blackbox_anomalies",
+                "Anomaly markers for a run (tool loops, destructive ops, error storms, token spikes, long silence, process fan-out).",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "run_id": { "type": "string", "description": "Run id, prefix, or 'latest'", "default": "latest" },
+                        "limit": { "type": "integer", "description": "Max events to scan (default 8000)", "default": 8000 }
                     }
                 }),
             ),
@@ -253,6 +291,9 @@ async fn handle_tool_call(
         "blackbox_status" => tool_status(store_override, &args, false).await,
         "blackbox_handoff" => tool_status(store_override, &args, true).await,
         "blackbox_postmortem" => tool_postmortem(store_override, &args).await,
+        "blackbox_fail" => tool_fail(store_override, &args).await,
+        "blackbox_timeline" => tool_timeline(store_override, &args).await,
+        "blackbox_anomalies" => tool_anomalies(store_override, &args).await,
         "blackbox_context" => tool_context(store_override, &args).await,
         "blackbox_runs" => tool_runs(store_override, &args).await,
         "blackbox_search" => tool_search(store_override, &args).await,
@@ -376,6 +417,193 @@ async fn tool_postmortem(
         .await
         .map_err(|e| rpc_err(-32000, &e.to_string()))?;
     let v = serde_json::to_value(&view).map_err(|e| rpc_err(-32000, &e.to_string()))?;
+    Ok(tool_ok(&v))
+}
+
+/// MCP mirror of CLI `blackbox fail` focus order.
+async fn resolve_fail_run(
+    store: &dyn TraceStore,
+    discovery: &crate::config::ProjectDiscovery,
+    spec: Option<&str>,
+) -> Result<(crate::core::run::Run, &'static str), Value> {
+    if let Some(s) = spec {
+        if !s.is_empty() {
+            let run = resolve_run(store, s).await?;
+            return Ok((run, "explicit"));
+        }
+    }
+    if let Ok(Some(st)) = crate::state::ProjectState::load(&discovery.paths.root) {
+        if let Some(fid) = st.unresolved_failure_id {
+            if let Ok(Some(r)) = store.get_run(&fid).await {
+                return Ok((r, "unresolved_failure"));
+            }
+        }
+    }
+    let runs = store
+        .list_runs()
+        .await
+        .map_err(|e| rpc_err(-32000, &e.to_string()))?;
+    if runs.is_empty() {
+        return Err(rpc_err(-32000, "no runs in store"));
+    }
+    if let Some(r) = runs.iter().find(|r| {
+        matches!(
+            r.status,
+            crate::core::run::RunStatus::Failed | crate::core::run::RunStatus::Cancelled
+        ) || r.exit_code.is_some_and(|c| c != 0)
+    }) {
+        return Ok((r.clone(), "last_failure"));
+    }
+    Ok((runs.into_iter().next().unwrap(), "latest"))
+}
+
+async fn tool_fail(
+    store_override: Option<&std::path::Path>,
+    args: &Value,
+) -> Result<Value, Value> {
+    let (discovery, store) = open_ctx(store_override).await?;
+    let store = store
+        .ok_or_else(|| rpc_err(-32000, "no store; run blackbox enable / record a run first"))?;
+    let spec = args.get("run_id").and_then(|v| v.as_str());
+    let (run, focus) = resolve_fail_run(&store, &discovery, spec).await?;
+    let full = args.get("full").and_then(|v| v.as_bool()).unwrap_or(false);
+    let opts = if full {
+        SummaryOptions {
+            short: false,
+            full: true,
+        }
+    } else {
+        SummaryOptions::default()
+    };
+    let summary = build_summary(&store, &run, opts)
+        .await
+        .map_err(|e| rpc_err(-32000, &e.to_string()))?;
+    let failed = matches!(
+        run.status,
+        crate::core::run::RunStatus::Failed | crate::core::run::RunStatus::Cancelled
+    ) || run.exit_code.is_some_and(|c| c != 0);
+    let short = short_id(&run.id).to_string();
+    let v = json!({
+        "focus": focus,
+        "run_id": run.id,
+        "short_id": short,
+        "failed": failed,
+        "summary": summary,
+        "next_commands": [
+            format!("blackbox timeline {short} --semantic"),
+            format!("blackbox show {short} --tui"),
+            format!("blackbox postmortem {short} --json"),
+            "blackbox resolve",
+        ],
+    });
+    Ok(tool_ok(&v))
+}
+
+fn event_detail_line(ev: &crate::core::event::TraceEvent) -> String {
+    let m = &ev.metadata;
+    if let Some(p) = m.get("preview").and_then(|v| v.as_str()) {
+        return p.chars().take(160).collect();
+    }
+    if let Some(t) = m.get("tool_name").and_then(|v| v.as_str()) {
+        return t.to_string();
+    }
+    if let Some(p) = m.get("path").and_then(|v| v.as_str()) {
+        return p.to_string();
+    }
+    if let Some(c) = m.get("exit_code") {
+        return format!("exit={c}");
+    }
+    String::new()
+}
+
+async fn tool_timeline(
+    store_override: Option<&std::path::Path>,
+    args: &Value,
+) -> Result<Value, Value> {
+    let (_d, store) = open_ctx(store_override).await?;
+    let store = store.ok_or_else(|| rpc_err(-32000, "no store"))?;
+    let run_id = args
+        .get("run_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("latest");
+    let run = resolve_run(&store, run_id).await?;
+    let semantic = args
+        .get("semantic")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    let kind_filter = args.get("kind").and_then(|v| v.as_str());
+    let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(200) as usize;
+
+    let events = store
+        .get_events_limited(&run.id, 8_000)
+        .await
+        .map_err(|e| rpc_err(-32000, &e.to_string()))?
+        .0;
+
+    let mut matched: Vec<_> = events
+        .iter()
+        .filter(|e| {
+            if semantic && is_bookkeeping(&e.kind) {
+                return false;
+            }
+            if let Some(k) = kind_filter {
+                if e.kind != k {
+                    return false;
+                }
+            }
+            true
+        })
+        .collect();
+    let total_matched = matched.len();
+    let truncated = total_matched > limit;
+    matched.truncate(limit);
+
+    let views: Vec<TimelineEventView> = matched
+        .iter()
+        .map(|ev| TimelineEventView::from_event(ev, event_detail_line(ev)))
+        .collect();
+
+    let v = json!({
+        "run_id": run.id,
+        "short_id": short_id(&run.id),
+        "semantic": semantic,
+        "kind": kind_filter,
+        "events": views,
+        "truncated": truncated,
+        "total_matched": total_matched,
+        "returned": views.len(),
+    });
+    Ok(tool_ok(&v))
+}
+
+async fn tool_anomalies(
+    store_override: Option<&std::path::Path>,
+    args: &Value,
+) -> Result<Value, Value> {
+    let (_d, store) = open_ctx(store_override).await?;
+    let store = store.ok_or_else(|| rpc_err(-32000, "no store"))?;
+    let run_id = args
+        .get("run_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("latest");
+    let run = resolve_run(&store, run_id).await?;
+    let scan_limit = args
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(8_000) as usize;
+    let events = store
+        .get_events_limited(&run.id, scan_limit)
+        .await
+        .map_err(|e| rpc_err(-32000, &e.to_string()))?
+        .0;
+    let anomalies = detect_anomalies(&events);
+    let v = json!({
+        "run_id": run.id,
+        "short_id": short_id(&run.id),
+        "count": anomalies.len(),
+        "anomalies": anomalies,
+        "events_scanned": events.len(),
+    });
     Ok(tool_ok(&v))
 }
 
@@ -738,6 +966,11 @@ mod tests {
         assert!(names.contains(&"blackbox_handoff"));
         assert!(names.contains(&"blackbox_status"));
         assert!(names.contains(&"blackbox_search"));
+        assert!(names.contains(&"blackbox_postmortem"));
+        // 1.3 T3 debug spine
+        assert!(names.contains(&"blackbox_timeline"));
+        assert!(names.contains(&"blackbox_anomalies"));
+        assert!(names.contains(&"blackbox_fail"));
     }
 
     #[test]
@@ -745,5 +978,69 @@ mod tests {
         let r = initialize_result();
         assert_eq!(r["protocolVersion"], PROTOCOL_VERSION);
         assert_eq!(r["serverInfo"]["name"], "blackbox");
+    }
+
+    #[tokio::test]
+    async fn timeline_and_anomalies_tools_on_emptyish_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("t.db");
+        let blobs = dir.path().join("blobs");
+        let store = SqliteStore::open_with_blobs(&db, &blobs).unwrap();
+        let store: std::sync::Arc<dyn TraceStore> = std::sync::Arc::new(store);
+
+        let mut run = crate::core::run::Run::new(vec!["true".into()], dir.path().display().to_string());
+        run.status = crate::core::run::RunStatus::Succeeded;
+        run.exit_code = Some(0);
+        store.insert_run(&run).await.unwrap();
+
+        let mut ev = crate::core::event::TraceEvent::new(
+            &run.id,
+            crate::core::event::EventSource::Terminal,
+            "terminal.output",
+        );
+        ev.sequence = 0;
+        ev.metadata
+            .insert("preview".into(), serde_json::json!("hello"));
+        store.insert_event(&ev).await.unwrap();
+
+        // Bookkeeping should be filtered when semantic=true
+        let mut bk = crate::core::event::TraceEvent::new(
+            &run.id,
+            crate::core::event::EventSource::System,
+            "pty.started",
+        );
+        bk.sequence = 1;
+        store.insert_event(&bk).await.unwrap();
+
+        let tl = tool_timeline(
+            Some(db.as_path()),
+            &json!({ "run_id": run.id, "semantic": true, "limit": 50 }),
+        )
+        .await
+        .unwrap();
+        let text = tl["content"][0]["text"].as_str().unwrap();
+        let body: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(body["run_id"], run.id);
+        assert_eq!(body["semantic"], true);
+        let events = body["events"].as_array().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["kind"], "terminal.output");
+
+        let an = tool_anomalies(Some(db.as_path()), &json!({ "run_id": "latest" }))
+            .await
+            .unwrap();
+        let text = an["content"][0]["text"].as_str().unwrap();
+        let body: Value = serde_json::from_str(text).unwrap();
+        assert!(body["anomalies"].is_array());
+        assert_eq!(body["count"], 0);
+
+        let fail = tool_fail(Some(db.as_path()), &json!({}))
+            .await
+            .unwrap();
+        let text = fail["content"][0]["text"].as_str().unwrap();
+        let body: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(body["focus"], "latest");
+        assert_eq!(body["failed"], false);
+        assert!(body["summary"]["headline"].is_string());
     }
 }

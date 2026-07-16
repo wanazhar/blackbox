@@ -3874,6 +3874,7 @@ async fn cmd_doctor(cli: &Cli, args: &DoctorArgs) -> anyhow::Result<()> {
         .config
         .as_ref()
         .map(|c| c.capture.continuity_from_config().as_str().to_string());
+    let observe_only = discovery.config.as_ref().map(|c| c.capture.observe_only);
     let memory_path = paths.root.join("MEMORY.json");
     let memory_file_present = Some(memory_path.exists());
     let memory_age_secs = memory_path
@@ -3918,6 +3919,7 @@ async fn cmd_doctor(cli: &Cli, args: &DoctorArgs) -> anyhow::Result<()> {
                 "functions call maybe-run; install via blackbox enable --install-shell".into(),
             blackbox_on_path: on_path,
             continuity_mode,
+            observe_only,
             memory_file_present,
             memory_age_secs,
             claims_active,
@@ -3962,6 +3964,11 @@ async fn cmd_doctor(cli: &Cli, args: &DoctorArgs) -> anyhow::Result<()> {
             "retention:  keep_runs={} max_age_days={:?} auto_apply={}",
             ret.keep_runs, ret.max_age_days, ret.auto_apply
         );
+    }
+    if let Some(true) = observe_only {
+        println!("mode:       observe-only (no continuity, no prompt mutation)");
+    } else if let Some(ref mode) = continuity_mode {
+        println!("mode:       continuity={mode}");
     }
     if let Some(n) = run_count {
         println!(

@@ -251,6 +251,9 @@ pub struct DoctorView {
     // 1.2 memory plane (M7)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub continuity_mode: Option<String>,
+    /// Hard observe-only mode (no launch mutation / continuity).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observe_only: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memory_file_present: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]

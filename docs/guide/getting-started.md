@@ -174,6 +174,7 @@ blackbox resolve --clear-wip
 |---|---|
 | [Configuration](configuration.md) | All CLI flags, env vars, config.toml options |
 | [Security](security.md) | Redaction model, what's captured, safe defaults |
+| [Overhead](overhead.md) | Local benchmarks, stats averages, storage soft warnings |
 | [Export and sync](export-and-sync.md) | Export formats, sync push/pull to dir/S3/HTTP |
 | [Troubleshooting](troubleshooting.md) | Common issues, FAQ, doctor diagnostics |
 

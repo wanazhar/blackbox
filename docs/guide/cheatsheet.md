@@ -18,8 +18,10 @@ blackbox setup                               # enable + sample run + doctor
 blackbox setup --memory-bus --install-shell  # + continuity + ambient wrap
 blackbox setup --harden                      # encrypt_blobs + external key path
 blackbox enable                              # store + config only
+blackbox enable --harden                     # same trust profile without sample run
 blackbox enable --memory-bus --install-shell
 blackbox disable                             # pause (keeps data)
+# optional: capture.ambient_notice = true → one stderr line after ambient record
 ```
 
 ---

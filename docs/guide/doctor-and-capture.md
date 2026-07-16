@@ -74,9 +74,24 @@ Typical **penalties / notes** (non-exhaustive; code is source of truth):
 | Last run quality &lt; 40% | −15 |
 | Last run capture lag note | −10 |
 | `capture.warning` on last run | −10 |
+| Last run **adapter drought** (`capture.warning` / `adapter_drought`) | −10 (extra note) |
 | Redaction / enable issues | can block “ready” |
 
 Notes also include **informational** tips (encrypt_blobs, backup vault, eval harness, product_mode, native_log_scope) that may not all subtract score.
+
+### Adapter drought (structured tools missing)
+
+Known harness adapters (`claude`, `codex`, `aider`, `gemini`, `cursor`, `opencode`, `grok`) normally emit structured `tool.call` events. When a **long enough** run finishes with **zero** `tool.call` events, blackbox records honesty signals:
+
+| Surface | What you see |
+|---|---|
+| `capture.coverage` notes | Text note: `adapter drought: harness=… produced 0 tool.call events…` |
+| `capture.warning` event | `metadata.warning = "adapter_drought"` (+ message) |
+| `doctor` daily-driver notes | “last run adapter drought … check stream-json / native logs” |
+
+**Threshold:** tool_call_count == 0 **and** (event count ≥ 20 **or** duration ≥ 5s). Short setup samples (`true` / echo) do not fire. Generic adapter is excluded.
+
+**What to do:** confirm the harness is writing stream-json / native logs blackbox can parse; check `native_log_scope`; see [adapters.md](adapters.md). The PTY timeline still exists — drought is about **structured** tools, not total silence.
 
 ---
 

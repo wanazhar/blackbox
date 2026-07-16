@@ -25,6 +25,14 @@ All notable changes to **blackbox** are documented here.
 - **GitHub Action**: `.github/actions/blackbox-eval` runs `--eval --ci --artifact-dir` + upload
 - Reference: `docs/reference/score.md`
 
+### 1.3 Phase 4 (T5/T6/T7) — in tree, unreleased
+- **Harden profile**: `setup --harden` and `enable --harden` set encrypt_blobs, project
+  native logs, env allowlist, retention; external key + `.blackbox/HARDEN.txt` tip
+- **Adapter drought**: known harness + 0 `tool.call` on long runs → coverage note +
+  `capture.warning` (`adapter_drought`) + doctor daily-driver note
+- **Ambient notice**: `capture.ambient_notice` (default false) prints one stderr line after
+  ambient record when enabled; A1 remains quiet by default
+
 ### Docs
 - **Human-track revamp:** `docs/README.md` index by question; `docs/WRITING.md` style guide
   (competent technical audience — no dumbing down)

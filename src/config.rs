@@ -383,6 +383,10 @@ pub struct CaptureConfig {
     /// Key: `.blackbox/store.key` or `BLACKBOX_STORE_KEY` (64 hex).
     #[serde(default)]
     pub encrypt_blobs: bool,
+    /// When true, ambient `maybe-run` prints one stderr line after a recorded run
+    /// (`blackbox: recorded <short_id> (exit=…)`). Default false (A1 quiet).
+    #[serde(default)]
+    pub ambient_notice: bool,
 }
 
 /// Where to scan for harness native logs.
@@ -565,6 +569,7 @@ impl Default for CaptureConfig {
             store_git_diffs: true,
             native_log_scope: NativeLogScope::Project,
             encrypt_blobs: false,
+            ambient_notice: false,
         }
     }
 }

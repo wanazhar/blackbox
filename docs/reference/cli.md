@@ -50,7 +50,7 @@ blackbox setup [--memory-bus] [--install-shell] [--harden] [--no-sample] [--requ
 |---|---|
 | `--memory-bus` | Continuity=always (not observe-only) |
 | `--install-shell` | Install ambient wrappers |
-| `--harden` | `encrypt_blobs` + project native logs + key under `~/.config/blackbox/default.key` when possible |
+| `--harden` | Trust profile: `encrypt_blobs`, project native logs, env allowlist, retention; key under `~/.config/blackbox/default.key` when possible (same as `enable --harden`) |
 | `--no-sample` | Skip supervised `true` sample run |
 | `--require-ready` | Exit non-zero if soft daily-driver not ready |
 
@@ -85,7 +85,7 @@ blackbox fail [run-id|latest] [--full] [--fail-on-failure]
 ### `enable`
 
 ```bash
-blackbox enable [--install-shell] [--uninstall-shell] [--memory-bus]
+blackbox enable [--install-shell] [--uninstall-shell] [--memory-bus] [--harden]
                 [--continuity always|attention|off] [--shell bash|zsh|powershell]
 ```
 
@@ -94,6 +94,7 @@ blackbox enable [--install-shell] [--uninstall-shell] [--memory-bus]
 | `--install-shell` | Install shell wrappers for common harnesses |
 | `--uninstall-shell` | Remove previously installed shell wrappers |
 | `--memory-bus` | Enable 1.2 memory bus (sets continuity=always) |
+| `--harden` | Hardened trust profile: `encrypt_blobs`, project native logs, env allowlist, retention; external key + `.blackbox/HARDEN.txt` tip |
 | `--continuity <mode>` | Set continuity mode directly |
 | `--shell <kind>` | Shell kind for wrappers (bash, zsh, powershell) |
 

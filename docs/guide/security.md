@@ -145,6 +145,36 @@ blackbox restore ~/vaults/proj.bbx.json --passphrase '…'
 
 Native logs default to **project** scope so home harness dirs (`~/.claude`, …) are not copied into the store unless `native_log_scope = "home"`.
 
+### Hardened project profile (`--harden`)
+
+One-shot trust defaults without SQLCipher. Prefer this over hand-editing knobs:
+
+```bash
+blackbox setup --harden
+# or on an existing project:
+blackbox enable --harden
+```
+
+| Setting | Value |
+|---|---|
+| `capture.encrypt_blobs` | `true` |
+| `capture.native_log_scope` | `project` |
+| `capture.env_capture` | `allowlist` |
+| `retention.auto_apply` | `true` |
+| `retention.keep_runs` | at least `50` if previously `0` |
+| Key material | Prefer `~/.config/blackbox/default.key` (mode-hardened); fall back to project `store.key` |
+| Tip file | `.blackbox/HARDEN.txt` — key path + `BLACKBOX_STORE_KEY_FILE` + backup one-liner |
+
+Then:
+
+```bash
+export BLACKBOX_STORE_KEY_FILE=~/.config/blackbox/default.key
+blackbox backup -o ~/vaults/proj.bbx.json --passphrase '…' --include-db
+blackbox doctor   # tips should look clean for crypto posture
+```
+
+Harden does **not** force a backup passphrase or wipe existing plaintext blobs already on disk. Re-run capture under encrypt for new blobs; use `backup` for cold vault.
+
 ---
 
 ## 6. Export, sync, and share

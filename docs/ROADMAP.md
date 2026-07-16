@@ -71,9 +71,9 @@ Full plan: [plan/trust-explain-1.3.md](plan/trust-explain-1.3.md).
 | **T2** | One-shot **setup** path | ✅ `blackbox setup` shipped (unreleased) |
 | **T3** | MCP **timeline + anomalies** | ✅ `blackbox_timeline` / `blackbox_anomalies` / `blackbox_fail` |
 | **T4** | Eval **score.json** (`blackbox.score/v1`) + CI action shape | ✅ `score.json` + `.github/actions/blackbox-eval` |
-| **T5** | **Harden** project profile | encrypt_blobs + external key path + safe defaults |
-| **T6** | **Adapter drought** honesty | Known harness + 0 tool.call → warning |
-| **T7** | Optional **ambient notice** | One-line “recorded …” without breaking A1 |
+| **T5** | **Harden** project profile | ✅ `setup`/`enable --harden` + security docs |
+| **T6** | **Adapter drought** honesty | ✅ coverage + `capture.warning` + doctor |
+| **T7** | Optional **ambient notice** | ✅ `ambient_notice` default off; A1 quiet |
 | **T8** | **Release gate** | tests + CHANGELOG + version — *last* |
 
 #### Already counted toward 1.3 (landed on master, unreleased)

@@ -67,6 +67,48 @@ pub struct RunCoverageSignals {
     pub fs_failed: bool,
     /// Soft lag note from EventWriter health (store falling behind).
     pub capture_lag_note: Option<String>,
+    /// Structured tool.call count (adapter drought detection).
+    pub tool_call_count: u64,
+    /// Known harness adapter id when present (claude, codex, …).
+    pub adapter_id: Option<String>,
+    /// Wall duration of the run in ms (for drought threshold).
+    pub duration_ms: Option<u64>,
+    /// Total events in the rollup window.
+    pub total_events_window: u64,
+}
+
+/// Adapters that normally emit structured `tool.call` events.
+pub fn structured_harness_adapters() -> &'static [&'static str] {
+    &[
+        "claude", "codex", "aider", "gemini", "cursor", "opencode", "grok",
+    ]
+}
+
+/// True when a known harness produced no tool.call despite enough activity.
+///
+/// Threshold: adapter is structured **and** tool_call_count == 0 **and**
+/// (events ≥ 20 **or** duration ≥ 5s). Short `true` / setup samples do not fire.
+pub fn adapter_tool_drought(sig: &RunCoverageSignals) -> Option<String> {
+    let adapter = sig.adapter_id.as_deref()?;
+    if !structured_harness_adapters()
+        .iter()
+        .any(|a| a.eq_ignore_ascii_case(adapter))
+    {
+        return None;
+    }
+    if sig.tool_call_count > 0 {
+        return None;
+    }
+    let long_enough = sig.total_events_window >= 20
+        || sig.duration_ms.is_some_and(|d| d >= 5_000);
+    if !long_enough {
+        return None;
+    }
+    Some(format!(
+        "adapter drought: harness={adapter} produced 0 tool.call events \
+         (events={} duration_ms={:?}) — check stream-json / native logs / adapter health",
+        sig.total_events_window, sig.duration_ms
+    ))
 }
 
 /// Overall capture coverage for a run.
@@ -201,6 +243,10 @@ impl CaptureCoverage {
             git_failed: false,
             fs_failed: false,
             capture_lag_note: None,
+            tool_call_count: 0,
+            adapter_id: None,
+            duration_ms: None,
+            total_events_window: 0,
         })
     }
 
@@ -229,6 +275,10 @@ impl CaptureCoverage {
             git_failed: false,
             fs_failed: false,
             capture_lag_note: None,
+            tool_call_count: 0,
+            adapter_id: None,
+            duration_ms: None,
+            total_events_window: 0,
         })
     }
 
@@ -385,8 +435,11 @@ impl CaptureCoverage {
         notes.push(
             "quality_score: weighted average of surface status (pty 30%, process 25%, git 15%, fs 15%, env 5%, native_logs 10%); disabled surfaces omitted".into(),
         );
-        if let Some(lag) = sig.capture_lag_note {
-            notes.push(lag);
+        if let Some(ref lag) = sig.capture_lag_note {
+            notes.push(lag.clone());
+        }
+        if let Some(drought) = adapter_tool_drought(&sig) {
+            notes.push(drought);
         }
 
         let mut cov = Self {
@@ -471,6 +524,46 @@ mod tests {
             ..Default::default()
         });
         assert!(cov.notes.iter().any(|n| n.contains("capture lag")));
+    }
+
+    #[test]
+    fn adapter_drought_fires_for_long_claude_without_tools() {
+        let msg = adapter_tool_drought(&RunCoverageSignals {
+            adapter_id: Some("claude".into()),
+            tool_call_count: 0,
+            total_events_window: 40,
+            duration_ms: Some(12_000),
+            ..Default::default()
+        });
+        assert!(msg.unwrap().contains("adapter drought"));
+    }
+
+    #[test]
+    fn adapter_drought_skips_short_or_generic() {
+        assert!(adapter_tool_drought(&RunCoverageSignals {
+            adapter_id: Some("claude".into()),
+            tool_call_count: 0,
+            total_events_window: 5,
+            duration_ms: Some(100),
+            ..Default::default()
+        })
+        .is_none());
+        assert!(adapter_tool_drought(&RunCoverageSignals {
+            adapter_id: Some("generic".into()),
+            tool_call_count: 0,
+            total_events_window: 100,
+            duration_ms: Some(60_000),
+            ..Default::default()
+        })
+        .is_none());
+        assert!(adapter_tool_drought(&RunCoverageSignals {
+            adapter_id: Some("claude".into()),
+            tool_call_count: 3,
+            total_events_window: 100,
+            duration_ms: Some(60_000),
+            ..Default::default()
+        })
+        .is_none());
     }
 
     #[test]

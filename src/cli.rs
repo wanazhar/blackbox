@@ -616,6 +616,10 @@ pub struct EnableArgs {
     /// Alias for --continuity always (opt into full memory bus)
     #[arg(long)]
     pub memory_bus: bool,
+
+    /// Hardened trust profile: encrypt_blobs + project native logs + external key path
+    #[arg(long)]
+    pub harden: bool,
 }
 
 /// `blackbox setup` — first-time project onboarding (1.3 T2).
@@ -3449,7 +3453,34 @@ async fn cmd_maybe_run(cli: &Cli, args: &MaybeRunArgs) -> anyhow::Result<()> {
         crate::maybe_run::MaybeRunAction::Record { project_root, tags } => {
             let run_args =
                 run_args_for_record(args.command.clone(), project_root, tags, args.name.clone());
-            cmd_run(cli, &run_args).await
+            let result = cmd_run(cli, &run_args).await;
+            // Optional one-line ambient notice (default off)
+            if result.is_ok() {
+                if let Ok(discovery) = discover_project(
+                    &std::env::current_dir().unwrap_or_default(),
+                    cli.store.as_deref(),
+                ) {
+                    let notice = discovery
+                        .config
+                        .as_ref()
+                        .map(|c| c.capture.ambient_notice)
+                        .unwrap_or(false);
+                    if notice {
+                        if let Ok(store) = open_store(cli) {
+                            if let Ok(runs) = store.list_runs().await {
+                                if let Some(r) = runs.first() {
+                                    eprintln!(
+                                        "blackbox: recorded {} (exit={:?})",
+                                        short_id(&r.id),
+                                        r.exit_code
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            result
         }
     }
 }
@@ -3586,7 +3617,7 @@ async fn cmd_fail(cli: &Cli, args: &FailArgs) -> anyhow::Result<()> {
 }
 
 async fn cmd_setup(cli: &Cli, args: &SetupArgs) -> anyhow::Result<()> {
-    use crate::config::{BlackboxConfig, NativeLogScope};
+    use crate::config::BlackboxConfig;
 
     // 1) Enable (reuse enable flags). Force text mode so --json only emits setup once.
     let enable_args = EnableArgs {
@@ -3596,6 +3627,7 @@ async fn cmd_setup(cli: &Cli, args: &SetupArgs) -> anyhow::Result<()> {
         continuity: None,
         observe_only: false,
         memory_bus: args.memory_bus,
+        harden: args.harden,
     };
     // Quiet enable: no JSON/text so `setup --json` emits a single envelope.
     let enable_cli = Cli {
@@ -3612,48 +3644,15 @@ async fn cmd_setup(cli: &Cli, args: &SetupArgs) -> anyhow::Result<()> {
     let mut key_path_note: Option<String> = None;
     let mut hardened = false;
 
-    // 2) Harden profile
+    // 2) Harden profile (also available via `enable --harden`)
     if args.harden {
         hardened = true;
         let mut cfg = BlackboxConfig::load_from_path(&config_path)?
             .unwrap_or_else(crate::maybe_run::default_enable_config);
         cfg.enabled = true;
-        cfg.capture.encrypt_blobs = true;
-        cfg.capture.native_log_scope = NativeLogScope::Project;
-        if cfg.retention.keep_runs == 0 {
-            cfg.retention.keep_runs = 50;
-        }
-        cfg.retention.auto_apply = true;
+        apply_harden_profile(&mut cfg);
         cfg.write_to_path(&config_path)?;
-
-        // Prefer external key under ~/.config/blackbox/default.key
-        let ext = dirs_config_blackbox_key();
-        let key_path = if let Some(ref p) = ext {
-            if let Some(parent) = p.parent() {
-                let _ = std::fs::create_dir_all(parent);
-                crate::privacy::restrict_dir(parent);
-            }
-            p.clone()
-        } else {
-            crate::crypto::default_key_path(&discovery.paths.root)
-        };
-        let _crypto = crate::crypto::BlobCrypto::load_or_create(&key_path)?;
-        key_path_note = Some(key_path.display().to_string());
-        // Also ensure project store.key exists when external path unused — load_or_create handled path
-        if ext.is_none() {
-            // project-local key already created
-        } else {
-            // Symlink or copy pointer: set BLACKBOX_STORE_KEY_FILE is env-only; write a note file
-            let tip = discovery.paths.root.join("HARDEN.txt");
-            let _ = std::fs::write(
-                &tip,
-                format!(
-                    "blackbox setup --harden\nencrypt_blobs=true\nkey={}\nexport BLACKBOX_STORE_KEY_FILE={}\nbackup: blackbox backup -o vault.bbx.json --passphrase …\n",
-                    key_path.display(),
-                    key_path.display()
-                ),
-            );
-        }
+        key_path_note = Some(ensure_harden_key(&discovery.paths.root)?.display().to_string());
     }
 
     // 3) Sample run
@@ -3843,6 +3842,43 @@ fn dirs_config_blackbox_key() -> Option<std::path::PathBuf> {
     )
 }
 
+/// Apply 1.3 hardened trust defaults onto config (encrypt + project logs + retention).
+fn apply_harden_profile(cfg: &mut crate::config::BlackboxConfig) {
+    use crate::config::NativeLogScope;
+    cfg.capture.encrypt_blobs = true;
+    cfg.capture.native_log_scope = NativeLogScope::Project;
+    cfg.capture.env_capture = crate::config::EnvCaptureMode::Allowlist;
+    if cfg.retention.keep_runs == 0 {
+        cfg.retention.keep_runs = 50;
+    }
+    cfg.retention.auto_apply = true;
+}
+
+/// Create external (preferred) or project store encryption key; write HARDEN.txt tip.
+fn ensure_harden_key(store_root: &std::path::Path) -> anyhow::Result<std::path::PathBuf> {
+    let ext = dirs_config_blackbox_key();
+    let key_path = if let Some(ref p) = ext {
+        if let Some(parent) = p.parent() {
+            let _ = std::fs::create_dir_all(parent);
+            crate::privacy::restrict_dir(parent);
+        }
+        p.clone()
+    } else {
+        crate::crypto::default_key_path(store_root)
+    };
+    let _ = crate::crypto::BlobCrypto::load_or_create(&key_path)?;
+    let tip = store_root.join("HARDEN.txt");
+    let _ = std::fs::write(
+        &tip,
+        format!(
+            "blackbox harden\nencrypt_blobs=true\nkey={}\nexport BLACKBOX_STORE_KEY_FILE={}\nbackup: blackbox backup -o vault.bbx.json --passphrase …\n",
+            key_path.display(),
+            key_path.display()
+        ),
+    );
+    Ok(key_path)
+}
+
 async fn cmd_enable(cli: &Cli, args: &EnableArgs, quiet: bool) -> anyhow::Result<()> {
     use crate::config::BlackboxConfig;
     use crate::maybe_run::{default_enable_config, shell_snippet_bash, shell_snippet_fish};
@@ -3907,6 +3943,9 @@ async fn cmd_enable(cli: &Cli, args: &EnableArgs, quiet: bool) -> anyhow::Result
     if cfg.capture.continuity.is_none() {
         cfg.capture.continuity = Some(cfg.capture.continuity_from_config());
     }
+    if args.harden {
+        apply_harden_profile(&mut cfg);
+    }
     cfg.write_to_path(&config_path)?;
     // Ensure dirs for store
     discovery.paths.ensure_dirs().ok();
@@ -3916,6 +3955,10 @@ async fn cmd_enable(cli: &Cli, args: &EnableArgs, quiet: bool) -> anyhow::Result
         blob_dir: bb.join("blobs"),
     };
     paths.ensure_dirs()?;
+
+    if args.harden {
+        let _ = ensure_harden_key(&paths.root)?;
+    }
 
     let agent_md = write_agent_instructions(&bb)?;
 
@@ -4921,6 +4964,19 @@ async fn cmd_doctor(cli: &Cli, args: &DoctorArgs) -> anyhow::Result<()> {
                     if events.iter().any(|e| e.kind == "capture.warning") {
                         dd_score = dd_score.saturating_sub(10);
                         dd_notes.push("last run has capture.warning events".into());
+                    }
+                    if events.iter().any(|e| {
+                        e.kind == "capture.warning"
+                            && e.metadata
+                                .get("warning")
+                                .and_then(|v| v.as_str())
+                                == Some("adapter_drought")
+                    }) {
+                        dd_score = dd_score.saturating_sub(10);
+                        dd_notes.push(
+                            "last run adapter drought (0 tool.call for known harness) — check stream-json / native logs"
+                                .into(),
+                        );
                     }
                 }
             }

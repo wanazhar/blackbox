@@ -938,6 +938,37 @@ impl RunSupervisor {
             });
         }
 
+        let tool_call_count = all_events.iter().filter(|e| e.kind == "tool.call").count() as u64;
+        // Adapter id may not be on run yet; notes / argv detection.
+        let adapter_guess = run.adapter.clone().or_else(|| {
+            run.notes.as_deref().and_then(|n| {
+                n.split(';')
+                    .find_map(|p| p.trim().strip_prefix("adapter:"))
+                    .map(|s| s.to_string())
+            })
+        }).or_else(|| {
+            Some(
+                crate::adapters::detect::detect_adapter(&run.command)
+                    .id()
+                    .to_string(),
+            )
+        });
+        let duration_ms = run
+            .duration_ms
+            .or_else(|| {
+                run.ended_at
+                    .zip(Some(run.started_at))
+                    .map(|(e, s)| (e - s).num_milliseconds().max(0) as u64)
+            })
+            .or_else(|| {
+                // Not finished yet at this point in some paths — use wall clock
+                Some(
+                    (chrono::Utc::now() - run.started_at)
+                        .num_milliseconds()
+                        .max(0) as u64,
+                )
+            });
+
         let coverage = crate::capture::coverage::CaptureCoverage::from_run_signals(
             crate::capture::coverage::RunCoverageSignals {
                 pty_events,
@@ -952,6 +983,10 @@ impl RunSupervisor {
                 git_failed: layer_failed("git") || layer_err_src(EventSource::Git),
                 fs_failed: layer_failed("filesystem") || layer_err_src(EventSource::Filesystem),
                 capture_lag_note: capture_lag_note.clone(),
+                tool_call_count,
+                adapter_id: adapter_guess.clone(),
+                duration_ms,
+                total_events_window: all_events.len() as u64,
             },
         );
         let mut cov_ev = TraceEvent::new(&run.id, EventSource::System, "capture.coverage");
@@ -973,7 +1008,35 @@ impl RunSupervisor {
                 "max_write_ms": health.max_write_ms,
             }),
         );
+        if let Some(ref a) = adapter_guess {
+            cov_ev
+                .metadata
+                .insert("adapter".into(), serde_json::json!(a));
+        }
+        cov_ev.metadata.insert(
+            "tool_call_count".into(),
+            serde_json::json!(tool_call_count),
+        );
         let _ = writer.write(cov_ev).await;
+
+        // Adapter drought → first-class capture.warning (doctor / fail path surface it)
+        if let Some(msg) = crate::capture::coverage::adapter_tool_drought(
+            &crate::capture::coverage::RunCoverageSignals {
+                tool_call_count,
+                adapter_id: adapter_guess,
+                duration_ms,
+                total_events_window: all_events.len() as u64,
+                ..Default::default()
+            },
+        ) {
+            let mut warn = TraceEvent::new(&run.id, EventSource::System, "capture.warning");
+            warn.status = EventStatus::Error;
+            warn.metadata
+                .insert("warning".into(), serde_json::json!("adapter_drought"));
+            warn.metadata
+                .insert("message".into(), serde_json::json!(msg));
+            let _ = writer.write(warn).await;
+        }
 
         if let Some(ref lag) = capture_lag_note {
             let mut warn = TraceEvent::new(&run.id, EventSource::System, "capture.warning");

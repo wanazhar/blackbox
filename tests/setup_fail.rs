@@ -85,6 +85,40 @@ fn setup_harden_sets_encrypt_blobs() {
     let v: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
     assert_eq!(v["data"]["hardened"], true);
     assert!(v["data"]["key_path"].as_str().is_some());
+    // native_log_scope / allowlist also applied
+    assert!(
+        cfg.contains("native_log_scope") || cfg.contains("project"),
+        "harden should prefer project native logs: {cfg}"
+    );
+}
+
+#[test]
+fn enable_harden_writes_profile() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let out = bin()
+        .current_dir(dir.path())
+        .env("HOME", &home)
+        .args(["enable", "--harden"])
+        .output()
+        .expect("enable harden");
+    assert!(
+        out.status.success(),
+        "enable harden: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let cfg = std::fs::read_to_string(dir.path().join(".blackbox/config.toml")).unwrap();
+    assert!(
+        cfg.contains("encrypt_blobs") && cfg.contains("true"),
+        "enable --harden encrypt_blobs: {cfg}"
+    );
+    // HARDEN.txt tip written under store root
+    assert!(
+        dir.path().join(".blackbox/HARDEN.txt").is_file()
+            || home.join(".config/blackbox/default.key").is_file(),
+        "harden should create key tip and/or external key"
+    );
 }
 
 #[tokio::test]

@@ -164,6 +164,7 @@ claim_ttl_secs = 1800
 # store_git_diffs = true       # false = preview+stats only
 # native_log_scope = "project" # "project" | "home" | "off"
 # encrypt_blobs = false
+# ambient_notice = false       # true = one stderr line after ambient record
 
 [retention]
 auto_apply = true
@@ -190,6 +191,11 @@ keep_runs = 100              # 0 = keep all (subject to other tools)
 | `store_git_diffs` | true | Full diff blobs vs preview only |
 | `native_log_scope` | project | Do not ingest `~/.claude` unless `home` |
 | `encrypt_blobs` | false | ChaCha20-Poly1305 blobs + seal sticky JSON |
+| `ambient_notice` | **false** | When true, ambient `maybe-run` prints one stderr line after a successful record: `blackbox: recorded <short_id> (exit=…)`. Default off so A1 stays quiet; never printed on passthrough / `BLACKBOX_OFF` / missing binary |
+
+### Hardened profile (CLI)
+
+`blackbox setup --harden` / `enable --harden` sets encrypt_blobs, project native logs, env allowlist, retention auto_apply, and creates an external key when possible. Details: [security.md — Hardened project profile](security.md#hardened-project-profile-harden).
 
 ### Retention
 

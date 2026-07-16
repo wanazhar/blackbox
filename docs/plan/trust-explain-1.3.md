@@ -75,7 +75,7 @@ Treat as **done for plan purposes** unless regression appears:
 | Eval foothold | `--eval`, artifacts `anomalies.json` / `summary.txt` |
 | Capture quality | coverage event, quality score, doctor daily-driver score |
 | Claims | path-scoped + project |
-| Docs | human track, recipes, cheatsheet, adapters, doctor guide, examples, MkDocs + docs.yml goldens |
+| Docs | human track, recipes, cheatsheet, adapters, doctor guide, examples, link goldens (in-repo) |
 
 **Work remaining = sections T1–T8 below.**
 

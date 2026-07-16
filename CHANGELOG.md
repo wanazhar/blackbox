@@ -36,7 +36,7 @@ Plan: [docs/plan/trust-explain-1.3.md](docs/plan/trust-explain-1.3.md).
 - Docs index by question; guides (what-is, install, everyday-use, debug-a-failure, leave-it-on, concepts, recipes, cheatsheet, adapters, doctor-and-capture, examples)
 - Deep rewrites: configuration, security (threat model + hardened profile), troubleshooting, export/sync, overhead
 - CLI/MCP/json-api when-to-use; glossary; skill rewrite; link + first-run + CLI envelope goldens
-- Optional MkDocs site (`mkdocs serve` locally; GitHub Pages only if Actions minutes allow)
+- Optional local MkDocs preview (`mkdocs serve`); docs published as in-repo markdown only
 
 ### Daily-driver trust (landed after 1.2, released in 1.3)
 - Observe-only default for ambient; product mode `recorder` | `continuity`

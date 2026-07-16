@@ -4,6 +4,13 @@ All notable changes to **blackbox** are documented here.
 
 ## [Unreleased]
 
+### Daily-driver trust (post-1.2)
+- **Observe-only default** for ambient capture; product mode `recorder` | `continuity`
+- **Path-scoped claims**: non-overlapping `--path` scopes; project claim remains exclusive
+- **Process-tree enrich**: dense poll, optional redacted environ, Linux child-subreaper exit codes
+- **Capture coverage / lag / doctor daily-driver score**
+- **Published local overhead numbers** (Linux aarch64 debug): see `docs/guide/overhead.md`
+
 ## [1.2.0] — 2026-07-12
 
 **Agent Memory Bus / Continuity plane** — project enable means supervised launches deliver a bounded project memory pack (files, env, preamble when possible), not merely “recording is available.”

@@ -96,7 +96,39 @@ retention config when stores grow.
 
 ---
 
-## 5. Result table template
+## 5. Published local results (sample)
+
+Recorded on **2026-07-16** with:
+
+| Field | Value |
+|---|---|
+| OS | Linux aarch64 (Ubuntu 24.04, kernel 6.17.0) |
+| CPU | ARM Neoverse-N1, 4 cores |
+| Rust | rustc 1.97.0 |
+| Build | **debug** (`cargo test`, not release) |
+| Samples | 5 per scenario (`tests/overhead_bench.rs`) |
+| Blackbox | 1.2.0 |
+
+```text
+Scenario                     direct p50/p95   blackbox p50/p95   events  blobs
+true (startup)               0 / 1 ms         147 / 331 ms       38      ~3.6 KiB
+high-volume PTY (200 lines)  1 / 1 ms         521 / 627 ms       94      ~9.3 KiB
+find (shallow)               2 / 2 ms         168 / 260 ms       45      ~3.8 KiB
+nested process tree          53 / 53 ms       191 / 196 ms       46      ~3.6 KiB
+sleep 0.2 harness sim        —                ~339 ms wall       50      ~3.6 KiB
+```
+
+**How to read this**
+
+- Numbers are **debug-build wall times** including process startup, SQLite open,
+  capture layers, and teardown — not steady-state PTY throughput alone.
+- Absolute ms will drop substantially under `cargo test --release`; re-run
+  before publishing release notes.
+- Fixed overhead of a few hundred ms for a short command is expected; ambient
+  harness sessions last minutes, so the ratio is small in practice.
+- Blob sizes above are for a single supervised sample (redacted env + PTY).
+
+### Result table template
 
 Copy into CHANGELOG / release notes after:
 
@@ -126,7 +158,6 @@ nested process tree          ___ ms       ___ ms         ___ ms
 | event write throughput | > 50 ev/s | always-on |
 
 `blackbox doctor` now reports **daily-driver score** (observe-only, redaction clean, store size, last capture quality, capture lag). Aim for `daily-driver: ready` before leaving ambient wrap installed.
-
 ---
 
 ## 6. Related

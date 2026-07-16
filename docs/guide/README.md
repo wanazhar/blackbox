@@ -26,6 +26,8 @@ For the full map (agents, reference, internals), see the [docs index](../README.
 | [Recipes](recipes.md) | 15 end-to-end workflows (CI, eval, vault, claims, …) |
 | [Cheatsheet](cheatsheet.md) | Dense command list |
 | [Adapters](adapters.md) | Claude, Codex, aider, gemini, cursor, … |
+| [Doctor & capture quality](doctor-and-capture.md) | Daily-driver score, coverage surfaces, quality weights |
+| [Annotated examples](examples.md) | status/handoff JSON + jq snippets |
 | [Debug a failure](debug-a-failure.md) | Postmortem, anomalies, evidence → timeline, handoff |
 | [Leave it on](leave-it-on.md) | Ambient shell wrappers, `BLACKBOX_OFF`, wrap list, nest rules |
 | [Configuration](configuration.md) | Precedence, product modes, full knobs + env |

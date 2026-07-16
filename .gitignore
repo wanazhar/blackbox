@@ -36,3 +36,6 @@ blobs/
 # Python
 __pycache__/
 *.py[cod]
+
+# Optional MkDocs output (mkdocs build)
+/site/

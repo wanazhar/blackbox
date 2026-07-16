@@ -19,6 +19,8 @@ Blackbox docs are split by **who is reading** and **what question they have**. T
 | Day-to-day commands | [guide/everyday-use.md](guide/everyday-use.md) |
 | Something failed — debug it | [guide/debug-a-failure.md](guide/debug-a-failure.md) |
 | Ambient capture / shell wrappers | [guide/leave-it-on.md](guide/leave-it-on.md) |
+| Doctor / capture quality | [guide/doctor-and-capture.md](guide/doctor-and-capture.md) |
+| Annotated status/handoff JSON | [guide/examples.md](guide/examples.md) |
 | Config knobs | [guide/configuration.md](guide/configuration.md) |
 | Secrets and threat model | [guide/security.md](guide/security.md) |
 | Export, sync, backup | [guide/export-and-sync.md](guide/export-and-sync.md) |
@@ -26,6 +28,14 @@ Blackbox docs are split by **who is reading** and **what question they have**. T
 | Broken install or store | [guide/troubleshooting.md](guide/troubleshooting.md) |
 
 Guide map: [guide/README.md](guide/README.md).
+
+### Optional local docs site
+
+```bash
+pip install mkdocs-material
+mkdocs serve          # from repo root — uses mkdocs.yml
+mkdocs build -d site  # static output (gitignored)
+```
 
 ---
 

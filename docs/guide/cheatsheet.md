@@ -148,4 +148,4 @@ Session start: `blackbox handoff --json` · skill: [../skills/blackbox.md](../sk
 
 ## See also
 
-[getting-started](getting-started.md) · [recipes](recipes.md) · [adapters](adapters.md) · [glossary](glossary.md) · [troubleshooting](troubleshooting.md)
+[getting-started](getting-started.md) · [recipes](recipes.md) · [adapters](adapters.md) · [doctor-and-capture](doctor-and-capture.md) · [examples](examples.md) · [glossary](glossary.md) · [troubleshooting](troubleshooting.md)

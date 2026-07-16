@@ -23,6 +23,8 @@ All notable changes to **blackbox** are documented here.
   historical AUDIT labeled; PUBLISH preflight includes doc link + first-run tests
 - [cheatsheet](docs/guide/cheatsheet.md), [adapters](docs/guide/adapters.md); docs_first_run golden
   covers postmortem JSON fields + adapter detection table
+- [doctor-and-capture](docs/guide/doctor-and-capture.md), [examples](docs/guide/examples.md) (annotated
+  handoff/status JSON); optional `mkdocs.yml` Material site; coverage weight golden test
 
 ### Daily-driver trust (post-1.2)
 - **Observe-only default** for ambient capture; product mode `recorder` | `continuity`

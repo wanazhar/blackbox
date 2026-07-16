@@ -1,0 +1,95 @@
+# Optional static docs site (Material for MkDocs).
+# Install: pip install mkdocs-material
+# Serve:   mkdocs serve
+# Build:   mkdocs build -d site
+#
+# Source of truth remains GitHub markdown; this file only organizes navigation.
+
+site_name: blackbox docs
+site_description: Flight recorder, debugger, and project memory for AI-agent runs
+site_url: https://github.com/wanazhar/blackbox
+repo_url: https://github.com/wanazhar/blackbox
+repo_name: wanazhar/blackbox
+docs_dir: docs
+site_dir: site
+
+theme:
+  name: material
+  palette:
+    - scheme: slate
+      primary: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Light mode
+    - scheme: default
+      primary: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Dark mode
+  features:
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - content.code.copy
+    - toc.follow
+
+markdown_extensions:
+  - tables
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - toc:
+      permalink: true
+
+plugins:
+  - search
+
+exclude_docs: |
+  plan/**
+  history/**
+  AUDIT.md
+
+nav:
+  - Home: README.md
+  - Start here:
+      - What is blackbox?: guide/what-is-blackbox.md
+      - Concepts: guide/concepts.md
+      - Glossary: guide/glossary.md
+      - Install: guide/install.md
+      - Getting started: guide/getting-started.md
+      - Cheatsheet: guide/cheatsheet.md
+      - Recipes: guide/recipes.md
+  - Operator guides:
+      - Everyday use: guide/everyday-use.md
+      - Debug a failure: guide/debug-a-failure.md
+      - Leave it on: guide/leave-it-on.md
+      - Adapters: guide/adapters.md
+      - Doctor & capture quality: guide/doctor-and-capture.md
+      - Annotated examples: guide/examples.md
+      - Configuration: guide/configuration.md
+      - Security: guide/security.md
+      - Export & sync: guide/export-and-sync.md
+      - Overhead: guide/overhead.md
+      - Troubleshooting: guide/troubleshooting.md
+  - Reference:
+      - CLI: reference/cli.md
+      - JSON API: reference/json-api.md
+      - MCP: reference/mcp.md
+      - Memory pack: reference/memory-pack.md
+      - Portable format: reference/portable-format.md
+      - Stream protocol: reference/stream-protocol.md
+  - Agents:
+      - Skill: skills/blackbox.md
+  - Internals:
+      - Architecture: internals/architecture.md
+      - Capture pipeline: internals/capture-pipeline.md
+      - Storage: internals/storage.md
+      - Continuity plane: internals/continuity-plane.md
+  - Product:
+      - Roadmap: ROADMAP.md
+      - Writing docs: WRITING.md
+      - Ambient contract: ambient-contract.md
+      - Publish (maintainers): PUBLISH.md

@@ -177,7 +177,10 @@ Operator-facing notes for shipped harnesses: [docs/guide/adapters.md](docs/guide
 | `docs/guide/recipes.md` | Operators | Copy-paste workflows |
 | `docs/guide/cheatsheet.md` | Operators | One-screen commands |
 | `docs/guide/adapters.md` | Operators | Harness detection + native logs |
+| `docs/guide/doctor-and-capture.md` | Operators | Doctor score + coverage quality |
+| `docs/guide/examples.md` | Operators | Annotated status/handoff JSON |
 | `docs/guide/everyday-use.md` | Operators | List/show/TUI/serve/search |
+| `mkdocs.yml` | Maintainers | Optional Material docs site nav |
 | `docs/guide/debug-a-failure.md` | Operators | Postmortem, anomalies, handoff |
 | `docs/guide/leave-it-on.md` | Operators | Ambient wrappers + opt-out |
 | `docs/guide/configuration.md` | Operators | Flags, env, config.toml |

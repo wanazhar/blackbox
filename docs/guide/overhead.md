@@ -178,6 +178,7 @@ nested process tree          ___ ms       ___ ms         ___ ms
 
 ## 7. Related
 
+- [Doctor & capture quality](doctor-and-capture.md) — score algorithm + surfaces
 - [Security](security.md) — redaction is always-on by default (small CPU cost)
 - [Configuration](configuration.md) — retention / wrap list / process knobs
 - CLI: `blackbox stats`, `blackbox doctor`, `blackbox gc`

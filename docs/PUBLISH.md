@@ -30,6 +30,8 @@ cargo clippy --all-targets -- -D warnings
 python3 scripts/check_doc_links.py
 cargo test --all-targets
 cargo test --test docs_first_run
+# optional docs site:
+#   pip install mkdocs-material && mkdocs build -d site
 cargo publish --dry-run
 ```
 

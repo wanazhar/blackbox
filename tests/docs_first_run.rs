@@ -217,6 +217,64 @@ fn adapters_md_detection_table() {
     }
 }
 
+#[test]
+fn capture_quality_weights_match_doctor_guide() {
+    // docs/guide/doctor-and-capture.md quality score table
+    use blackbox::capture::coverage::{CaptureCoverage, CaptureSurface, SurfaceStatus};
+    let surfaces = vec![
+        CaptureSurface {
+            name: "pty".into(),
+            enabled: true,
+            status: SurfaceStatus::Complete,
+            events_count: 10,
+            note: None,
+        },
+        CaptureSurface {
+            name: "process".into(),
+            enabled: true,
+            status: SurfaceStatus::Complete,
+            events_count: 5,
+            note: None,
+        },
+        CaptureSurface {
+            name: "git".into(),
+            enabled: true,
+            status: SurfaceStatus::Complete,
+            events_count: 2,
+            note: None,
+        },
+        CaptureSurface {
+            name: "filesystem".into(),
+            enabled: true,
+            status: SurfaceStatus::Complete,
+            events_count: 2,
+            note: None,
+        },
+        CaptureSurface {
+            name: "environment".into(),
+            enabled: true,
+            status: SurfaceStatus::Complete,
+            events_count: 1,
+            note: None,
+        },
+        CaptureSurface {
+            name: "native_logs".into(),
+            enabled: true,
+            status: SurfaceStatus::Complete,
+            events_count: 0,
+            note: None,
+        },
+    ];
+    let score = CaptureCoverage::compute_quality_score(&surfaces);
+    assert_eq!(score, 100, "all complete surfaces should score 100");
+
+    let mut partial = surfaces;
+    partial[0].status = SurfaceStatus::Partial; // pty 0.5 * 0.30
+    // expected: (0.5*0.3 + 0.25 + 0.15 + 0.15 + 0.05 + 0.10) / 1.0 * 100 = 85
+    let score = CaptureCoverage::compute_quality_score(&partial);
+    assert_eq!(score, 85, "pty partial → 85% per documented weights");
+}
+
 #[tokio::test]
 async fn postmortem_text_has_docs_oriented_sections() {
     // Even a trivial success run should produce operator-readable summary text

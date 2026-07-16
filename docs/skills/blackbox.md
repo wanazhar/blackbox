@@ -32,6 +32,8 @@ blackbox memory show --json
 blackbox status --json
 ```
 
+Annotated sample payloads + jq: [../guide/examples.md](../guide/examples.md).
+
 MCP equivalents: `blackbox_handoff`, `blackbox_memory`, `blackbox_status` — call **before** other project edits.
 
 ### Decision procedure

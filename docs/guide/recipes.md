@@ -272,7 +272,16 @@ blackbox show latest
 blackbox timeline latest
 ```
 
-If this fails, capture is broken (see [troubleshooting](troubleshooting.md)). If it works but your harness does not, check wrap list / adapter / ambient decision order.
+If this fails, capture is broken (see [troubleshooting](troubleshooting.md) and [doctor-and-capture](doctor-and-capture.md)). If it works but your harness does not, check wrap list / [adapters](adapters.md) / ambient decision order.
+
+## 16. Read handoff like an agent
+
+```bash
+blackbox handoff --json | jq -r '.data.attention.level'
+blackbox handoff --json | jq -r '.data.project_memory.headline, .data.project_memory.next_action'
+```
+
+**Deeper:** [examples](examples.md) (annotated JSON) · [skills/blackbox](../skills/blackbox.md)
 
 ---
 

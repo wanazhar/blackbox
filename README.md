@@ -75,6 +75,8 @@ Full walkthrough: [Getting started](docs/guide/getting-started.md).
 | Copy-paste workflows | [Recipes](docs/guide/recipes.md) |
 | One-screen commands | [Cheatsheet](docs/guide/cheatsheet.md) |
 | Harness adapters | [Adapters](docs/guide/adapters.md) |
+| Doctor / capture quality | [Doctor & capture](docs/guide/doctor-and-capture.md) |
+| Sample handoff/status JSON | [Examples](docs/guide/examples.md) |
 | Day-to-day CLI / TUI / dashboard | [Everyday use](docs/guide/everyday-use.md) |
 | Debug a failed agent run | [Debug a failure](docs/guide/debug-a-failure.md) |
 | Ambient shell wrappers | [Leave it on](docs/guide/leave-it-on.md) |
@@ -83,6 +85,7 @@ Full walkthrough: [Getting started](docs/guide/getting-started.md).
 | Export / sync / backup | [Export and sync](docs/guide/export-and-sync.md) |
 | Something broken | [Troubleshooting](docs/guide/troubleshooting.md) |
 | **Full docs map** | **[docs/README.md](docs/README.md)** |
+| Local docs site (optional) | `pip install mkdocs-material && mkdocs serve` |
 
 ### Reference & agents
 

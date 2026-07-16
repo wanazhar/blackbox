@@ -8,6 +8,8 @@
 | Install only | [install.md](install.md) |
 | Ambient policy questions | [leave-it-on.md](leave-it-on.md) |
 | Secrets / permissions | [security.md](security.md) |
+| Doctor score / capture quality fields | [doctor-and-capture.md](doctor-and-capture.md) |
+| Interpreting handoff JSON | [examples.md](examples.md) |
 
 ---
 
@@ -35,7 +37,7 @@ blackbox status
 | Capture quality notes | Last run coverage/lag warnings |
 | Daily-driver score notes | Soft score + tips (ambient, vault, eval, …) |
 
-`stats` summarizes runs/events/blobs and retention auto-apply.
+Field-level guide: [doctor-and-capture.md](doctor-and-capture.md). `stats` summarizes runs/events/blobs and retention auto-apply.
 
 ---
 

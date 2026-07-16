@@ -7,6 +7,7 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
+use anyhow::Context;
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -228,7 +229,8 @@ impl ProjectState {
         if !p.exists() {
             return Ok(None);
         }
-        let text = std::fs::read_to_string(&p)?;
+        let bytes = crate::crypto::read_maybe_sealed(&p, root)?;
+        let text = String::from_utf8(bytes).context("state.json is not UTF-8")?;
         let mut state: ProjectState = serde_json::from_str(&text)?;
         // Keep derived flag consistent for old files that only had attention_needed.
         if state.attention_needed && state.attention_level.is_none() {
@@ -245,12 +247,10 @@ impl ProjectState {
         to_write.schema = STATE_SCHEMA.into();
         to_write.attention_needed = !to_write.attention_level.is_none();
         let p = Self::path(root);
-        let tmp = root.join("state.json.tmp");
         let text = serde_json::to_string_pretty(&to_write)?;
-        std::fs::write(&tmp, text)?;
-        crate::privacy::restrict_file(&tmp);
-        std::fs::rename(&tmp, &p)?;
-        crate::privacy::restrict_file(&p);
+        // If store.key exists (encrypt_blobs), seal sticky state at rest.
+        let crypto = crate::crypto::sticky_crypto(root);
+        crate::crypto::write_maybe_sealed(&p, text.as_bytes(), crypto.as_ref())?;
         Ok(())
     }
 

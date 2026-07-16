@@ -650,6 +650,14 @@ pub struct ExportArgs {
     /// Include secrets (disable redaction). Default is redacted.
     #[arg(long)]
     pub no_redact: bool,
+
+    /// Seal portable export (ChaCha20-Poly1305). Use with --passphrase or store key.
+    #[arg(long)]
+    pub encrypt: bool,
+
+    /// Passphrase for sealed export (PBKDF2). Implies --encrypt on portable.
+    #[arg(long, env = "BLACKBOX_EXPORT_PASSPHRASE")]
+    pub passphrase: Option<String>,
 }
 
 #[derive(Args)]
@@ -660,6 +668,10 @@ pub struct ImportArgs {
     /// Keep original ids (fails if run already exists). Default: assign new ids.
     #[arg(long)]
     pub keep_ids: bool,
+
+    /// Passphrase if the file is a sealed export pack.
+    #[arg(long, env = "BLACKBOX_EXPORT_PASSPHRASE")]
+    pub passphrase: Option<String>,
 }
 
 #[derive(Args)]
@@ -2252,7 +2264,8 @@ async fn cmd_export(cli: &Cli, args: &ExportArgs) -> anyhow::Result<()> {
     use crate::export::export_run;
 
     let redact = !args.no_redact;
-    tracing::info!(run_id = %args.run_id, format = ?args.format, redact = %redact, "export run");
+    let want_seal = args.encrypt || args.passphrase.is_some();
+    tracing::info!(run_id = %args.run_id, format = ?args.format, redact = %redact, seal = %want_seal, "export run");
 
     let store = open_store(cli)?;
     let run_id = resolve_run_id(&store, &args.run_id).await?;
@@ -2270,7 +2283,39 @@ async fn cmd_export(cli: &Cli, args: &ExportArgs) -> anyhow::Result<()> {
         ExportFormat::Portable => "portable",
     };
 
-    let output = export_run(&store, &run, &events, format_str, redact).await?;
+    if want_seal && format_str != "portable" {
+        anyhow::bail!("--encrypt / --passphrase only supported with --format portable");
+    }
+
+    let mut output = export_run(&store, &run, &events, format_str, redact).await?;
+    if want_seal {
+        let discovery = discover(cli).ok();
+        let store_crypto = discovery.as_ref().and_then(|d| {
+            crate::crypto::BlobCrypto::load_existing(&crate::crypto::default_key_path(
+                &d.paths.root,
+            ))
+            .ok()
+            .flatten()
+        });
+        // Prefer store crypto from open path when encrypt_blobs is on
+        let store_crypto = store_crypto.or_else(|| {
+            if store.blob_encryption_enabled() {
+                discovery.as_ref().and_then(|d| {
+                    crate::crypto::BlobCrypto::load_or_create(&crate::crypto::default_key_path(
+                        &d.paths.root,
+                    ))
+                    .ok()
+                })
+            } else {
+                None
+            }
+        });
+        output = crate::crypto::seal_export_pack(
+            &output,
+            args.passphrase.as_deref(),
+            store_crypto.as_ref(),
+        )?;
+    }
     print!("{}", output);
 
     Ok(())
@@ -2279,7 +2324,7 @@ async fn cmd_export(cli: &Cli, args: &ExportArgs) -> anyhow::Result<()> {
 async fn cmd_import(cli: &Cli, args: &ImportArgs) -> anyhow::Result<()> {
     use crate::export::portable::import_portable;
 
-    let json = if args.path == "-" {
+    let mut json = if args.path == "-" {
         use std::io::Read;
         let mut buf = String::new();
         std::io::stdin().read_to_string(&mut buf)?;
@@ -2289,6 +2334,23 @@ async fn cmd_import(cli: &Cli, args: &ImportArgs) -> anyhow::Result<()> {
             .map_err(|e| anyhow::anyhow!("read {}: {e}", args.path))?
     };
 
+    // Unwrap sealed export packs before import.
+    if crate::crypto::is_sealed_export_pack(&json) {
+        let discovery = discover(cli).ok();
+        let store_crypto = discovery.as_ref().and_then(|d| {
+            crate::crypto::BlobCrypto::load_existing(&crate::crypto::default_key_path(
+                &d.paths.root,
+            ))
+            .ok()
+            .flatten()
+        });
+        json = crate::crypto::open_export_pack(
+            &json,
+            args.passphrase.as_deref(),
+            store_crypto.as_ref(),
+        )?;
+    }
+
     let store = open_store(cli)?;
     let new_ids = !args.keep_ids;
     if args.keep_ids {
@@ -2296,8 +2358,14 @@ async fn cmd_import(cli: &Cli, args: &ImportArgs) -> anyhow::Result<()> {
         // attempting import, so we fail early with a clear message.
         let parsed: serde_json::Value = serde_json::from_str(&json)
             .map_err(|e| anyhow::anyhow!("--keep-ids requires valid JSON: {e}"))?;
-        if parsed.get("id").is_none() {
-            anyhow::bail!("--keep-ids: imported JSON must contain a top-level \"id\" field");
+        // Portable packs nest id under run; accept either shape.
+        let has_id = parsed.get("id").is_some()
+            || parsed
+                .get("run")
+                .and_then(|r| r.get("id"))
+                .is_some();
+        if !has_id {
+            anyhow::bail!("--keep-ids: imported JSON must contain a top-level \"id\" or run.id field");
         }
     }
     let result = import_portable(&store, &json, new_ids).await?;

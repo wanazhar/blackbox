@@ -15,6 +15,8 @@ All notable changes to **blackbox** are documented here.
 - **Export/sync/serve**: H-08 blob re-scan on portable; serve Bearer-only (no `?token=`); scrub env/diff blobs + auto-GC
 - **Native logs**: `native_log_scope=project` default (no home-dir ingest)
 - **Optional blob encryption**: `encrypt_blobs=true` + `.blackbox/store.key` (ChaCha20-Poly1305)
+- **Sealed export packs**: `export --passphrase` / `--encrypt` + `import` unwrap
+- **Sticky file seal**: `state.json` + `MEMORY.json` encrypted when store.key exists
 
 ## [1.2.0] — 2026-07-12
 

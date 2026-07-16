@@ -68,6 +68,7 @@ continuity = "always"
 # Native log roots: "project" (default), "home" (also ~/.claude etc.), "off"
 # native_log_scope = "project"
 # Encrypt blobs at rest (ChaCha20-Poly1305); key in .blackbox/store.key
+# Also seals state.json + MEMORY.json when the key is present.
 # encrypt_blobs = false
 
 # Auto-resume (legacy 1.0 compat): true | false

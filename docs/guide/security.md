@@ -221,6 +221,34 @@ Native log scan default is **project-only** (`native_log_scope = "project"`)
 so home-dir harness sessions (`~/.claude`, …) are not copied into the store
 unless you set `native_log_scope = "home"`.
 
+When `store.key` exists, **sticky files** are sealed too:
+- `state.json` (claims, goals, attention)
+- `MEMORY.json` / `RESUME.json` (markdown stays plain for agent preambles)
+
+---
+
+## 8. Sealed export packs
+
+Share runs offline without leaving plaintext JSON on disk:
+
+```bash
+# Passphrase-sealed portable (PBKDF2 + ChaCha20-Poly1305)
+blackbox export latest --format portable --passphrase 'long random phrase' > run.bbx.json
+
+# Or seal with the project store key (requires encrypt_blobs / store.key)
+blackbox export latest --format portable --encrypt > run.bbx.json
+
+# Import
+blackbox import run.bbx.json --passphrase 'long random phrase'
+```
+
+Format: `blackbox.export.sealed/v1` JSON envelope (`ciphertext_b64`, optional salt).
+
+**SQLite note:** Run metadata remains in `blackbox.db` unencrypted. High-value
+payloads live in blobs (encryptable) and sealed sticky files. Full SQLCipher
+is not required for daily-driver privacy; treat the DB as metadata index and
+keep `encrypt_blobs=true` + sealed exports for secrets-bearing content.
+
 ### Network binding
 
 ```bash

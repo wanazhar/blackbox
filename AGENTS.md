@@ -134,12 +134,15 @@ Runtime artifacts (`.blackbox/`, `*.db`, `*.db-wal`, `*.db-shm`) are gitignored.
 
 ## Adding a new harness adapter
 
+Operator-facing notes for shipped harnesses: [docs/guide/adapters.md](docs/guide/adapters.md). Update that table + `tests/docs_first_run.rs` (`adapters_md_detection_table`) when detection basenames change.
+
 1. Add detection logic in `src/adapters/detect.rs` (check argv, env, output patterns)
 2. Create parser module in `src/adapters/` (e.g., `my_harness.rs`)
 3. Add native log poller in `src/adapters/native_logs.rs` if applicable
 4. Register in `src/adapters/mod.rs`
 5. Add to the wrap list default in `src/config.rs`
 6. Test with recorded sessions in `tests/`
+7. Document in `docs/guide/adapters.md`
 
 ## Testing
 

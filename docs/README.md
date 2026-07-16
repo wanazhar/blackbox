@@ -9,6 +9,7 @@ Blackbox docs are split by **who is reading** and **what question they have**. T
 | Question | Go here |
 |---|---|
 | What is this, exactly? | [guide/what-is-blackbox.md](guide/what-is-blackbox.md) |
+| Glossary of terms | [guide/glossary.md](guide/glossary.md) |
 | Install and verify | [guide/install.md](guide/install.md) |
 | First project end-to-end | [guide/getting-started.md](guide/getting-started.md) |
 | Day-to-day commands | [guide/everyday-use.md](guide/everyday-use.md) |

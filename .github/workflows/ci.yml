@@ -27,5 +27,8 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
 
+      - name: Doc links
+        run: python3 scripts/check_doc_links.py
+
       - name: Test
         run: cargo test --all-targets

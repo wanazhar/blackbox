@@ -11,6 +11,7 @@ For the full map (agents, reference, internals), see the [docs index](../README.
 | Order | Guide | Answers |
 |---|---|---|
 | 1 | [What is blackbox?](what-is-blackbox.md) | Problem it solves, mental model, boundaries |
+| · | [Glossary](glossary.md) | Precise term definitions |
 | 2 | [Install](install.md) | Binary / cargo, PATH, `doctor` |
 | 3 | [Getting started](getting-started.md) | Enable → first run → inspect (end-to-end) |
 | 4 | [Everyday use](everyday-use.md) | List, show, timeline, TUI, dashboard, search |

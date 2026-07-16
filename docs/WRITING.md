@@ -61,7 +61,7 @@ Avoid opening with version archaeology (1.0 / 1.1 / 1.2 bars). Put that in [ROAD
 
 ## Glossary (preferred terms)
 
-Use these consistently. Parentheticals are acceptable once per page.
+Canonical list for operators: [guide/glossary.md](guide/glossary.md). Use these consistently; parentheticals are acceptable once per page.
 
 | Prefer | Means | Avoid as primary label |
 |---|---|---|

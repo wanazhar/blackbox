@@ -39,7 +39,7 @@ Guide shortcuts: [getting-started](../guide/getting-started.md) · [debug](../gu
 
 ## 1. `enable` / `disable`
 
-Enable or disable project-level capture.
+**When to use:** First time in a repo (`enable`); pause capture without deleting data (`disable`).
 
 ### `enable`
 
@@ -81,7 +81,7 @@ Disables project capture. Does NOT remove `.blackbox/` data — you can re-enabl
 
 ## 2. `run`
 
-Supervise a command under observation.
+**When to use:** Deliberate supervised capture (CI, eval, continuity inject, debugging). Everything after `--` is the child command.
 
 ```bash
 blackbox run [--name <label>] [--ci] [--eval] [--artifact-dir <dir>] [--tag <tag>]...
@@ -147,13 +147,13 @@ blackbox run --name "fix-login" -- claude -p "Fix the login bug"
 
 ## 3. `maybe-run`
 
-Project-gated ambient capture for shell wrappers. Not intended for direct use.
+**When to use:** Almost never by hand. Shell wrappers installed by `enable --install-shell` call this. Prefer `blackbox run` for deliberate recording.
 
 ```bash
 blackbox maybe-run -- <name> [args...]
 ```
 
-Evaluates: `BLACKBOX_OFF` -> nest check -> project enabled -> wrap list -> record or passthrough.
+Evaluates: `BLACKBOX_OFF` → nest check → project enabled → wrap list → record or passthrough. Passthrough never opens the store. Ambient record is always **observe-only**.
 
 **Decision order:**
 
@@ -165,17 +165,17 @@ Evaluates: `BLACKBOX_OFF` -> nest check -> project enabled -> wrap list -> recor
 | 4 | Basename not in wrap list | Passthrough |
 | 5 | Else | Record under project store |
 
+Operator guide: [leave-it-on](../guide/leave-it-on.md). Normative: [ambient-contract](../ambient-contract.md).
+
 ---
 
 ## 4. `status`
 
-Show project capture status, last run, attention level, and suggested next commands.
+**When to use:** Before starting work — is capture enabled, what is attention, what is the last run?
 
 ```bash
 blackbox status [--store <path>]
 ```
-
-**Use case:** Quick check of project state before starting work.
 
 **Scenario:** An agent starts a session and checks what happened:
 
@@ -189,7 +189,7 @@ Returns `enabled`, `store_path`, `last_run`, `attention.level`, `project_memory`
 
 ## 5. `handoff`
 
-Agent handoff: status + resume pack + project memory.
+**When to use:** Session start for agents/humans — status + project memory + resume pack when attention warrants.
 
 ```bash
 blackbox handoff [--always] [--store <path>]
@@ -198,8 +198,6 @@ blackbox handoff [--always] [--store <path>]
 | Arg | Description |
 |---|---|
 | `--always` | Always attach resume pack (not just when attention needed) |
-
-**Use case:** Agent session start.
 
 ```bash
 blackbox handoff --json
@@ -210,6 +208,8 @@ Returns `status` + `project_memory` (full `blackbox.memory/v1`) + `resume_pack` 
 ---
 
 ## 6. `memory show` / `memory set`
+
+**When to use:** Read or update project goal/open items without a full handoff.
 
 ### `memory show`
 
@@ -245,7 +245,7 @@ blackbox memory set --goal "Fix CI" --open "Fix flaky test"
 
 ## 7. `claim`
 
-Manage project and path-scoped claims.
+**When to use:** Multi-agent coordination so two holders do not clobber the same tree.
 
 ```bash
 blackbox claim acquire [--holder <name>] [--ttl-secs <seconds>] [--goal <text>] [--path <scope>]
@@ -281,7 +281,7 @@ blackbox claim status
 
 ## 8. `resolve`
 
-Clear an unresolved failure from sticky state.
+**When to use:** After you actually handled a sticky failure — clear attention (optionally WIP goal/open items).
 
 ```bash
 blackbox resolve [<run-id>] [--clear-wip]
@@ -302,26 +302,26 @@ blackbox resolve --clear-wip
 
 ## 9. `ack`
 
-Acknowledge the gate requirement (`gate_mode=require_ack`).
+**When to use:** Project `gate_mode=require_ack` and an explicit `blackbox run` is blocked until acknowledgment.
 
 ```bash
 blackbox ack
+# equivalent for one command:
+BLACKBOX_ACK=1 blackbox run -- …
 ```
 
-Also honored via `BLACKBOX_ACK=1` env var.
+Does not apply to ambient `maybe-run` (ambient never hard-blocks on gate).
 
 ---
 
 ## 10. `runs`
 
-List recorded runs.
+**When to use:** Find a run id after a session, or filter failures for CI triage.
 
 ```bash
 blackbox runs [--limit <N>] [--status succeeded|failed|cancelled]
               [--tag <tag>] [--json] [--store <path>]
 ```
-
-**Scenario:** Show last 5 failed runs:
 
 ```bash
 blackbox runs --limit 5 --status failed --json
@@ -331,32 +331,10 @@ blackbox runs --limit 5 --status failed --json
 
 ## 11. `show`
 
-Show detailed view of a single run.
+**When to use:** Inspect one run’s metadata and (optionally) transcript, tools, or TUI.
 
 ```bash
 blackbox show <run-id> [--json] [--tui] [--transcript] [--tools] [--store <path>]
-
-With `--tui`, the daily-driver screen shows a **run header** (status, adapter,
-duration, capture quality, files, failures, side-effect risk, observe-only vs
-record mode) plus a content panel switched by keys:
-
-| Key | Panel |
-|---|---|
-| `t` | Timeline |
-| `o` | Processes |
-| `f` | Files |
-| `e` | Failures |
-| `x` | Side effects |
-| `c` | Capture quality |
-| `p` | Postmortem |
-| `h` | Handoff / resume |
-| `r` | Replay preflight (guarantees) |
-| `d` | Diff vs previous run (trajectory LCP) |
-| `/` | Toggle bookkeeping on timeline |
-| `?` | Help |
-| `q` | Quit |
-
-Equivalent CLI/JSON surfaces remain available without the TUI.
 ```
 
 | Arg | Description |
@@ -364,6 +342,26 @@ Equivalent CLI/JSON surfaces remain available without the TUI.
 | `--tui` | Open interactive ratatui TUI viewer |
 | `--transcript` | Print full terminal transcript |
 | `--tools` | Print tool call timeline |
+
+With `--tui`, the header shows status/adapter/duration/capture quality; content panels:
+
+| Key | Panel |
+|---|---|
+| `t` | Timeline |
+| `o` | Processes |
+| `f` | Files |
+| `e` | Failure story (evidence, anomalies) |
+| `a` | Anomalies |
+| `x` | Side effects |
+| `c` | Capture quality |
+| `p` | Postmortem |
+| `h` | Handoff / resume |
+| `r` | Replay preflight |
+| `d` | Diff vs previous run |
+| `Enter` / `g` | Jump to timeline at evidence/`seq=` |
+| `/` | Toggle bookkeeping |
+| `?` | Help |
+| `q` | Quit |
 
 **Scenario:** Inspect a failed run:
 
@@ -375,7 +373,7 @@ blackbox show abc12345 --json
 
 ## 12. `timeline`
 
-Display event timeline for a run.
+**When to use:** Walk ordered events; filter to tools or errors after postmortem evidence points at a `seq`.
 
 ```bash
 blackbox timeline <run-id> [--semantic] [--kind <kind>] [--source <source>]
@@ -384,13 +382,12 @@ blackbox timeline <run-id> [--semantic] [--kind <kind>] [--source <source>]
 
 | Arg | Description |
 |---|---|
-| `--semantic` | Group by semantic meaning (tool calls, errors, etc.) |
+| `--semantic` | Hide bookkeeping observer noise (preferred default in UIs) |
 | `--kind <kind>` | Filter by event kind (e.g. `tool.call`, `terminal.output`) |
 | `--source <source>` | Filter by event source (e.g. `Tool`, `Terminal`, `Filesystem`) |
 
-**Scenario:** View only tool calls in a run:
-
 ```bash
+blackbox timeline latest --semantic
 blackbox timeline abc12345 --kind tool.call --json
 ```
 
@@ -398,13 +395,11 @@ blackbox timeline abc12345 --kind tool.call --json
 
 ## 13. `inspect`
 
-Show full details of a single event, including blob content.
+**When to use:** Expand one event (metadata + blob payload) after timeline or evidence names an event id.
 
 ```bash
 blackbox inspect <event-id> [--json] [--store <path>]
 ```
-
-**Scenario:** Inspect a specific tool result:
 
 ```bash
 blackbox inspect evt_xyz789 --json
@@ -414,7 +409,7 @@ blackbox inspect evt_xyz789 --json
 
 ## 14. `diff`
 
-Compare two runs.
+**When to use:** “It worked yesterday” — compare two runs’ semantic trajectories.
 
 ```bash
 blackbox diff <run-a> <run-b> [--trajectory] [--json] [--store <path>]
@@ -422,19 +417,20 @@ blackbox diff <run-a> <run-b> [--trajectory] [--json] [--store <path>]
 
 | Arg | Description |
 |---|---|
-| `--trajectory` | Include human-readable trajectory report |
+| `--trajectory` | Emphasize human-readable trajectory report (LCP / divergence) |
 
-**Scenario:** Compare a failed run with a successful retry:
+Prints shared semantic prefix, first divergence with seq labels, exclusive steps, files after divergence, and a next-step hint.
 
 ```bash
 blackbox diff abc123 xyz789 --trajectory
+blackbox diff latest <prev> --json
 ```
 
 ---
 
 ## 15. `analyze`
 
-Run analysis passes (errors, side-effects, correlations) on a run.
+**When to use:** Persist or review derived analysis (errors, side-effects, correlations) without full postmortem narrative.
 
 ```bash
 blackbox analyze <run-id> [--pass error|side-effect|correlation] [--json] [--store <path>]
@@ -444,22 +440,21 @@ blackbox analyze <run-id> [--pass error|side-effect|correlation] [--json] [--sto
 |---|---|
 | `--pass <name>` | Run a specific pass only (repeatable). Default: all |
 
-**Scenario:** Analyze errors in a failed run:
-
 ```bash
 blackbox analyze abc12345 --pass error --json
 ```
 
+For headline/evidence/anomalies prefer [`postmortem`](#31-postmortem).
+
+---
 
 ## 16. `search`
 
-Full-text search across events (FTS5).
+**When to use:** Full-text find across stored events (FTS5) when you remember a string but not the run id.
 
 ```bash
 blackbox search <query> [--limit <N>] [--json] [--store <path>]
 ```
-
-**Scenario:** Find all events mentioning "timeout":
 
 ```bash
 blackbox search "timeout" --limit 10 --json
@@ -469,13 +464,11 @@ blackbox search "timeout" --limit 10 --json
 
 ## 17. `watch`
 
-Live-tail events for a run as they appear.
+**When to use:** Live-tail events for a run that is still recording (CLI alternative to dashboard live view).
 
 ```bash
 blackbox watch <run-id> [--store <path>]
 ```
-
-**Scenario:** Watch a running CI job in real-time:
 
 ```bash
 blackbox watch abc12345
@@ -483,57 +476,51 @@ blackbox watch abc12345
 
 ---
 
-## 17b. `diff`
-
-Compare two runs (trajectory-first explain + tool/file tails).
-
-```bash
-blackbox diff <run-a> <run-b>
-blackbox diff <run-a> <run-b> --trajectory
-blackbox diff latest <prev> --json
-```
-
-Prints shared semantic prefix, first divergence with seq labels, exclusive steps,
-files touched only after divergence, and a next-step hint.
-
----
-
 ## 18. `export`
 
-Export a run trace to a shareable format.
+**When to use:** Share or archive one run. Default is **redacted**. Guide: [export-and-sync](../guide/export-and-sync.md).
 
 ```bash
 blackbox export <run-id> [--format jsonl|html|portable]
+                         [-o <path>]
                          [--no-redact]
                          [--encrypt] [--passphrase <phrase>]
 ```
 
 | Arg | Description |
 |---|---|
-| `--format` | Output format: `jsonl`, `html`, or `portable` (default `jsonl`) |
-| `--no-redact` | Export unredacted (dangerous) |
-| `--encrypt` | Seal portable with store key (requires `encrypt_blobs` / `store.key`) |
-| `--passphrase` | Seal portable with PBKDF2-derived key (`BLACKBOX_EXPORT_PASSPHRASE`) |
+| `--format` | `jsonl`, `html`, or `portable` |
+| `--no-redact` | Export unredacted (**dangerous**) |
+| `--encrypt` | Seal portable with store key |
+| `--passphrase` | Seal portable with PBKDF2 (`BLACKBOX_EXPORT_PASSPHRASE`) |
 
-Sealed packs use format `blackbox.export.sealed/v1` (ChaCha20-Poly1305).
+```bash
+blackbox export latest --format html -o report.html
+blackbox export latest --format portable --passphrase '…' -o run.bbx.json
+```
+
+Sealed packs: `blackbox.export.sealed/v1`.
 
 ---
 
 ## 19. `import`
 
-Import a portable JSON archive (or sealed pack) into the store.
+**When to use:** Load a portable (or sealed) archive into the current store.
 
 ```bash
 blackbox import <file> [--keep-ids] [--passphrase <phrase>]
 ```
 
-Sealed packs are unwrapped automatically when `--passphrase` or the project store key is available.
+```bash
+blackbox import trace.json
+blackbox import run.bbx.json --passphrase '…'
+```
 
 ---
 
 ## 19b. `backup` / `restore`
 
-Sealed offline vault of sticky files + optional SQLite DB / blobs.
+**When to use:** Cold vault of sticky state + optional SQLite/blobs (laptop theft, machine move). Not a substitute for live SQLCipher.
 
 ```bash
 blackbox backup -o vault.bbx.json --passphrase '…' [--include-db] [--include-blobs]
@@ -542,114 +529,149 @@ blackbox restore vault.bbx.json --passphrase '…'
 
 | Arg | Description |
 |---|---|
-| `--passphrase` | Seal/open with PBKDF2 (recommended) |
+| `--passphrase` | Seal/open with PBKDF2 (**recommended**) |
 | `--store-key` | Seal with project store key instead |
-| `--include-db` | Embed `blackbox.db` (default true) |
+| `--include-db` | Embed `blackbox.db` |
 | `--include-blobs` | Embed content blobs (size-capped) |
 
-`store.key` is never embedded in backups.
+`store.key` is never embedded in backups. See [security](../guide/security.md).
 
 ---
 
 ## 20. `sync push` / `sync pull`
 
-Sync traces with a remote backend.
+**When to use:** Replicate runs to a directory, HTTP sync endpoint, or S3 (redacted by default).
 
 ```bash
 blackbox sync push [--dir <path>] [--remote <url>] [--s3 <url>] [--no-redact]
 blackbox sync pull [--dir <path>] [--remote <url>] [--s3 <url>] [--no-redact]
 ```
 
+```bash
+blackbox sync push --dir /mnt/backup/traces
+blackbox sync pull --s3 s3://bucket/prefix/
+```
+
 ---
 
 ## 21. `serve`
 
-Start the local web dashboard.
+**When to use:** Local web UI + JSON/SSE API for browsing runs. Default bind `127.0.0.1:7788`.
 
 ```bash
-blackbox serve [--bind <addr>] [--token <token>] [--store <path>]
+blackbox serve [--bind <addr>] [--token <token>] [--store <path>] [--reindex]
 ```
 
 | Arg | Description |
 |---|---|
 | `--bind <addr>` | Bind address (default `127.0.0.1:7788`) |
-| `--token <token>` | Auth token for API access |
+| `--token <token>` | Auth token (`BLACKBOX_SERVE_TOKEN`); **required** off-loopback |
+| `--reindex` | Rebuild FTS before serving |
 
-**Endpoints:**
+**Auth:** `Authorization: Bearer <token>` only (no query API auth).
 
 | Path | Description |
 |---|---|
 | `GET /` | Dashboard home (SSE run list + anomaly badges) |
-| `GET /runs/{id}` | Run detail (anomaly chips, tools, timeline) |
-| `GET /runs/{id}/live` | Live SSE timeline + anomaly refresh |
+| `GET /runs/{id}` | Run detail |
+| `GET /runs/{id}/live` | Live SSE timeline |
 | `GET /api/status` | Project status |
 | `GET /api/handoff` | Handoff JSON |
 | `GET /api/runs` | Runs list |
-| `GET /api/runs/{id}/anomalies` | Anomaly markers for a run (`{run_id,count,anomalies}`) |
+| `GET /api/runs/{id}/anomalies` | Anomaly markers |
+
+```bash
+blackbox serve --token "$TOKEN"
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:7788/api/runs
+```
+
+---
 
 ## 22. `replay`
 
-Replay a recorded run.
+**When to use:** Revisit a run without trusting LLM re-execution. Modes differ in how much they re-execute tools.
 
 ```bash
-blackbox replay <run-id> [--mode timeline|mock|sandbox] [--store <path>]
+blackbox replay <run-id> [--mode timeline|mock|sandbox|live] [--store <path>]
 ```
 
-| Mode | Description |
-|---|---|
-| `timeline` | Print event timeline |
-| `mock` | Re-run tool calls with mock responses |
-| `sandbox` | Replay in a sandboxed environment |
+| Mode | Executes? | Notes |
+|---|---|---|
+| `timeline` | No | Playback |
+| `mock` | No | Mock tool results |
+| `sandbox` | Yes, isolated | Lossy; dangerous ops blocked |
+| `live` | Yes | **Dangerous** — real re-execution |
+
+Not deterministic model replay.
+
+```bash
+blackbox replay latest --mode timeline
+```
 
 ---
 
 ## 23. `fork`
 
-Fork a new run from recorded context.
+**When to use:** Start a new run from recorded context; optionally launch native harness resume when a session is known.
 
 ```bash
-blackbox fork <run-id> [--launch <command>] [--store <path>]
+blackbox fork <run-id> [--launch] [--name <label>] [--store <path>]
+```
+
+```bash
+blackbox fork abc12345
+blackbox fork abc12345 --launch
 ```
 
 ---
 
 ## 24. `scrub`
 
-Re-redact historical secrets and optionally GC orphaned blobs.
+**When to use:** Re-apply current secret patterns to historical events after scanner improvements or accidental raw capture.
 
 ```bash
 blackbox scrub [--gc] [--store <path>]
+```
+
+```bash
+blackbox scrub --gc
 ```
 
 ---
 
 ## 25. `doctor`
 
-Diagnose store health and environment.
+**When to use:** First diagnostic for path, schema, permissions, encryption tips, daily-driver score, orphan runs.
 
 ```bash
 blackbox doctor [--reindex] [--json] [--store <path>]
 ```
 
-Output: store path, schema version, run count, DB size, blob count/size, storage warning, memory/claim/continuity fields.
+```bash
+blackbox doctor
+blackbox doctor --json
+```
 
 ---
 
 ## 26. `rm`
 
-Delete one or more runs.
+**When to use:** Delete specific runs by id. Orphaned blobs may remain until GC.
 
 ```bash
 blackbox rm <run-id>... [--store <path>]
 ```
 
-Note: blob files not removed (use `scrub --gc`).
+```bash
+blackbox rm abc12345 def67890
+blackbox scrub --gc    # reclaim blobs
+```
 
 ---
 
 ## 27. `purge`
 
-Delete runs by policy.
+**When to use:** Bulk delete by policy (keep N, age, status). Prefer `--dry-run` first.
 
 ```bash
 blackbox purge [--keep <N>] [--status <s>] [--older-than <duration>]
@@ -659,14 +681,19 @@ blackbox purge [--keep <N>] [--status <s>] [--older-than <duration>]
 | Arg | Description |
 |---|---|
 | `--keep <N>` | Keep N most recent runs |
-| `--older-than <d>` | Delete runs older than duration (e.g. `30d`) |
-| `--dry-run` | Simulate without deleting |
+| `--older-than <d>` | Delete older than duration (e.g. `30d`) |
+| `--dry-run` | Simulate |
+
+```bash
+blackbox purge --keep 50 --dry-run
+blackbox purge --keep 50
+```
 
 ---
 
 ## 28. `tags` / `tag`
 
-List tags or add/remove a tag on a run.
+**When to use:** Label runs for filtering (`runs --tag`, CI `eval`/`ci` tags).
 
 ```bash
 blackbox tags
@@ -674,33 +701,45 @@ blackbox tag <run-id> <tag>
 blackbox tag --remove <run-id> <tag>
 ```
 
+```bash
+blackbox tag latest nightly
+blackbox runs --tag nightly
+```
+
 ---
 
 ## 29. `stats`
 
-Aggregate store dashboard.
+**When to use:** Aggregate store size and volume (pairs with [overhead](../guide/overhead.md)).
 
 ```bash
 blackbox stats [--json] [--store <path>]
 ```
 
-Output: run count, event count, blob count, db size, total storage, warnings.
+```bash
+blackbox stats --json
+```
 
 ---
 
 ## 30. `gc`
 
-Run retention policy (dry-run or apply) from config.
+**When to use:** Apply retention from config (`[retention]`) without hand-picking ids. Alias-style policy path for `purge`.
 
 ```bash
 blackbox gc [--dry-run] [--store <path>]
+```
+
+```bash
+blackbox gc --dry-run
+blackbox gc
 ```
 
 ---
 
 ## 31. `postmortem`
 
-One-command failure/success postmortem.
+**When to use:** One-shot failure/success story: headline, next_action, evidence, anomalies. Primary debug command after a bad run.
 
 ```bash
 blackbox postmortem <run-id> [--fail-on-failure] [--json] [--store <path>]
@@ -708,13 +747,20 @@ blackbox postmortem <run-id> [--fail-on-failure] [--json] [--store <path>]
 
 | Arg | Description |
 |---|---|
-| `--fail-on-failure` | Exit 1 if run failed/cancelled |
+| `--fail-on-failure` | Exit 1 if run failed/cancelled (CI) |
+
+```bash
+blackbox postmortem latest
+blackbox postmortem latest --json --fail-on-failure
+```
+
+Guide: [debug-a-failure](../guide/debug-a-failure.md).
 
 ---
 
 ## 32. `summary`
 
-Run summary (alias for postmortem).
+**When to use:** Alias for [`postmortem`](#31-postmortem) (same summary builder).
 
 ```bash
 blackbox summary <run-id> [--json] [--store <path>]
@@ -724,7 +770,7 @@ blackbox summary <run-id> [--json] [--store <path>]
 
 ## 33. `context`
 
-Bounded resume pack for a single run.
+**When to use:** Bounded resume pack for **one run** (token-capped). Prefer `handoff` for project-level session start.
 
 ```bash
 blackbox context <run-id> [--for-resume] [--max-tokens <N>] [--json] [--store <path>]
@@ -732,32 +778,40 @@ blackbox context <run-id> [--for-resume] [--max-tokens <N>] [--json] [--store <p
 
 | Arg | Description |
 |---|---|
-| `--for-resume` | Build resume-optimized pack |
-| `--max-tokens <N>` | Token budget (default 4000) |
+| `--for-resume` | Resume-optimized packing |
+| `--max-tokens <N>` | Budget (default 4000) |
+
+```bash
+blackbox context latest --for-resume --json --max-tokens 4000
+```
 
 ---
 
 ## 34. `mcp`
 
-Start the MCP stdio server.
+**When to use:** Expose status/handoff/memory/search tools to MCP clients over stdio. Tool list: [mcp.md](mcp.md).
 
 ```bash
 blackbox mcp [--store <path>]
 ```
 
-Reads JSON-RPC 2.0 requests from stdin, writes responses to stdout.
+JSON-RPC 2.0 on stdin/stdout. Agents: [skills/blackbox.md](../skills/blackbox.md).
 
 ---
 
 ## 35. `completions`
 
-Generate shell completion scripts.
+**When to use:** Install shell completions for interactive CLI use.
 
 ```bash
 blackbox completions <shell>
 ```
 
-Supported shells: `bash`, `zsh`, `fish`, `powershell`, `elvish`.
+Supported: `bash`, `zsh`, `fish`, `powershell`, `elvish`.
+
+```bash
+blackbox completions bash > ~/.local/share/bash-completion/completions/blackbox
+```
 
 ---
 
@@ -766,4 +820,4 @@ Supported shells: `bash`, `zsh`, `fish`, `powershell`, `elvish`.
 | Code | Meaning |
 |---|---|
 | 0 | Success |
-| 1 | General error / run failed (`--ci` mode) |
+| 1 | General error / run failed (`--ci` / `--eval` / `--fail-on-failure`) |

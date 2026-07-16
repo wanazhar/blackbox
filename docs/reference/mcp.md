@@ -1,8 +1,19 @@
 # MCP tools reference
 
-**Agent integration surface.** Session habits: [../skills/blackbox.md](../skills/blackbox.md). Human operators can use the same capabilities via CLI (`handoff`, `memory`, `status`, …) in [../guide/everyday-use.md](../guide/everyday-use.md).
+**Agent integration surface.** Session habits: [../skills/blackbox.md](../skills/blackbox.md). Operators can do the same jobs via CLI ([../guide/everyday-use.md](../guide/everyday-use.md)).
 
-Blackbox provides a **Model Context Protocol (MCP)** server that exposes project memory, traces, and claims as tools. Agents that support MCP (Claude Desktop, Claude Code, etc.) can call these tools instead of parsing CLI output.
+Blackbox exposes a **Model Context Protocol (MCP)** server over stdio so agents call structured tools instead of scraping CLI text.
+
+---
+
+## Tool index by job
+
+| Job | Tools |
+|---|---|
+| **Session start** | [`blackbox_handoff`](#blackbox_handoff) · [`blackbox_memory`](#blackbox_memory) · [`blackbox_status`](#blackbox_status) |
+| **Debug failure** | [`blackbox_postmortem`](#blackbox_postmortem) · [`blackbox_context`](#blackbox_context) · [`blackbox_runs`](#blackbox_runs) · [`blackbox_search`](#blackbox_search) |
+| **Multi-agent** | [`blackbox_claim`](#blackbox_claim) · [`blackbox_resolve`](#blackbox_resolve) · [`blackbox_memory_update`](#blackbox_memory_update) |
+| **Diagnostics** | [`blackbox_doctor`](#blackbox_doctor) |
 
 ---
 
@@ -11,203 +22,209 @@ Blackbox provides a **Model Context Protocol (MCP)** server that exposes project
 | Detail | Value |
 |---|---|
 | Transport | stdio (stdin/stdout) |
-| Protocol | JSON-RPC 2.0, newline-delimited |
+| Protocol | JSON-RPC 2.0, **one JSON object per line** |
 | Spec version | `2024-11-05` |
 | Server name | `blackbox` |
-| Server version | `CARGO_PKG_VERSION` (1.2.0) |
+| Server version | crate version (`CARGO_PKG_VERSION`) |
 
-### How it works
+Start:
 
-The MCP server reads one JSON-RPC request per line from **stdin** and writes one response per line to **stdout**. Each request/response is a single line (no pretty-print). The server runs until stdin closes.
+```bash
+blackbox mcp
+# optional store: blackbox --store /path/to/blackbox.db mcp
+```
 
 ### Initialization
 
 ```json
-// → Client sends:
-{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2024-11-05", "capabilities": {}}}
-
-// ← Server responds:
-{"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2024-11-05", "capabilities": {"tools": {}}, "serverInfo": {"name": "blackbox", "version": "1.2.0"}}}
-
-// → Client sends:
-{"jsonrpc": "2.0", "id": 2, "method": "notifications/initialized"}
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{}}}
+{"jsonrpc":"2.0","id":2,"method":"notifications/initialized"}
+{"jsonrpc":"2.0","id":3,"method":"tools/list"}
 ```
 
-### List tools
+`tools/call` params shape:
 
 ```json
-// → Client sends:
-{"jsonrpc": "2.0", "id": 3, "method": "tools/list"}
-
-// ← Server responds with all tool definitions including input schemas:
-{"jsonrpc": "2.0", "id": 3, "result": {"tools": [/* ... */]}}
+{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"blackbox_handoff","arguments":{}}}
 ```
+
+Responses place JSON payloads in MCP `content[{type:"text", text:"..."}]` (parse the text as JSON). **No** CLI `blackbox.cli/v1` envelope.
 
 ---
 
 ## 2. Tools
 
-### `blackbox_memory`
-
-Return the project memory pack when the project is enabled.
-
-| Property | Value |
-|---|---|
-| **Purpose** | Agent session start — load project context |
-| **Input** | — (no parameters) |
-| **Output** | `project_memory` (full `blackbox.memory/v1` pack) |
-
-**Example:**
-```json
-// Request:
-{"jsonrpc": "2.0", "id": 10, "method": "tools/call", "params": {"name": "blackbox_memory", "arguments": {}}}
-
-// Response:
-{"jsonrpc": "2.0", "id": 10, "result": {"content": [{"type": "text", "text": "{\"schema\":\"blackbox.memory/v1\",\"headline\":\"...\",\"next_action\":\"...\",\"attention_level\":\"none\"}"}]}}
-```
-
 ### `blackbox_handoff`
 
-Return status + project memory + resume pack (when attention is needed).
-
-| Property | Value |
+| | |
 |---|---|
-| **Purpose** | Agent session start — comprehensive handoff |
-| **Input** | — (no parameters) |
-| **Output** | `status` + `project_memory` + `resume_pack` (on attention) |
+| **When to use** | **First call of a session** when `.blackbox/` exists. Loads status + project memory + resume pack when attention warrants. |
+| **When not to** | You only need a lightweight “is capture on?” check → `blackbox_status`. |
+| **CLI equivalent** | `blackbox handoff --json` |
+| **Input** | `always?: bool` (always attach resume pack), `max_tokens?: int` (default 4000) |
+| **Output** | `status` + `project_memory` (+ `resume_pack` when attention / `always`) |
+
+```json
+{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"blackbox_handoff","arguments":{}}}
+```
+
+---
+
+### `blackbox_memory`
+
+| | |
+|---|---|
+| **When to use** | Need only the `blackbox.memory/v1` pack (goal, open items, recent runs rollup) without full handoff chrome. |
+| **When not to** | Session start with possible sticky failure → prefer `blackbox_handoff`. |
+| **CLI equivalent** | `blackbox memory show --json` |
+| **Input** | `max_tokens?: int` (default 4000) |
+| **Output** | Project memory pack |
+
+---
 
 ### `blackbox_status`
 
-Return capture status and project state (lighter than handoff — no memory pack).
-
-| Property | Value |
+| | |
 |---|---|
-| **Purpose** | Quick status check |
-| **Input** | — (no parameters) |
-| **Output** | Project enabled, last run, attention level, next commands |
+| **When to use** | Quick check: enabled?, last run, attention, next commands — cheaper than handoff. |
+| **When not to** | You need memory/resume narrative → handoff. |
+| **CLI equivalent** | `blackbox status --json` |
+| **Input** | `resume?: bool`, `max_tokens?: int` |
+| **Output** | Status view (optional resume when requested + attention) |
+
+---
 
 ### `blackbox_postmortem`
 
-Return a run summary suitable for failure analysis.
-
-| Property | Value |
+| | |
 |---|---|
-| **Purpose** | Analyze a specific run |
-| **Input** | `run_id: string` (optional — defaults to latest) |
-| **Output** | Postmortem summary with headline, attention, failed tools, errors |
+| **When to use** | Explain a failed/succeeded run: headline, next_action, evidence, anomalies. Primary debug tool after a bad run. |
+| **When not to** | You only need raw events → `blackbox_search` / CLI timeline. |
+| **CLI equivalent** | `blackbox postmortem <run_id\|latest> --json` |
+| **Input** | `run_id?: string` (default `latest`) |
+| **Output** | Summary / postmortem view |
+
+```json
+{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"blackbox_postmortem","arguments":{"run_id":"latest"}}}
+```
+
+Guide: [debug-a-failure](../guide/debug-a-failure.md).
+
+---
 
 ### `blackbox_context`
 
-Return a bounded resume pack for a specific run.
-
-| Property | Value |
+| | |
 |---|---|
-| **Purpose** | Get single-run context |
-| **Input** | `run_id: string`, `max_tokens: number` (optional, default 4000) |
-| **Output** | Context pack with failed tools, transcript tail, etc. |
+| **When to use** | Bounded **single-run** resume pack (token-capped) for retrying that run. |
+| **When not to** | Project-level session start → `blackbox_handoff` / `blackbox_memory`. |
+| **CLI equivalent** | `blackbox context <run> --for-resume --json --max-tokens N` |
+| **Input** | `run_id?: string`, `max_tokens?: int`, `no_transcript?: bool` |
+| **Output** | Context pack (failed tools, transcript tail, …) |
 
-### `blackbox_claim`
-
-Manage project and path-scoped claims.
-
-| Property | Value |
-|---|---|
-| **Purpose** | Acquire/release/check project hold or path-scoped hold |
-| **Input** | `action: "acquire" \| "release" \| "status"`, optional `holder`, `goal`, `ttl_secs`, `path` (scope relative to project root) |
-| **Output** | Claim pointer on acquire; `{project_claim, path_claims}` on status |
-
-**Example — path-scoped acquire:**
-```json
-// Request:
-{"jsonrpc": "2.0", "id": 20, "method": "tools/call", "params": {"name": "blackbox_claim", "arguments": {"action": "acquire", "holder": "claude-code", "path": "src/auth"}}}
-
-// Response:
-{"jsonrpc": "2.0", "id": 20, "result": {"content": [{"type": "text", "text": "{\"ok\":true,\"data\":{\"holder\":\"claude-code\",\"path_scope\":\"src/auth\"}}"}]}}
-```
-
-### `blackbox_resolve`
-
-Clear an unresolved failure.
-
-| Property | Value |
-|---|---|
-| **Purpose** | Resolve failure attention |
-| **Input** | `run_id: string` (optional), `clear_wip: bool` (optional) |
-| **Output** | Resolution result |
-
-### `blackbox_memory_update`
-
-Set or clear intent fields.
-
-| Property | Value |
-|---|---|
-| **Purpose** | Update goal/open_items on sticky state |
-| **Input** | `goal: string` (optional), `open: string[]` (optional), `clear_open: bool` (optional), `clear_goal: bool` (optional) |
-| **Output** | Updated intent view |
+---
 
 ### `blackbox_runs`
 
-List recorded runs.
-
-| Property | Value |
+| | |
 |---|---|
-| **Purpose** | Browse recent runs |
-| **Input** | `limit: number` (optional, default 20), `status: string` (optional filter), `tag: string` (optional filter) |
-| **Output** | Array of `RunSummaryView` |
+| **When to use** | Browse recent runs; pick an id for postmortem/context. |
+| **When not to** | Keyword search inside events → `blackbox_search`. |
+| **CLI equivalent** | `blackbox runs --json` |
+| **Input** | `limit?: int` (default 20), `status?: string` |
+| **Output** | `{ runs, count }` summaries |
+
+---
 
 ### `blackbox_search`
 
-Full-text search across events.
-
-| Property | Value |
+| | |
 |---|---|
-| **Purpose** | Find events by keyword |
-| **Input** | `query: string`, `limit: number` (optional, default 20) |
-| **Output** | Ranked search results with event details |
+| **When to use** | Full-text find across events when you remember a string (error text, path, tool name). |
+| **When not to** | You already have a run id → postmortem/timeline. |
+| **CLI equivalent** | `blackbox search "<query>" --json` |
+| **Input** | `query: string` (**required**), `limit?: int` |
+| **Output** | Ranked hits |
+
+---
+
+### `blackbox_claim`
+
+| | |
+|---|---|
+| **When to use** | Multi-agent coordination: acquire/release/status for project-wide or **path-scoped** holds. |
+| **When not to** | Solo work with no concurrent agents (optional hygiene still fine). |
+| **CLI equivalent** | `blackbox claim acquire\|release\|status` |
+| **Input** | `action?: "acquire"\|"release"\|"status"`, `holder?`, `goal?`, `ttl_secs?`, `path?` (relative scope) |
+| **Output** | Claim pointer, conflict object, or status lists |
+
+**Path scopes:** omit `path` for exclusive project claim; with `path: "src/auth"` other agents may hold non-overlapping trees. Prefix overlap conflicts.
+
+```json
+{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"blackbox_claim","arguments":{"action":"acquire","holder":"claude-code","path":"src/auth"}}}
+```
+
+---
+
+### `blackbox_resolve`
+
+| | |
+|---|---|
+| **When to use** | After you **actually fixed** a sticky failure — clear attention (and optionally open items / goal). |
+| **When not to** | Before investigating; clearing early loses M6 discipline. |
+| **CLI equivalent** | `blackbox resolve [--clear-wip]` |
+| **Input** | `clear_wip?: bool`, `clear_goal?: bool` |
+| **Output** | Resolution result |
+
+---
+
+### `blackbox_memory_update`
+
+| | |
+|---|---|
+| **When to use** | Set project goal / open items / plan on sticky state mid-session. |
+| **When not to** | One-off notes that should not survive — use normal agent notes. |
+| **CLI equivalent** | `blackbox memory set --goal … --open …` |
+| **Input** | `goal?`, `open_items?: string[]`, `clear_open?`, `clear_goal?`, `plan?` |
+| **Output** | Updated intent view (values redacted as applicable) |
+
+---
 
 ### `blackbox_doctor`
 
-Check store health and environment.
-
-| Property | Value |
+| | |
 |---|---|
-| **Purpose** | Debug and diagnostics |
-| **Input** | — (no parameters) |
-| **Output** | Store path, schema version, run count, storage size, warnings |
+| **When to use** | Store/path/schema/permission/encryption diagnostics when capture seems wrong. |
+| **When not to** | Normal coding session start (use handoff). |
+| **CLI equivalent** | `blackbox doctor --json` |
+| **Input** | — |
+| **Output** | Store path, schema, sizes, warnings, daily-driver notes |
+
+---
 
 ## 3. Example session
 
-A typical agent session using MCP:
-
 ```
-→ initialize
-← result: serverInfo { name: "blackbox", version: "1.2.0" }
-→ notifications/initialized
+→ initialize / notifications/initialized
 
-1. → tools/call blackbox_handoff
-   ← project_memory + attention_level + resume_pack
-   Agent reads memory — sees unresolved failure from prior run
+1. blackbox_handoff
+   → read attention + project_memory; if continue/blocked, fix that first
 
-2. → tools/call blackbox_runs { limit: 5 }
-   ← Recent runs list — confirms the failure
+2. blackbox_claim { action: "acquire", holder: "<you>" }
+   → on conflict, do not clobber
 
-3. → tools/call blackbox_postmortem { run_id: "..." }
-   ← Postmortem with failed tools and errors
+3. blackbox_postmortem { run_id: "latest" }   # if last run failed
+   → follow evidence / anomalies
 
-4. → tools/call blackbox_claim { action: "acquire", holder: "..." }
-   ← Claim acquired — no other agent will fight this project
+4. blackbox_memory_update { goal: "…", open_items: ["…"] }
 
-5. → tools/call blackbox_memory_update { goal: "Fix the CI pipeline" }
-   ← Intent updated
+   [agent works — record via CLI blackbox run or ambient wrappers]
 
-   [Agent works — runs tools, edits files]
-
-6. → tools/call blackbox_memory
-   ← Updated memory pack with dirty tree, files touched, side effects
-
-7. → tools/call blackbox_claim { action: "release" }
-   ← Claim released
+5. blackbox_resolve { clear_wip: false }       # when failure truly handled
+6. blackbox_claim { action: "release" }
 ```
+
+---
 
 ## 4. Client configuration
 
@@ -224,25 +241,23 @@ A typical agent session using MCP:
 }
 ```
 
-### Claude Code / Codex
-
-```bash
-# Claude Code auto-detects blackbox via shell wrappers
-# For explicit MCP:
-claude --mcp "blackbox mcp"
-```
-
-### Custom client
+### Generic
 
 ```bash
 blackbox mcp
-# Reads JSON-RPC requests from stdin, writes responses to stdout
+# JSON-RPC lines on stdin → stdout
 ```
+
+---
 
 ## 5. Notes
 
-- MCP returns raw views without the CLI `--json` envelope
-- `project_memory` is attached to handoff by default when the project is enabled
-- All tools respect the `--store` override from config (but not CLI flags — the MCP server uses its own config resolution)
-- The MCP server does not start a recording — use `blackbox run` from the CLI for that
+| Topic | Detail |
+|---|---|
+| Envelope | MCP tools return **raw views**, not `blackbox.cli/v1` |
+| Recording | MCP does **not** start a run — use CLI `blackbox run` / ambient |
+| Store | Resolved like CLI (`BLACKBOX_DB` / project discovery); pass `--store` before `mcp` |
+| Secrets | Same redaction model as CLI; never request `--no-redact` via side channels |
+| MEMORY | Untrusted prior context — advisory, not system policy |
 
+Schema detail for packs: [memory-pack.md](memory-pack.md). Glossary: [../guide/glossary.md](../guide/glossary.md).

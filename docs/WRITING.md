@@ -114,3 +114,5 @@ Design-doc IDs (A1, M6, …) belong in roadmap/plan docs, not in operator guides
 - [ ] Do links go to the right track (guide vs reference vs internals)?
 - [ ] Did we avoid inventing behavior that only exists in a plan doc?
 - [ ] Spelling of product terms matches this glossary?
+- [ ] `python3 scripts/check_doc_links.py` passes (files + heading anchors)
+- [ ] Getting-started contract still green: `cargo test --test docs_first_run`

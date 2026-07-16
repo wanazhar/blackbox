@@ -4,6 +4,8 @@
 
 **Prerequisites:** [Install](install.md) (`blackbox --version` works). **Background:** [What is blackbox?](what-is-blackbox.md).
 
+CI keeps this path honest: `cargo test --test docs_first_run` (record → list → postmortem → artifact files).
+
 ---
 
 ## 1. Enable a project

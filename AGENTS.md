@@ -152,6 +152,7 @@ Runtime artifacts (`.blackbox/`, `*.db`, `*.db-wal`, `*.db-shm`) are gitignored.
 | `tests/overhead_smoke.rs` | A6 gate: soft wall-time budget for supervising `true` |
 | `tests/shell_soak.rs` | Real bash install -> ambient record -> BLACKBOX_OFF |
 | `tests/ci_eval.rs` | `--ci` exit code propagation |
+| `tests/docs_first_run.rs` | Getting-started happy path + short_id / artifact contract |
 | `tests/security.rs` | Security invariants |
 | `tests/test_critical.rs` | Critical path smoke tests |
 

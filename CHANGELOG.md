@@ -15,7 +15,9 @@ All notable changes to **blackbox** are documented here.
   troubleshooting (Q→fix), export/sync (decision table + vault), overhead (cost knobs)
 - CLI reference: command index by job; **when to use** on every subcommand; sample outputs in guides
 - Glossary (`docs/guide/glossary.md`); agent skill rewrite aligned with human track
-- CI: `python3 scripts/check_doc_links.py` on docs/README/AGENTS markdown links
+- CI: `python3 scripts/check_doc_links.py` — relative files **and** GitHub-style heading anchors
+- Golden first-run contract: `tests/docs_first_run.rs` (run → list → postmortem → artifact files)
+- MCP reference: **when to use / when not** per tool + job index
 
 ### Daily-driver trust (post-1.2)
 - **Observe-only default** for ambient capture; product mode `recorder` | `continuity`

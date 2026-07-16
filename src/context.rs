@@ -369,6 +369,52 @@ pub async fn build_context_pack(
             pack.truncated = true;
             continue;
         }
+        // Shrink embedded postmortem (headline/next stay; drop bulk narrative)
+        if pack.summary.narrative.len() > 200 {
+            pack.summary.narrative = truncate_str(&pack.summary.narrative, 200);
+            pack.truncated = true;
+            continue;
+        }
+        if pack.summary.evidence.len() > 2 {
+            pack.summary.evidence.truncate(2);
+            pack.truncated = true;
+            continue;
+        }
+        if !pack.summary.evidence.is_empty() {
+            pack.summary.evidence.clear();
+            pack.truncated = true;
+            continue;
+        }
+        if pack.summary.turning_points.len() > 3 {
+            pack.summary.turning_points.truncate(3);
+            pack.truncated = true;
+            continue;
+        }
+        if pack.summary.failure_fix_chains.len() > 1 {
+            pack.summary.failure_fix_chains.truncate(1);
+            pack.truncated = true;
+            continue;
+        }
+        if pack.summary.side_effects.len() > 3 {
+            pack.summary.side_effects.truncate(3);
+            pack.truncated = true;
+            continue;
+        }
+        if !pack.summary.side_effects.is_empty() {
+            pack.summary.side_effects.clear();
+            pack.truncated = true;
+            continue;
+        }
+        if pack.summary.errors.len() > 3 {
+            pack.summary.errors.truncate(3);
+            pack.truncated = true;
+            continue;
+        }
+        if pack.summary.narrative.len() > 40 {
+            pack.summary.narrative = truncate_str(&pack.summary.narrative, 40);
+            pack.truncated = true;
+            continue;
+        }
         pack.truncated = true;
         break;
     }

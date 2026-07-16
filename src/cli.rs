@@ -2166,44 +2166,17 @@ async fn cmd_diff(cli: &Cli, args: &DiffArgs) -> anyhow::Result<()> {
     let events_a = store.get_events(&id_a).await?;
     let events_b = store.get_events(&id_b).await?;
 
-    if args.trajectory || cli.json {
-        let traj = crate::trajectory::diff_trajectories(&id_a, &events_a, &id_b, &events_b);
-        if cli.json {
-            return output::emit_ok("diff", &traj);
-        }
-        if args.trajectory {
-            println!(
-                "Trajectory diff {} vs {}  common_prefix={}",
-                short_id(&id_a),
-                short_id(&id_b),
-                traj.common_prefix_len
-            );
-            if let Some(div) = &traj.first_divergence {
-                println!("  first divergence at index {}", div.index);
-                if let Some(a) = &div.a {
-                    println!("    A: seq={} {}", a.sequence, a.label);
-                }
-                if let Some(b) = &div.b {
-                    println!("    B: seq={} {}", b.sequence, b.label);
-                }
-            } else {
-                println!("  trajectories identical (semantic)");
-            }
-            if !traj.only_a.is_empty() {
-                println!("  only in A ({}):", traj.only_a.len());
-                for s in traj.only_a.iter().take(15) {
-                    println!("    seq={} {}", s.sequence, s.label);
-                }
-            }
-            if !traj.only_b.is_empty() {
-                println!("  only in B ({}):", traj.only_b.len());
-                for s in traj.only_b.iter().take(15) {
-                    println!("    seq={} {}", s.sequence, s.label);
-                }
-            }
-            return Ok(());
-        }
+    // Trajectory-first compare with explain text (ultimate debugger UX).
+    let traj = crate::trajectory::diff_trajectories(&id_a, &events_a, &id_b, &events_b);
+    if cli.json {
+        return output::emit_ok("diff", &traj);
     }
+    print!("{}", crate::trajectory::format_diff_text(&traj));
+    if args.trajectory {
+        return Ok(());
+    }
+    println!();
+
 
     println!("Comparing runs:");
     println!(

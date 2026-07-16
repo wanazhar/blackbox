@@ -51,6 +51,25 @@ pub struct SummaryView {
     /// Recommended next action for handoff.
     #[serde(default)]
     pub next_action: String,
+    /// Evidence-linked anchors (event sequences / files) for the next action.
+    #[serde(default)]
+    pub evidence: Vec<EvidenceLink>,
+    /// One-line headline for agents (≤120 chars).
+    #[serde(default)]
+    pub headline: String,
+}
+
+/// A pointer agents can use to jump to evidence in the timeline.
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct EvidenceLink {
+    pub role: String,
+    pub detail: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sequence: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -202,7 +221,8 @@ pub async fn build_summary(
         })
         .collect();
 
-    let next_action = recommend_next_action(run, &fix_chains, &retry_waste, &turning_points);
+    let (next_action, evidence) =
+        recommend_next_action(run, &fix_chains, &retry_waste, &turning_points, &errors);
 
     // ── Capture coverage ─────────────────────────────────────────────
     let coverage_ev = events.iter().find(|e| e.kind == "capture.coverage");
@@ -324,6 +344,7 @@ pub async fn build_summary(
     }
 
     // Build narrative before moving values into SummaryView
+    let headline = build_headline(run, &errors, tools_failed, &fix_chains);
     let narrative = build_narrative(&SummaryNarrativeData {
         command: &run.command,
         status: &run.status,
@@ -343,6 +364,7 @@ pub async fn build_summary(
         truncated,
         events_scanned,
         total_events: total,
+        headline: &headline,
     });
 
     Ok(SummaryView {
@@ -378,7 +400,43 @@ pub async fn build_summary(
         retry_waste,
         turning_points,
         next_action,
+        evidence,
+        headline,
     })
+}
+
+fn build_headline(
+    run: &Run,
+    errors: &[StructuredErrorView],
+    tools_failed: usize,
+    fix_chains: &[FailureFixChainView],
+) -> String {
+    use crate::core::run::RunStatus;
+    let short = crate::util::short_id(&run.id);
+    match &run.status {
+        RunStatus::Succeeded => {
+            if tools_failed > 0 {
+                format!("{short}: succeeded with {tools_failed} tool failure(s) during the run")
+            } else {
+                format!("{short}: succeeded")
+            }
+        }
+        RunStatus::Failed | RunStatus::Cancelled => {
+            if let Some(e) = errors.first() {
+                let msg: String = e.message.chars().take(60).collect();
+                format!("{short}: {:?} — {msg}", run.status)
+            } else if let Some(c) = fix_chains.first() {
+                let msg: String = c.error_message.chars().take(60).collect();
+                format!("{short}: {:?} — {msg}", run.status)
+            } else {
+                format!(
+                    "{short}: {:?} (exit {:?})",
+                    run.status, run.exit_code
+                )
+            }
+        }
+        other => format!("{short}: {other:?}"),
+    }
 }
 
 fn recommend_next_action(
@@ -386,34 +444,95 @@ fn recommend_next_action(
     fix_chains: &[FailureFixChainView],
     retry_waste: &[RetryWasteView],
     turning_points: &[TurningPointView],
-) -> String {
+    errors: &[StructuredErrorView],
+) -> (String, Vec<EvidenceLink>) {
     use crate::core::run::RunStatus;
+    let short = crate::util::short_id(&run.id).to_string();
+    let mut evidence = Vec::new();
+
     if matches!(run.status, RunStatus::Failed | RunStatus::Cancelled) {
-        if turning_points.iter().any(|p| p.kind == "unresolved") {
-            return format!(
-                "Inspect unresolved failure on run {} (`blackbox postmortem {} --json`), then fix and re-verify",
-                crate::util::short_id(&run.id),
-                crate::util::short_id(&run.id)
-            );
+        if let Some(tp) = turning_points.iter().find(|p| p.kind == "first_failure") {
+            evidence.push(EvidenceLink {
+                role: "first_failure".into(),
+                detail: tp.detail.clone(),
+                event_id: tp.event_id.clone(),
+                sequence: tp.sequence,
+                path: None,
+            });
+        }
+        if let Some(e) = errors.first() {
+            evidence.push(EvidenceLink {
+                role: "top_error".into(),
+                detail: e.message.chars().take(120).collect(),
+                event_id: None,
+                sequence: Some(e.sequence),
+                path: e.file.clone(),
+            });
         }
         if let Some(chain) = fix_chains.first() {
-            return format!(
-                "Continue from failure-to-fix chain: {} — review files then re-run verification",
-                chain.error_message.chars().take(80).collect::<String>()
+            for f in chain.files_changed.iter().take(5) {
+                evidence.push(EvidenceLink {
+                    role: "edited_after_failure".into(),
+                    detail: f.clone(),
+                    event_id: Some(chain.error_event_id.clone()),
+                    sequence: None,
+                    path: Some(f.clone()),
+                });
+            }
+            let action = if chain.retry_successful == Some(true) {
+                format!(
+                    "Verify the fix for «{}» still holds; then `blackbox resolve` if attention is sticky",
+                    chain.error_message.chars().take(60).collect::<String>()
+                )
+            } else if !chain.files_changed.is_empty() {
+                format!(
+                    "Re-run verification after reviewing edits to {}; start with `blackbox timeline {} --semantic`",
+                    chain.files_changed.join(", "),
+                    short
+                )
+            } else {
+                format!(
+                    "Open first failure (seq evidence) via `blackbox timeline {} --semantic`, fix, re-verify",
+                    short
+                )
+            };
+            return (action, evidence);
+        }
+        if turning_points.iter().any(|p| p.kind == "unresolved") {
+            return (
+                format!(
+                    "Unresolved failure on {short}: `blackbox handoff --json` then fix and re-verify"
+                ),
+                evidence,
             );
         }
-        return format!(
-            "blackbox handoff --json  # resume pack for {}",
-            crate::util::short_id(&run.id)
+        return (
+            format!("blackbox handoff --json  # resume pack for {short}"),
+            evidence,
         );
     }
     if retry_waste.iter().any(|r| r.kind == "no_progress_retry") {
-        return "Agent showed non-progressing retries — review approach before continuing".into();
+        if let Some(r) = retry_waste.first() {
+            evidence.push(EvidenceLink {
+                role: "retry_waste".into(),
+                detail: r.detail.clone(),
+                event_id: r.sample_event_ids.first().cloned(),
+                sequence: None,
+                path: None,
+            });
+        }
+        return (
+            "Non-progressing retries detected — change approach before continuing; inspect retry samples in postmortem JSON".into(),
+            evidence,
+        );
     }
     if matches!(run.status, RunStatus::Succeeded) {
-        return "Run succeeded — review capture quality and open items before merge".into();
+        return (
+            "Run succeeded — `blackbox status --json` then merge or clear WIP if done".into(),
+            evidence,
+        );
     }
-    "blackbox status --json".into()
+    ("blackbox status --json".into(), evidence)
 }
 
 /// Data used to build the narrative summary.
@@ -436,11 +555,15 @@ struct SummaryNarrativeData<'a> {
     truncated: bool,
     events_scanned: usize,
     total_events: Option<usize>,
+    headline: &'a str,
 }
 
-/// Build a narrative summary of the run.
+/// Build a narrative summary of the run (story-first for agents).
 fn build_narrative(data: &SummaryNarrativeData) -> String {
     let mut n = String::new();
+
+    // Story headline first (10-second answer)
+    n.push_str(&format!("Story: {}\n", data.headline));
 
     // Opening statement
     let command_preview = if data.command.len() <= 4 {
@@ -482,6 +605,15 @@ fn build_narrative(data: &SummaryNarrativeData) -> String {
         n.push_str(&format!(" — duration {:.1}s", dur as f64 / 1000.0));
     }
     n.push('\n');
+
+    // Causal arc from turning points
+    if data.turning_points.len() >= 2 {
+        n.push_str("Arc:");
+        for p in data.turning_points.iter().take(6) {
+            n.push_str(&format!(" [{}]", p.kind));
+        }
+        n.push('\n');
+    }
 
     // What was attempted
     n.push_str(&format!("Attempts: {} tool calls", data.tools_total,));
@@ -652,9 +784,28 @@ pub fn format_summary_text(s: &SummaryView) -> String {
         "Postmortem {}  status={:?}  exit={:?}  duration_ms={:?}\n",
         s.short_id, s.status, s.exit_code, s.duration_ms
     ));
+    if !s.headline.is_empty() {
+        out.push_str(&format!("  headline: {}\n", s.headline));
+    }
     out.push_str(&format!("  command: {}\n", s.command.join(" ")));
     if !s.tags.is_empty() {
         out.push_str(&format!("  tags: {}\n", s.tags.join(", ")));
+    }
+    if !s.next_action.is_empty() {
+        out.push_str(&format!("  next: {}\n", s.next_action));
+    }
+    if !s.evidence.is_empty() {
+        out.push_str("  evidence:\n");
+        for e in s.evidence.iter().take(8) {
+            out.push_str(&format!("    - [{}] {}", e.role, e.detail));
+            if let Some(seq) = e.sequence {
+                out.push_str(&format!(" (seq={seq})"));
+            }
+            if let Some(ref p) = e.path {
+                out.push_str(&format!(" path={p}"));
+            }
+            out.push('\n');
+        }
     }
 
     // Narrative section

@@ -1,4 +1,6 @@
-//! Ordered trajectory diff between two runs (greedy LCP).
+//! Ordered trajectory diff between two runs (greedy LCP) + explain text.
+
+use std::collections::HashSet;
 
 use serde::Serialize;
 
@@ -50,6 +52,7 @@ pub fn semantic_events(events: &[TraceEvent]) -> Vec<&TraceEvent> {
                     | "harness.result"
                     | "harness.usage"
                     | "process.spawned"
+                    | "process.exec"
                     | "filesystem.modified"
                     | "filesystem.created"
                     | "filesystem.deleted"
@@ -67,6 +70,18 @@ pub struct TrajectoryDiffView {
     pub only_a: Vec<TrajectoryStep>,
     pub only_b: Vec<TrajectoryStep>,
     pub prefix: Vec<TrajectoryStep>,
+    /// Human-readable explanation of where/why the runs diverge.
+    #[serde(default)]
+    pub explanation: String,
+    /// Suggested follow-up command for agents.
+    #[serde(default)]
+    pub next_hint: String,
+    /// Files touched only after divergence in A.
+    #[serde(default)]
+    pub files_only_a: Vec<String>,
+    /// Files touched only after divergence in B.
+    #[serde(default)]
+    pub files_only_b: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -96,7 +111,110 @@ impl TrajectoryStep {
     }
 }
 
-/// Greedy longest common prefix on semantic keys, then tails.
+fn paths_after_seq(events: &[TraceEvent], min_seq: u64) -> Vec<String> {
+    let mut set = HashSet::new();
+    let mut out = Vec::new();
+    for ev in events {
+        if ev.sequence < min_seq {
+            continue;
+        }
+        if !ev.kind.starts_with("filesystem.") && !ev.kind.contains("write") {
+            // Include tool-side local writes when path present
+            if ev.side_effect != crate::core::event::SideEffect::LocalWrite
+                && ev.side_effect != crate::core::event::SideEffect::Destructive
+            {
+                continue;
+            }
+        }
+        if let Some(p) = ev.metadata.get("path").and_then(|v| v.as_str()) {
+            if set.insert(p.to_string()) {
+                out.push(p.to_string());
+            }
+        }
+    }
+    out.truncate(30);
+    out
+}
+
+fn explain(
+    lcp: usize,
+    div: &Option<DivergencePoint>,
+    only_a: &[TrajectoryStep],
+    only_b: &[TrajectoryStep],
+    files_a: &[String],
+    files_b: &[String],
+) -> (String, String) {
+    if div.is_none() && only_a.is_empty() && only_b.is_empty() {
+        return (
+            "Trajectories share a full semantic prefix — no tool-level divergence.".into(),
+            "Runs are aligned; compare postmortems if outcomes still differ.".into(),
+        );
+    }
+    let mut parts = Vec::new();
+    parts.push(format!("Shared semantic prefix: {lcp} step(s)."));
+    if let Some(d) = div {
+        match (&d.a, &d.b) {
+            (Some(a), Some(b)) => {
+                parts.push(format!(
+                    "First divergence at index {}: A did «{}» while B did «{}».",
+                    d.index, a.label, b.label
+                ));
+            }
+            (Some(a), None) => {
+                parts.push(format!(
+                    "After prefix, only A continued (first extra: «{}»).",
+                    a.label
+                ));
+            }
+            (None, Some(b)) => {
+                parts.push(format!(
+                    "After prefix, only B continued (first extra: «{}»).",
+                    b.label
+                ));
+            }
+            _ => {}
+        }
+    }
+    if !only_a.is_empty() || !only_b.is_empty() {
+        parts.push(format!(
+            "Tail length: A has {} exclusive step(s), B has {}.",
+            only_a.len(),
+            only_b.len()
+        ));
+    }
+    if !files_a.is_empty() || !files_b.is_empty() {
+        parts.push(format!(
+            "Files after divergence — only A: {}; only B: {}.",
+            if files_a.is_empty() {
+                "none".into()
+            } else {
+                files_a.iter().take(5).cloned().collect::<Vec<_>>().join(", ")
+            },
+            if files_b.is_empty() {
+                "none".into()
+            } else {
+                files_b.iter().take(5).cloned().collect::<Vec<_>>().join(", ")
+            }
+        ));
+    }
+
+    let hint = if let Some(d) = div {
+        if let (Some(a), Some(b)) = (&d.a, &d.b) {
+            format!(
+                "Inspect seq {} on A and seq {} on B (`blackbox timeline <id> --semantic`)",
+                a.sequence, b.sequence
+            )
+        } else {
+            "Inspect the first exclusive step on the longer run with `blackbox timeline <id> --semantic`".into()
+        }
+    } else {
+        "Compare postmortems: `blackbox postmortem <a>` vs `blackbox postmortem <b>`".into()
+    };
+
+    (parts.join(" "), hint)
+}
+
+/// Greedy longest common prefix on semantic keys, then tails + explanation.
 pub fn diff_trajectories(
     run_a: &str,
     events_a: &[TraceEvent],
@@ -140,6 +258,41 @@ pub fn diff_trajectories(
         .map(|e| TrajectoryStep::from_event(e))
         .collect();
 
+    // Files after the sequence of the last common step (or 0)
+    let min_seq_a = only_a.first().map(|s| s.sequence).unwrap_or(u64::MAX);
+    let min_seq_b = only_b.first().map(|s| s.sequence).unwrap_or(u64::MAX);
+    let files_only_a = if min_seq_a == u64::MAX {
+        Vec::new()
+    } else {
+        paths_after_seq(events_a, min_seq_a)
+    };
+    let files_only_b = if min_seq_b == u64::MAX {
+        Vec::new()
+    } else {
+        paths_after_seq(events_b, min_seq_b)
+    };
+
+    // Symmetric difference of file sets for "only" display
+    let set_a: HashSet<_> = files_only_a.iter().cloned().collect();
+    let set_b: HashSet<_> = files_only_b.iter().cloned().collect();
+    let files_only_a: Vec<_> = files_only_a
+        .into_iter()
+        .filter(|p| !set_b.contains(p))
+        .collect();
+    let files_only_b: Vec<_> = files_only_b
+        .into_iter()
+        .filter(|p| !set_a.contains(p))
+        .collect();
+
+    let (explanation, next_hint) = explain(
+        lcp,
+        &first_divergence,
+        &only_a,
+        &only_b,
+        &files_only_a,
+        &files_only_b,
+    );
+
     TrajectoryDiffView {
         run_a: run_a.to_string(),
         run_b: run_b.to_string(),
@@ -148,7 +301,62 @@ pub fn diff_trajectories(
         only_a,
         only_b,
         prefix,
+        explanation,
+        next_hint,
+        files_only_a,
+        files_only_b,
     }
+}
+
+/// Human-readable compare text for CLI / agents.
+pub fn format_diff_text(d: &TrajectoryDiffView) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "Compare {} vs {}  common_prefix={}\n",
+        &d.run_a[..8.min(d.run_a.len())],
+        &d.run_b[..8.min(d.run_b.len())],
+        d.common_prefix_len
+    ));
+    if !d.explanation.is_empty() {
+        out.push_str(&format!("Explain: {}\n", d.explanation));
+    }
+    if !d.next_hint.is_empty() {
+        out.push_str(&format!("Next: {}\n", d.next_hint));
+    }
+    if let Some(div) = &d.first_divergence {
+        out.push_str(&format!("First divergence at index {}\n", div.index));
+        if let Some(a) = &div.a {
+            out.push_str(&format!("  A: seq={} {}\n", a.sequence, a.label));
+        }
+        if let Some(b) = &div.b {
+            out.push_str(&format!("  B: seq={} {}\n", b.sequence, b.label));
+        }
+    }
+    if !d.files_only_a.is_empty() {
+        out.push_str(&format!(
+            "Files only after divergence in A: {}\n",
+            d.files_only_a.join(", ")
+        ));
+    }
+    if !d.files_only_b.is_empty() {
+        out.push_str(&format!(
+            "Files only after divergence in B: {}\n",
+            d.files_only_b.join(", ")
+        ));
+    }
+    if !d.only_a.is_empty() {
+        out.push_str(&format!("Only in A ({}):\n", d.only_a.len()));
+        for s in d.only_a.iter().take(15) {
+            out.push_str(&format!("  seq={} {}\n", s.sequence, s.label));
+        }
+    }
+    if !d.only_b.is_empty() {
+        out.push_str(&format!("Only in B ({}):\n", d.only_b.len()));
+        for s in d.only_b.iter().take(15) {
+            out.push_str(&format!("  seq={} {}\n", s.sequence, s.label));
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -166,6 +374,16 @@ mod tests {
         ev
     }
 
+    fn fs(seq: u64, path: &str) -> TraceEvent {
+        let mut ev = TraceEvent::new("r", EventSource::Filesystem, "filesystem.modified");
+        ev.sequence = seq;
+        ev.status = EventStatus::Success;
+        ev.side_effect = SideEffect::LocalWrite;
+        ev.metadata
+            .insert("path".into(), serde_json::json!(path));
+        ev
+    }
+
     #[test]
     fn lcp_and_divergence() {
         let a = vec![tool(1, "Read"), tool(2, "Bash"), tool(3, "Write")];
@@ -175,5 +393,18 @@ mod tests {
         assert!(d.first_divergence.is_some());
         assert_eq!(d.only_a.len(), 2);
         assert_eq!(d.only_b.len(), 2);
+        assert!(d.explanation.contains("divergence"));
+        assert!(!d.next_hint.is_empty());
+    }
+
+    #[test]
+    fn files_after_divergence() {
+        let a = vec![tool(1, "Read"), tool(2, "Bash"), fs(3, "src/a.rs")];
+        let b = vec![tool(1, "Read"), tool(2, "Edit"), fs(3, "src/b.rs")];
+        let d = diff_trajectories("a", &a, "b", &b);
+        assert!(d.files_only_a.iter().any(|p| p == "src/a.rs"));
+        assert!(d.files_only_b.iter().any(|p| p == "src/b.rs"));
+        let text = format_diff_text(&d);
+        assert!(text.contains("Explain:"));
     }
 }

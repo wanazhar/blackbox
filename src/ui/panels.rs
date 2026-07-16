@@ -223,6 +223,25 @@ pub fn trajectory_diff_lines(
         ),
         event_id: None,
     });
+    if !diff.explanation.is_empty() {
+        // Wrap explanation into short lines for the panel.
+        let mut rest = diff.explanation.as_str();
+        while !rest.is_empty() {
+            let end = rest.floor_char_boundary(90.min(rest.len()));
+            let chunk = &rest[..end];
+            lines.push(PanelLine {
+                text: format!("  {chunk}"),
+                event_id: None,
+            });
+            rest = rest[end..].trim_start();
+        }
+    }
+    if !diff.next_hint.is_empty() {
+        lines.push(PanelLine {
+            text: format!("Next: {}", diff.next_hint),
+            event_id: None,
+        });
+    }
     if let Some(ref div) = diff.first_divergence {
         lines.push(PanelLine {
             text: format!("First divergence at index {}", div.index),
@@ -243,6 +262,24 @@ pub fn trajectory_diff_lines(
     } else {
         lines.push(PanelLine {
             text: "No divergence — trajectories share full semantic prefix".into(),
+            event_id: None,
+        });
+    }
+    if !diff.files_only_a.is_empty() {
+        lines.push(PanelLine {
+            text: format!(
+                "Files only A: {}",
+                diff.files_only_a.iter().take(6).cloned().collect::<Vec<_>>().join(", ")
+            ),
+            event_id: None,
+        });
+    }
+    if !diff.files_only_b.is_empty() {
+        lines.push(PanelLine {
+            text: format!(
+                "Files only B: {}",
+                diff.files_only_b.iter().take(6).cloned().collect::<Vec<_>>().join(", ")
+            ),
             event_id: None,
         });
     }

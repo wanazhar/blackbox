@@ -19,6 +19,8 @@ All notable changes to **blackbox** are documented here.
 - **Sticky file seal**: `state.json` + `MEMORY.json` encrypted when store.key exists
 - **Sealed store backup/restore**: `blackbox backup` / `restore` (DB + sticky; optional blobs)
 - **External key path**: `BLACKBOX_STORE_KEY_FILE` / `~/.config/blackbox/default.key`
+- **Explain & compare**: postmortem `headline` + `evidence` links; trajectory `explanation` /
+  `next_hint` / files after divergence; `diff` always prints explain text first
 
 ## [1.2.0] — 2026-07-12
 

@@ -453,6 +453,21 @@ blackbox watch abc12345
 
 ---
 
+## 17b. `diff`
+
+Compare two runs (trajectory-first explain + tool/file tails).
+
+```bash
+blackbox diff <run-a> <run-b>
+blackbox diff <run-a> <run-b> --trajectory
+blackbox diff latest <prev> --json
+```
+
+Prints shared semantic prefix, first divergence with seq labels, exclusive steps,
+files touched only after divergence, and a next-step hint.
+
+---
+
 ## 18. `export`
 
 Export a run trace to a shareable format.

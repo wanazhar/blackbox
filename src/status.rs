@@ -315,10 +315,20 @@ pub async fn build_status(
                     )
                     .await
                     {
+                        // Prefer headline + next_action for agents; keep short narrative.
+                        let narrative = if !summary.headline.is_empty() {
+                            format!(
+                                "{}\n{}",
+                                summary.headline,
+                                summary.narrative.chars().take(1000).collect::<String>()
+                            )
+                        } else {
+                            summary.narrative.chars().take(1200).collect()
+                        };
                         postmortem = Some(PostmortemHandoffView {
                             run_id: summary.run_id.clone(),
                             short_id: summary.short_id.clone(),
-                            narrative: summary.narrative.chars().take(1200).collect(),
+                            narrative,
                             next_action: summary.next_action.clone(),
                             failure_count: summary.errors.len() + summary.tools.failed,
                             turning_points: summary

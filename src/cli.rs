@@ -198,6 +198,9 @@ pub struct ClaimAcquireArgs {
     pub ttl_secs: Option<u64>,
     #[arg(long)]
     pub holder: Option<String>,
+    /// Path scope relative to project root (e.g. `src/auth`). Omit for whole-project claim.
+    #[arg(long)]
+    pub path: Option<String>,
 }
 
 #[derive(Args, Clone, Default)]
@@ -3626,9 +3629,7 @@ async fn cmd_resolve(cli: &Cli, args: &ResolveArgs) -> anyhow::Result<()> {
 }
 
 async fn cmd_claim(cli: &Cli, args: &ClaimArgs) -> anyhow::Result<()> {
-    use crate::state::{
-        claim_acquire, claim_heartbeat, claim_holder_id, claim_release, ProjectState,
-    };
+    use crate::state::{claim_heartbeat, claim_holder_id, claim_release, ProjectState};
 
     let discovery = discover(cli)?;
     let ttl_default = discovery
@@ -3639,25 +3640,28 @@ async fn cmd_claim(cli: &Cli, args: &ClaimArgs) -> anyhow::Result<()> {
 
     match &args.action {
         ClaimAction::Acquire(a) => {
+            use crate::state::claim_acquire_scoped;
             let (default_holder, kind) = claim_holder_id(None, None, false);
             let holder = a.holder.clone().unwrap_or(default_holder);
             let ttl = a.ttl_secs.unwrap_or(ttl_default);
-            match claim_acquire(
+            match claim_acquire_scoped(
                 &discovery.paths.root,
                 &holder,
                 &kind,
                 None,
                 a.goal.clone(),
                 ttl,
+                a.path.clone(),
             )? {
                 Ok(c) => {
                     if cli.json {
                         return output::emit_ok("claim_acquire", &c);
                     }
                     println!(
-                        "claim acquired id={} holder={} until {}",
+                        "claim acquired id={} holder={} scope={} until {}",
                         c.id,
                         c.holder,
+                        c.path_scope.as_deref().unwrap_or("(project)"),
                         c.expires_at.to_rfc3339()
                     );
                 }
@@ -3693,16 +3697,39 @@ async fn cmd_claim(cli: &Cli, args: &ClaimArgs) -> anyhow::Result<()> {
             Ok(())
         }
         ClaimAction::Status => {
-            let sticky = ProjectState::load(&discovery.paths.root)?.unwrap_or_default();
+            let mut sticky = ProjectState::load(&discovery.paths.root)?.unwrap_or_default();
+            sticky.expire_claim_if_needed(chrono::Utc::now());
             if cli.json {
-                return output::emit_ok("claim_status", &sticky.active_claim);
+                #[derive(serde::Serialize)]
+                struct ClaimStatusView {
+                    project_claim: Option<crate::state::ClaimPointer>,
+                    path_claims: Vec<crate::state::ClaimPointer>,
+                }
+                return output::emit_ok(
+                    "claim_status",
+                    &ClaimStatusView {
+                        project_claim: sticky.active_claim.clone(),
+                        path_claims: sticky.path_claims.clone(),
+                    },
+                );
             }
-            match sticky.active_claim {
-                Some(c) => println!(
-                    "active claim holder={} kind={} until {} run={:?}",
+            if sticky.active_claim.is_none() && sticky.path_claims.is_empty() {
+                println!("no active claims");
+            }
+            if let Some(c) = &sticky.active_claim {
+                println!(
+                    "project claim holder={} kind={} until {} run={:?}",
                     c.holder, c.holder_kind, c.expires_at, c.run_id
-                ),
-                None => println!("no active claim"),
+                );
+            }
+            for c in &sticky.path_claims {
+                println!(
+                    "path claim scope={} holder={} kind={} until {}",
+                    c.path_scope.as_deref().unwrap_or("?"),
+                    c.holder,
+                    c.holder_kind,
+                    c.expires_at
+                );
             }
             Ok(())
         }

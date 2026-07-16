@@ -215,24 +215,36 @@ blackbox memory set --goal "Fix CI" --open "Fix flaky test"
 
 ## 7. `claim`
 
-Manage the project claim.
+Manage project and path-scoped claims.
 
 ```bash
-blackbox claim acquire [--holder <name>] [--ttl <seconds>]
-blackbox claim release
+blackbox claim acquire [--holder <name>] [--ttl-secs <seconds>] [--goal <text>] [--path <scope>]
+blackbox claim release [--holder <name>]
 blackbox claim status
+blackbox claim heartbeat [--holder <name>] [--ttl-secs <seconds>]
 ```
 
 | Subcommand | Description |
 |---|---|
-| `acquire` | Acquire exclusive project claim. Fails if another agent holds live claim |
-| `release` | Release your claim |
-| `status` | Show current claim (without lock, may be stale) |
+| `acquire` | Acquire exclusive project claim, or a path-scoped claim with `--path`. Fails on scope conflict |
+| `release` | Release claims for holder (or all if no holder) |
+| `status` | Show project claim + path claims |
+| `heartbeat` | Extend TTL for holder's active claims |
+
+**Path scopes:** Omit `--path` for whole-project exclusive. With `--path src/auth`, other agents may claim non-overlapping scopes (e.g. `src/ui`). Prefix overlap conflicts (`src` vs `src/auth`). A project claim blocks all path claims, and foreign path claims block taking a project claim.
 
 **Scenario:** Agent takes project hold:
 
 ```bash
 blackbox claim acquire --holder "claude-code"
+```
+
+**Scenario:** Two agents on non-overlapping trees:
+
+```bash
+blackbox claim acquire --holder agent-a --path src/auth
+blackbox claim acquire --holder agent-b --path src/ui
+blackbox claim status
 ```
 
 ---

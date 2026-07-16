@@ -111,11 +111,44 @@ pub struct ClaimPointer {
     pub expires_at: DateTime<Utc>,
     /// "active" | "released" | "expired"
     pub status: String,
+    /// Optional path scope relative to project root (e.g. `src/auth`).
+    /// `None` means whole-project exclusive claim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path_scope: Option<String>,
 }
 
 impl ClaimPointer {
     pub fn is_active(&self, now: DateTime<Utc>) -> bool {
         self.status == "active" && self.expires_at > now
+    }
+
+    /// Normalized scope string (trimmed, no leading `./`, no trailing `/` unless root).
+    pub fn scope_key(&self) -> Option<String> {
+        self.path_scope.as_ref().map(|s| normalize_scope(s))
+    }
+}
+
+/// Normalize a path scope for comparison.
+pub fn normalize_scope(scope: &str) -> String {
+    let s = scope.trim().trim_start_matches("./").trim_matches('/');
+    if s.is_empty() || s == "." {
+        String::new() // empty = project-wide
+    } else {
+        s.to_string()
+    }
+}
+
+/// True if two path scopes conflict (overlap or one is project-wide).
+pub fn scopes_conflict(a: Option<&str>, b: Option<&str>) -> bool {
+    let na = a.map(normalize_scope).filter(|s| !s.is_empty());
+    let nb = b.map(normalize_scope).filter(|s| !s.is_empty());
+    match (na, nb) {
+        // Either is whole-project
+        (None, _) | (_, None) => true,
+        (Some(x), Some(y)) => {
+            // Prefix overlap: src and src/auth conflict; src/a and src/b do not
+            x == y || x.starts_with(&format!("{y}/")) || y.starts_with(&format!("{x}/"))
+        }
     }
 }
 
@@ -137,8 +170,12 @@ pub struct ProjectState {
     pub attention_level: AttentionLevel,
     #[serde(default)]
     pub intent: IntentState,
+    /// Whole-project exclusive claim (legacy / default).
     #[serde(default)]
     pub active_claim: Option<ClaimPointer>,
+    /// Non-overlapping path-scoped claims (MVP path claims).
+    #[serde(default)]
+    pub path_claims: Vec<ClaimPointer>,
     #[serde(default)]
     pub memory_updated_at: Option<DateTime<Utc>>,
     #[serde(default)]
@@ -157,6 +194,7 @@ impl Default for ProjectState {
             attention_level: AttentionLevel::None,
             intent: IntentState::default(),
             active_claim: None,
+            path_claims: Vec::new(),
             memory_updated_at: None,
             unresolved_failure_id: None,
         }
@@ -213,7 +251,7 @@ impl ProjectState {
         Ok(())
     }
 
-    /// Expire active claim if past expires_at (in-memory).
+    /// Expire active / path claims if past expires_at (in-memory).
     pub fn expire_claim_if_needed(&mut self, now: DateTime<Utc>) {
         if let Some(ref mut c) = self.active_claim {
             if c.status == "active" && c.expires_at <= now {
@@ -223,6 +261,23 @@ impl ProjectState {
                 self.active_claim = None;
             }
         }
+        self.path_claims.retain(|c| c.is_active(now));
+    }
+
+    /// All currently active claims (project + path scopes).
+    pub fn all_active_claims(&self, now: DateTime<Utc>) -> Vec<ClaimPointer> {
+        let mut out = Vec::new();
+        if let Some(ref c) = self.active_claim {
+            if c.is_active(now) {
+                out.push(c.clone());
+            }
+        }
+        for c in &self.path_claims {
+            if c.is_active(now) {
+                out.push(c.clone());
+            }
+        }
+        out
     }
 
     /// Thin wrapper for tests / back-compat: default extras (no WIP signals).
@@ -274,10 +329,12 @@ pub fn apply_run_outcome(state: &mut ProjectState, run: &Run, extras: OutcomeExt
 
     // Step 4: WIP signal
     let mut open = !state.intent.open_items.is_empty();
-    let claim_wip = matches!(
-        &state.active_claim,
-        Some(c) if c.status == "active" && !extras.claim_released
-    );
+    let now = Utc::now();
+    let claim_wip = !extras.claim_released
+        && (matches!(
+            &state.active_claim,
+            Some(c) if c.status == "active"
+        ) || state.path_claims.iter().any(|c| c.is_active(now)));
     let mut wip = open || extras.git_dirty || extras.files_touched_nonempty || claim_wip;
     if extras.clear_wip {
         state.intent.open_items.clear();
@@ -456,7 +513,10 @@ fn hostname_short() -> String {
         .unwrap_or_else(|| "host".into())
 }
 
-/// Acquire project claim under lock. Returns Ok(claim) or Err if conflict.
+/// Acquire project or path-scoped claim under lock.
+///
+/// - `path_scope = None` → whole-project exclusive claim (`active_claim`)
+/// - `path_scope = Some("src/foo")` → path claim; may coexist with non-overlapping scopes
 pub fn claim_acquire(
     root: &Path,
     holder: &str,
@@ -465,19 +525,45 @@ pub fn claim_acquire(
     goal: Option<String>,
     ttl_secs: u64,
 ) -> anyhow::Result<Result<ClaimPointer, String>> {
+    claim_acquire_scoped(root, holder, holder_kind, run_id, goal, ttl_secs, None)
+}
+
+/// Acquire with explicit path scope.
+pub fn claim_acquire_scoped(
+    root: &Path,
+    holder: &str,
+    holder_kind: &str,
+    run_id: Option<String>,
+    goal: Option<String>,
+    ttl_secs: u64,
+    path_scope: Option<String>,
+) -> anyhow::Result<Result<ClaimPointer, String>> {
     with_state_lock(root, |state| {
         let now = Utc::now();
         state.expire_claim_if_needed(now);
-        if let Some(ref c) = state.active_claim {
-            if c.is_active(now) && c.holder != holder {
+        let scope = path_scope
+            .as_ref()
+            .map(|s| normalize_scope(s))
+            .filter(|s| !s.is_empty());
+
+        // Conflict checks
+        for c in state.all_active_claims(now) {
+            if c.holder == holder {
+                continue; // same holder may refresh/replace
+            }
+            let existing = c.scope_key();
+            let new_scope = scope.as_deref();
+            if scopes_conflict(existing.as_deref(), new_scope) {
                 return Ok(Err(format!(
-                    "project claim held by {}@{} until {}",
+                    "claim conflict: held by {}@{} scope={:?} until {}",
                     c.holder_kind,
                     c.holder,
+                    c.path_scope.as_deref().unwrap_or("(project)"),
                     c.expires_at.to_rfc3339()
                 )));
             }
         }
+
         let claim = ClaimPointer {
             id: uuid::Uuid::new_v4().to_string(),
             holder: holder.to_string(),
@@ -487,31 +573,92 @@ pub fn claim_acquire(
             acquired_at: now,
             expires_at: now + Duration::seconds(ttl_secs as i64),
             status: "active".into(),
+            path_scope: scope.clone(),
         };
-        state.active_claim = Some(claim.clone());
+
+        if scope.is_none() {
+            // Whole-project: replace active_claim; path claims must not exist
+            if !state.path_claims.is_empty() {
+                // Same-holder path claims get cleared when taking project claim
+                state.path_claims.retain(|c| c.holder == holder);
+                if state.path_claims.iter().any(|c| c.holder != holder) {
+                    return Ok(Err(
+                        "cannot take project claim while other path claims are active".into(),
+                    ));
+                }
+                state.path_claims.clear();
+            }
+            state.active_claim = Some(claim.clone());
+        } else {
+            // Path claim: cannot coexist with foreign project claim
+            if let Some(ref c) = state.active_claim {
+                if c.is_active(now) && c.holder != holder {
+                    return Ok(Err(format!(
+                        "project claim held by {}@{} blocks path claims",
+                        c.holder_kind, c.holder
+                    )));
+                }
+                if c.is_active(now) && c.holder == holder {
+                    // Replace own project claim with path claim? Keep project if any — prefer explicit path
+                }
+            }
+            // Replace same-holder same-scope, else push
+            state.path_claims.retain(|c| {
+                !(c.holder == holder && c.scope_key() == scope)
+            });
+            state.path_claims.push(claim.clone());
+        }
         state.updated_at = now;
         Ok(Ok(claim))
     })
 }
 
 /// Release active claim if held by holder (or force if holder is None).
+/// Also releases matching path claims for that holder.
 pub fn claim_release(root: &Path, holder: Option<&str>) -> anyhow::Result<Option<ClaimPointer>> {
     with_state_lock(root, |state| {
         let now = Utc::now();
         state.expire_claim_if_needed(now);
-        let Some(mut c) = state.active_claim.take() else {
-            return Ok(None);
-        };
-        if let Some(h) = holder {
-            if c.holder != h {
-                let held_by = c.holder.clone();
-                state.active_claim = Some(c);
-                anyhow::bail!("claim held by {held_by}; cannot release as {h}");
+        let mut released = None;
+
+        if let Some(mut c) = state.active_claim.take() {
+            if let Some(h) = holder {
+                if c.holder != h {
+                    state.active_claim = Some(c);
+                } else {
+                    c.status = "released".into();
+                    released = Some(c);
+                }
+            } else {
+                c.status = "released".into();
+                released = Some(c);
             }
         }
-        c.status = "released".into();
+
+        // Path claims for holder (or all if force)
+        let before = state.path_claims.len();
+        if let Some(h) = holder {
+            state.path_claims.retain(|c| c.holder != h);
+        } else {
+            state.path_claims.clear();
+        }
+        if released.is_none() && state.path_claims.len() < before {
+            // Synthetic: released path claims only
+            released = Some(ClaimPointer {
+                id: "path-claims".into(),
+                holder: holder.unwrap_or("*").into(),
+                holder_kind: "path".into(),
+                run_id: None,
+                goal: None,
+                acquired_at: now,
+                expires_at: now,
+                status: "released".into(),
+                path_scope: None,
+            });
+        }
+
         state.updated_at = now;
-        Ok(Some(c))
+        Ok(released)
     })
 }
 
@@ -520,33 +667,49 @@ pub fn claim_release_for_run(root: &Path, run_id: &str) -> anyhow::Result<bool> 
     with_state_lock(root, |state| {
         let now = Utc::now();
         state.expire_claim_if_needed(now);
+        let mut released = false;
         if let Some(ref c) = state.active_claim {
-            if c.run_id.as_deref() == Some(run_id) || c.status == "active" {
-                // Only release if this run holds it
-                if c.run_id.as_deref() == Some(run_id) {
-                    state.active_claim = None;
-                    state.updated_at = now;
-                    return Ok(true);
-                }
+            if c.run_id.as_deref() == Some(run_id) {
+                state.active_claim = None;
+                released = true;
             }
         }
-        Ok(false)
+        let before = state.path_claims.len();
+        state
+            .path_claims
+            .retain(|c| c.run_id.as_deref() != Some(run_id));
+        if state.path_claims.len() < before {
+            released = true;
+        }
+        if released {
+            state.updated_at = now;
+        }
+        Ok(released)
     })
 }
 
-/// Heartbeat: extend expires_at for active claim of holder.
+/// Heartbeat: extend expires_at for active claim of holder (project + path).
 pub fn claim_heartbeat(root: &Path, holder: &str, ttl_secs: u64) -> anyhow::Result<bool> {
     with_state_lock(root, |state| {
         let now = Utc::now();
         state.expire_claim_if_needed(now);
+        let mut ok = false;
         if let Some(ref mut c) = state.active_claim {
             if c.holder == holder && c.status == "active" {
                 c.expires_at = now + Duration::seconds(ttl_secs as i64);
-                state.updated_at = now;
-                return Ok(true);
+                ok = true;
             }
         }
-        Ok(false)
+        for c in &mut state.path_claims {
+            if c.holder == holder && c.status == "active" {
+                c.expires_at = now + Duration::seconds(ttl_secs as i64);
+                ok = true;
+            }
+        }
+        if ok {
+            state.updated_at = now;
+        }
+        Ok(ok)
     })
 }
 
@@ -554,13 +717,21 @@ pub fn claim_heartbeat(root: &Path, holder: &str, ttl_secs: u64) -> anyhow::Resu
 pub fn release_or_rebind_claim(state: &mut ProjectState, run: &Run) -> bool {
     let now = Utc::now();
     state.expire_claim_if_needed(now);
+    let mut released = false;
     if let Some(ref c) = state.active_claim {
         if c.run_id.as_deref() == Some(run.id.as_str()) && c.status == "active" {
             state.active_claim = None;
-            return true;
+            released = true;
         }
     }
-    false
+    let before = state.path_claims.len();
+    state
+        .path_claims
+        .retain(|c| c.run_id.as_deref() != Some(run.id.as_str()));
+    if state.path_claims.len() < before {
+        released = true;
+    }
+    released
 }
 
 // ── Agent instructions ────────────────────────────────────────────
@@ -976,5 +1147,130 @@ mod tests {
         let s = ProjectState::load(&root).unwrap().unwrap();
         assert!(s.active_claim.is_some());
         assert_eq!(s.active_claim.as_ref().unwrap().holder, "holder-a");
+    }
+
+    #[test]
+    fn scopes_conflict_prefix_and_project() {
+        assert!(scopes_conflict(None, Some("src")));
+        assert!(scopes_conflict(Some("src"), None));
+        assert!(scopes_conflict(Some("src"), Some("src/auth")));
+        assert!(scopes_conflict(Some("src/auth"), Some("src")));
+        assert!(scopes_conflict(Some("src/a"), Some("src/a")));
+        assert!(!scopes_conflict(Some("src/a"), Some("src/b")));
+        assert!(!scopes_conflict(Some("docs"), Some("src")));
+        assert_eq!(normalize_scope("./src/auth/"), "src/auth");
+        assert_eq!(normalize_scope("."), "");
+    }
+
+    #[test]
+    fn path_claims_non_overlapping_ok() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join(".blackbox");
+        std::fs::create_dir_all(&root).unwrap();
+        claim_acquire_scoped(
+            &root,
+            "h1",
+            "claude",
+            None,
+            None,
+            1800,
+            Some("src/auth".into()),
+        )
+        .unwrap()
+        .unwrap();
+        claim_acquire_scoped(
+            &root,
+            "h2",
+            "codex",
+            None,
+            None,
+            1800,
+            Some("src/ui".into()),
+        )
+        .unwrap()
+        .unwrap();
+        let s = ProjectState::load(&root).unwrap().unwrap();
+        assert!(s.active_claim.is_none());
+        assert_eq!(s.path_claims.len(), 2);
+        // Overlapping path conflicts
+        let err = claim_acquire_scoped(
+            &root,
+            "h3",
+            "claude",
+            None,
+            None,
+            1800,
+            Some("src/auth/handlers".into()),
+        )
+        .unwrap();
+        assert!(err.is_err());
+        // Project claim blocked while foreign path claims exist
+        let err = claim_acquire(&root, "h3", "claude", None, None, 1800).unwrap();
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn path_claim_blocked_by_project_claim() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join(".blackbox");
+        std::fs::create_dir_all(&root).unwrap();
+        claim_acquire(&root, "h1", "claude", None, None, 1800)
+            .unwrap()
+            .unwrap();
+        let err = claim_acquire_scoped(
+            &root,
+            "h2",
+            "codex",
+            None,
+            None,
+            1800,
+            Some("src/foo".into()),
+        )
+        .unwrap();
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn path_claim_release_and_heartbeat() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join(".blackbox");
+        std::fs::create_dir_all(&root).unwrap();
+        claim_acquire_scoped(
+            &root,
+            "h1",
+            "claude",
+            None,
+            None,
+            60,
+            Some("docs".into()),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(claim_heartbeat(&root, "h1", 3600).unwrap());
+        let s = ProjectState::load(&root).unwrap().unwrap();
+        assert_eq!(s.path_claims.len(), 1);
+        assert!(s.path_claims[0].expires_at > Utc::now() + Duration::seconds(3000));
+        claim_release(&root, Some("h1")).unwrap();
+        let s = ProjectState::load(&root).unwrap().unwrap();
+        assert!(s.path_claims.is_empty());
+    }
+
+    #[test]
+    fn expire_path_claims() {
+        let mut state = ProjectState::default();
+        let past = Utc::now() - Duration::seconds(10);
+        state.path_claims.push(ClaimPointer {
+            id: "x".into(),
+            holder: "h".into(),
+            holder_kind: "claude".into(),
+            run_id: None,
+            goal: None,
+            acquired_at: past,
+            expires_at: past,
+            status: "active".into(),
+            path_scope: Some("src".into()),
+        });
+        state.expire_claim_if_needed(Utc::now());
+        assert!(state.path_claims.is_empty());
     }
 }

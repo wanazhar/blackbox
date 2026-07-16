@@ -84,7 +84,11 @@ impl From<&IntentState> for IntentView {
 
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct ClaimsSummaryView {
+    /// Whole-project exclusive claim.
     pub active: Option<ClaimPointer>,
+    /// Non-overlapping path-scoped claims.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub path_claims: Vec<ClaimPointer>,
     pub conflicts: Vec<String>,
 }
 
@@ -534,7 +538,7 @@ pub async fn build_project_memory(
         last_tools = last_tools.split_off(last_tools.len() - 30);
     }
 
-    // Claims
+    // Claims (project + path-scoped)
     let now = Utc::now();
     let mut claims = ClaimsSummaryView::default();
     if let Some(ref c) = sticky.active_claim {
@@ -546,6 +550,11 @@ pub async fn build_project_memory(
                 c.holder,
                 c.expires_at.to_rfc3339()
             ));
+        }
+    }
+    for c in &sticky.path_claims {
+        if c.is_active(now) {
+            claims.path_claims.push(c.clone());
         }
     }
 

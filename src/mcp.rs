@@ -190,14 +190,15 @@ fn tools_list() -> Value {
             ),
             tool_def(
                 "blackbox_claim",
-                "Project claim acquire|release|status for multi-agent coordination.",
+                "Project or path-scoped claim acquire|release|status for multi-agent coordination. Use path for non-overlapping tree scopes.",
                 json!({
                     "type": "object",
                     "properties": {
                         "action": { "type": "string", "enum": ["acquire", "release", "status"], "default": "status" },
                         "goal": { "type": "string" },
                         "ttl_secs": { "type": "integer" },
-                        "holder": { "type": "string" }
+                        "holder": { "type": "string" },
+                        "path": { "type": "string", "description": "Path scope relative to project root (omit for whole-project claim)" }
                     }
                 }),
             ),
@@ -517,7 +518,9 @@ async fn tool_claim(
     store_override: Option<&std::path::Path>,
     args: &Value,
 ) -> Result<Value, Value> {
-    use crate::state::{claim_acquire, claim_holder_id, claim_release, ProjectState};
+    use crate::state::{
+        claim_acquire_scoped, claim_holder_id, claim_release, ProjectState,
+    };
     let (discovery, _) = open_ctx(store_override).await?;
     let action = args
         .get("action")
@@ -540,8 +543,20 @@ async fn tool_claim(
                 .get("goal")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
-            match claim_acquire(&discovery.paths.root, &holder, &kind, None, goal, ttl)
-                .map_err(|e| rpc_err(-32000, &e.to_string()))?
+            let path = args
+                .get("path")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            match claim_acquire_scoped(
+                &discovery.paths.root,
+                &holder,
+                &kind,
+                None,
+                goal,
+                ttl,
+                path,
+            )
+            .map_err(|e| rpc_err(-32000, &e.to_string()))?
             {
                 Ok(c) => {
                     let v =
@@ -559,11 +574,14 @@ async fn tool_claim(
             Ok(tool_ok(&v))
         }
         _ => {
-            let sticky = ProjectState::load(&discovery.paths.root)
+            let mut sticky = ProjectState::load(&discovery.paths.root)
                 .map_err(|e| rpc_err(-32000, &e.to_string()))?
                 .unwrap_or_default();
-            let v = serde_json::to_value(&sticky.active_claim)
-                .map_err(|e| rpc_err(-32000, &e.to_string()))?;
+            sticky.expire_claim_if_needed(chrono::Utc::now());
+            let v = json!({
+                "project_claim": sticky.active_claim,
+                "path_claims": sticky.path_claims,
+            });
             Ok(tool_ok(&v))
         }
     }

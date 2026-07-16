@@ -106,21 +106,21 @@ Return a bounded resume pack for a specific run.
 
 ### `blackbox_claim`
 
-Manage the project claim.
+Manage project and path-scoped claims.
 
 | Property | Value |
 |---|---|
-| **Purpose** | Acquire/release/check project hold |
-| **Input** | `action: "acquire" \| "release" \| "status"`, optional `holder: string` |
-| **Output** | Claim status, active claim pointer (if any) |
+| **Purpose** | Acquire/release/check project hold or path-scoped hold |
+| **Input** | `action: "acquire" \| "release" \| "status"`, optional `holder`, `goal`, `ttl_secs`, `path` (scope relative to project root) |
+| **Output** | Claim pointer on acquire; `{project_claim, path_claims}` on status |
 
-**Example — acquire:**
+**Example — path-scoped acquire:**
 ```json
 // Request:
-{"jsonrpc": "2.0", "id": 20, "method": "tools/call", "params": {"name": "blackbox_claim", "arguments": {"action": "acquire", "holder": "claude-code"}}}
+{"jsonrpc": "2.0", "id": 20, "method": "tools/call", "params": {"name": "blackbox_claim", "arguments": {"action": "acquire", "holder": "claude-code", "path": "src/auth"}}}
 
 // Response:
-{"jsonrpc": "2.0", "id": 20, "result": {"content": [{"type": "text", "text": "{\"ok\":true,\"claim\":{\"holder\":\"claude-code\",\"expires_at\":\"2026-07-12T18:00:00Z\"}}"}]}}
+{"jsonrpc": "2.0", "id": 20, "result": {"content": [{"type": "text", "text": "{\"ok\":true,\"data\":{\"holder\":\"claude-code\",\"path_scope\":\"src/auth\"}}"}]}}
 ```
 
 ### `blackbox_resolve`

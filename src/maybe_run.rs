@@ -31,11 +31,18 @@ pub fn decide(
     active_run_set: bool,
 ) -> anyhow::Result<MaybeRunAction> {
     if off_set {
+        // Still record why ambient skipped when project exists (best-effort).
+        if let Ok(d) = discover_project(cwd, db_override) {
+            append_ambient_log(&d.paths.root, "PASSTHROUGH BLACKBOX_OFF");
+        }
         return Ok(MaybeRunAction::Passthrough {
             reason: "BLACKBOX_OFF",
         });
     }
     if active_run_set {
+        if let Ok(d) = discover_project(cwd, db_override) {
+            append_ambient_log(&d.paths.root, "PASSTHROUGH nested under BLACKBOX_ACTIVE_RUN");
+        }
         return Ok(MaybeRunAction::Passthrough {
             reason: "nested under BLACKBOX_ACTIVE_RUN",
         });
@@ -67,15 +74,45 @@ pub fn decide(
         .iter()
         .any(|w| w.eq_ignore_ascii_case(basename))
     {
+        append_ambient_log(
+            &discovery.paths.root,
+            &format!("PASSTHROUGH basename_not_in_wrap={basename}"),
+        );
         return Ok(MaybeRunAction::Passthrough {
             reason: "basename not in wrap list",
         });
     }
 
+    // Self-observability: decision is always logged at debug; ambient decisions
+    // are also appended to project `.blackbox/ambient.log` for "why wrap?" forensics.
+    let root = discovery.project_root.to_string_lossy().to_string();
+    append_ambient_log(
+        &discovery.paths.root,
+        &format!(
+            "RECORD wrap={} product={} observe_only={}",
+            basename,
+            cfg.capture.product_mode().as_str(),
+            cfg.capture.observe_only
+        ),
+    );
     Ok(MaybeRunAction::Record {
-        project_root: discovery.project_root.to_string_lossy().to_string(),
+        project_root: root,
         tags: cfg.capture.default_tags.clone(),
     })
+}
+
+fn append_ambient_log(bb_root: &Path, line: &str) {
+    let path = bb_root.join("ambient.log");
+    let _ = std::fs::create_dir_all(bb_root);
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let ts = chrono::Utc::now().to_rfc3339();
+        let _ = writeln!(f, "{ts} {line}");
+    }
 }
 
 /// Build RunArgs for a record decision.

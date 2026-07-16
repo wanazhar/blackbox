@@ -6,6 +6,7 @@ use serde::Serialize;
 use crate::analysis::error_detector::ErrorDetector;
 use crate::analysis::failure_fix::FailureFixCorrelator;
 use crate::analysis::retry_waste::RetryWasteDetector;
+use crate::analysis::turning_points::{detect_turning_points, TurningPoint};
 use crate::core::event::EventStatus;
 use crate::core::run::Run;
 use crate::storage::TraceStore;
@@ -44,6 +45,20 @@ pub struct SummaryView {
     /// Repeated / non-progressing work findings.
     #[serde(default)]
     pub retry_waste: Vec<RetryWasteView>,
+    /// Turning points in the execution story.
+    #[serde(default)]
+    pub turning_points: Vec<TurningPointView>,
+    /// Recommended next action for handoff.
+    #[serde(default)]
+    pub next_action: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TurningPointView {
+    pub kind: String,
+    pub detail: String,
+    pub event_id: Option<String>,
+    pub sequence: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -175,6 +190,19 @@ pub async fn build_summary(
             sample_event_ids: f.sample_event_ids,
         })
         .collect();
+
+    // ── Turning points ───────────────────────────────────────────────
+    let turning_points: Vec<TurningPointView> = detect_turning_points(&events)
+        .into_iter()
+        .map(|p: TurningPoint| TurningPointView {
+            kind: p.kind,
+            detail: p.detail,
+            event_id: p.event_id,
+            sequence: p.sequence,
+        })
+        .collect();
+
+    let next_action = recommend_next_action(run, &fix_chains, &retry_waste, &turning_points);
 
     // ── Capture coverage ─────────────────────────────────────────────
     let coverage_ev = events.iter().find(|e| e.kind == "capture.coverage");
@@ -310,6 +338,8 @@ pub async fn build_summary(
         duration_ms,
         capture_coverage: &capture_coverage,
         retry_waste: &retry_waste,
+        turning_points: &turning_points,
+        next_action: &next_action,
         truncated,
         events_scanned,
         total_events: total,
@@ -346,7 +376,44 @@ pub async fn build_summary(
         narrative,
         capture_coverage,
         retry_waste,
+        turning_points,
+        next_action,
     })
+}
+
+fn recommend_next_action(
+    run: &Run,
+    fix_chains: &[FailureFixChainView],
+    retry_waste: &[RetryWasteView],
+    turning_points: &[TurningPointView],
+) -> String {
+    use crate::core::run::RunStatus;
+    if matches!(run.status, RunStatus::Failed | RunStatus::Cancelled) {
+        if turning_points.iter().any(|p| p.kind == "unresolved") {
+            return format!(
+                "Inspect unresolved failure on run {} (`blackbox postmortem {} --json`), then fix and re-verify",
+                crate::util::short_id(&run.id),
+                crate::util::short_id(&run.id)
+            );
+        }
+        if let Some(chain) = fix_chains.first() {
+            return format!(
+                "Continue from failure-to-fix chain: {} — review files then re-run verification",
+                chain.error_message.chars().take(80).collect::<String>()
+            );
+        }
+        return format!(
+            "blackbox handoff --json  # resume pack for {}",
+            crate::util::short_id(&run.id)
+        );
+    }
+    if retry_waste.iter().any(|r| r.kind == "no_progress_retry") {
+        return "Agent showed non-progressing retries — review approach before continuing".into();
+    }
+    if matches!(run.status, RunStatus::Succeeded) {
+        return "Run succeeded — review capture quality and open items before merge".into();
+    }
+    "blackbox status --json".into()
 }
 
 /// Data used to build the narrative summary.
@@ -364,6 +431,8 @@ struct SummaryNarrativeData<'a> {
     duration_ms: Option<u64>,
     capture_coverage: &'a Option<CaptureCoverageView>,
     retry_waste: &'a [RetryWasteView],
+    turning_points: &'a [TurningPointView],
+    next_action: &'a str,
     truncated: bool,
     events_scanned: usize,
     total_events: Option<usize>,
@@ -492,12 +561,24 @@ fn build_narrative(data: &SummaryNarrativeData) -> String {
         ));
     }
 
+    // Turning points
+    if !data.turning_points.is_empty() {
+        n.push_str("Turning points:\n");
+        for p in data.turning_points.iter().take(8) {
+            n.push_str(&format!("  - [{}] {}\n", p.kind, p.detail));
+        }
+    }
+
     // Repeated / non-progressing work
     if !data.retry_waste.is_empty() {
         n.push_str("Repeated work:\n");
         for f in data.retry_waste.iter().take(5) {
             n.push_str(&format!("  - {}\n", f.detail));
         }
+    }
+
+    if !data.next_action.is_empty() {
+        n.push_str(&format!("Recommended next action: {}\n", data.next_action));
     }
 
     // Capture coverage

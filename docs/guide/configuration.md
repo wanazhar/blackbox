@@ -80,7 +80,17 @@ policy = "warn"
 
 ---
 
-## 2b. Observe-only vs continuity (two products)
+## 2b. Product modes: recorder vs continuity
+
+Blackbox exposes a simple **product mode** (`capture.product_mode()` derived from
+flags):
+
+| Product mode | Meaning |
+|---|---|
+| **recorder** | Hard observe-only; ambient wrap never mutates launches (default) |
+| **continuity** | Memory bus may inject on **explicit** `blackbox run` only |
+
+Ambient shell wrap is **always** recorder semantics.
 
 Blackbox can run as a **neutral recorder** or as a **continuity / memory bus**.
 Do not conflate them.

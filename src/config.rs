@@ -174,6 +174,38 @@ impl Default for BlackboxConfig {
     }
 }
 
+/// Top-level product posture for a project.
+///
+/// Simplifies the capture/continuity flag surface for operators:
+/// - `Recorder` — hard observe-only ambient capture (daily-driver default)
+/// - `Continuity` — memory bus may inject on explicit `blackbox run`
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ProductMode {
+    /// Neutral flight recorder (observe-only).
+    #[default]
+    Recorder,
+    /// Continuity / memory bus enabled for explicit runs.
+    Continuity,
+}
+
+impl ProductMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Recorder => "recorder",
+            Self::Continuity => "continuity",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "recorder" | "observe" | "observe-only" | "observe_only" => Some(Self::Recorder),
+            "continuity" | "memory" | "memory-bus" | "memory_bus" => Some(Self::Continuity),
+            _ => None,
+        }
+    }
+}
+
 /// Continuity / memory-bus inject mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -362,6 +394,21 @@ impl CaptureConfig {
             ContinuityMode::Attention
         } else {
             ContinuityMode::Off
+        }
+    }
+
+    /// Effective product mode from observe_only + continuity.
+    pub fn product_mode(&self) -> ProductMode {
+        if self.observe_only {
+            return ProductMode::Recorder;
+        }
+        if matches!(
+            self.continuity_from_config(),
+            ContinuityMode::Always | ContinuityMode::Attention
+        ) {
+            ProductMode::Continuity
+        } else {
+            ProductMode::Recorder
         }
     }
 

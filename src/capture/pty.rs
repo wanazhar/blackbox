@@ -42,6 +42,9 @@ impl CaptureLayer for PtyCapture {
         let mut ev = TraceEvent::new(&run.id, EventSource::Terminal, "pty.started");
         ev.status = EventStatus::Success;
         tx.send(ev).await?;
+        let _ = tx
+            .send(crate::capture::health::layer_started(&run.id, "pty"))
+            .await;
 
         self.run_id = Some(run.id.clone());
         self.event_tx = Some(tx);
@@ -56,6 +59,9 @@ impl CaptureLayer for PtyCapture {
                 let mut ev = TraceEvent::new(run_id, EventSource::Terminal, "pty.stopped");
                 ev.status = EventStatus::Success;
                 let _ = tx.send(ev).await;
+                let _ = tx
+                    .send(crate::capture::health::layer_stopped(run_id, "pty", None))
+                    .await;
             }
         }
         Ok(())
@@ -82,9 +88,18 @@ mod tests {
         let mut cap = PtyCapture::new();
         let run = Run::new(vec!["bash".into()], "/tmp".into());
         let mut rx = cap.start(&run).await.unwrap();
-        let _start = rx.try_recv().unwrap();
+        // Drain start events (pty.started + capture.layer.started)
+        let _ = rx.try_recv().unwrap();
+        let _ = rx.try_recv().unwrap();
         cap.stop().await.unwrap();
-        let ev = rx.try_recv().unwrap();
+        let mut stopped = None;
+        while let Ok(ev) = rx.try_recv() {
+            if ev.kind == "pty.stopped" {
+                stopped = Some(ev);
+                break;
+            }
+        }
+        let ev = stopped.expect("pty.stopped");
         assert_eq!(ev.kind, "pty.stopped");
         assert_eq!(ev.source, EventSource::Terminal);
     }

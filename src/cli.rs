@@ -4098,6 +4098,26 @@ async fn cmd_doctor(cli: &Cli, args: &DoctorArgs) -> anyhow::Result<()> {
         dd_score = dd_score.saturating_sub(10);
         dd_notes.push("store size soft warning active — consider blackbox gc".into());
     }
+    // Progressive retention tips
+    let keep = discovery
+        .config
+        .as_ref()
+        .map(|c| c.retention.keep_runs)
+        .unwrap_or(50);
+    for tip in crate::retention::progressive_gc_advice(
+        run_count.unwrap_or(0),
+        total_storage_bytes.unwrap_or(0),
+        keep,
+    ) {
+        dd_score = dd_score.saturating_sub(5);
+        dd_notes.push(tip);
+    }
+    if let Some(true) = claims_active {
+        dd_notes.push("active project claim held — see blackbox claim status".into());
+    }
+    if let Some(ref mode) = discovery.config.as_ref().map(|c| c.capture.product_mode()) {
+        dd_notes.push(format!("product_mode={}", mode.as_str()));
+    }
     if running_count.unwrap_or(0) > 0 {
         dd_score = dd_score.saturating_sub(10);
         dd_notes.push("orphan Running run(s) present — may need recovery".into());

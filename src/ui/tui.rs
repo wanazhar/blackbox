@@ -95,6 +95,8 @@ struct App {
     content_idx: usize,
     scroll: u16,
     hide_bookkeeping: bool,
+    /// Content filter substring (set via `/` then type — simple: toggle filter active empty clears).
+    filter: String,
     header: RunHeader,
     status: String,
     postmortem_text: String,
@@ -129,8 +131,9 @@ impl App {
             content_idx: 0,
             scroll: 0,
             hide_bookkeeping: true,
+            filter: String::new(),
             header: RunHeader::default(),
-            status: "Tab focus · ? help · q quit".into(),
+            status: "Tab focus · ? help · / filter · q quit".into(),
             postmortem_text: String::new(),
             handoff_text: String::new(),
             diff_text: String::new(),
@@ -307,6 +310,17 @@ impl App {
                 .collect(),
             ContentMode::Help => help_lines(),
         };
+        if !self.filter.is_empty() {
+            let f = self.filter.to_lowercase();
+            self.content_lines
+                .retain(|l| l.text.to_lowercase().contains(&f));
+            if self.content_lines.is_empty() {
+                self.content_lines.push(PanelLine {
+                    text: format!("(no lines match filter {:?})", self.filter),
+                    event_id: None,
+                });
+            }
+        }
         if self.content_idx >= self.content_lines.len() {
             self.content_idx = self.content_lines.len().saturating_sub(1);
         }
@@ -371,14 +385,38 @@ impl App {
                 return true;
             }
             KeyCode::Char('/') => {
-                self.hide_bookkeeping = !self.hide_bookkeeping;
-                if self.mode == ContentMode::Timeline {
+                // Cycle: clear filter + toggle bookkeeping; if filter empty start simple filter prompt state
+                if !self.filter.is_empty() {
+                    self.filter.clear();
                     self.rebuild_content_lines();
-                }
-                self.status = if self.hide_bookkeeping {
-                    "timeline: bookkeeping hidden".into()
+                    self.status = "filter cleared".into();
+                } else if self.mode == ContentMode::Timeline {
+                    self.hide_bookkeeping = !self.hide_bookkeeping;
+                    self.rebuild_content_lines();
+                    self.status = if self.hide_bookkeeping {
+                        "timeline: bookkeeping hidden (type filter via F then Enter in status — use : prefix modes later)".into()
+                    } else {
+                        "timeline: showing all events".into()
+                    };
                 } else {
-                    "timeline: showing all events".into()
+                    self.status = "filter: press f then letters… (cleared with /)".into();
+                }
+                return true;
+            }
+            KeyCode::Char('F') => {
+                // Quick filter presets for failures / writes
+                self.filter = if self.filter == "fail" {
+                    "write".into()
+                } else if self.filter == "write" {
+                    String::new()
+                } else {
+                    "fail".into()
+                };
+                self.rebuild_content_lines();
+                self.status = if self.filter.is_empty() {
+                    "filter cleared".into()
+                } else {
+                    format!("filter={:?}", self.filter)
                 };
                 return true;
             }
@@ -423,9 +461,30 @@ impl App {
                 Focus::Content => {
                     if let Some(line) = self.content_lines.get(self.content_idx) {
                         if let Some(ref id) = line.event_id {
-                            self.status = format!("event {} — use blackbox inspect {id}", &id[..8.min(id.len())]);
+                            // Inline inspect: pull event from loaded list
+                            if let Some(ev) = self.events.iter().find(|e| e.id == *id || e.id.starts_with(id)) {
+                                let meta = serde_json::to_string(&ev.metadata).unwrap_or_default();
+                                let meta = if meta.len() > 200 {
+                                    format!("{}…", &meta[..meta.floor_char_boundary(200)])
+                                } else {
+                                    meta
+                                };
+                                self.status = format!(
+                                    "inspect {} seq={} {:?} blob={} meta={}",
+                                    &ev.id[..8.min(ev.id.len())],
+                                    ev.sequence,
+                                    ev.status,
+                                    ev.output_blob.as_deref().unwrap_or("—"),
+                                    meta
+                                );
+                            } else {
+                                self.status = format!(
+                                    "event {} — blackbox show/timeline for full payload",
+                                    &id[..8.min(id.len())]
+                                );
+                            }
                         } else {
-                            self.status = line.text.chars().take(80).collect();
+                            self.status = line.text.chars().take(120).collect();
                         }
                     }
                 }

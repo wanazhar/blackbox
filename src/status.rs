@@ -32,6 +32,22 @@ pub struct StatusView {
     /// Project memory pack (1.2); present when enabled and built.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project_memory: Option<ProjectMemoryPack>,
+    /// Product posture: recorder | continuity.
+    #[serde(default)]
+    pub product_mode: String,
+    /// First-class postmortem excerpt for handoff (when resume pack requested).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub postmortem: Option<PostmortemHandoffView>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PostmortemHandoffView {
+    pub run_id: String,
+    pub short_id: String,
+    pub narrative: String,
+    pub next_action: String,
+    pub failure_count: usize,
+    pub turning_points: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -277,6 +293,45 @@ pub async fn build_status(
     } else {
         cfg.capture.continuity_from_config().as_str().to_string()
     };
+    let product_mode = cfg.capture.product_mode().as_str().to_string();
+
+    // Attach postmortem for handoff when resume pack is requested and we have a target run.
+    let mut postmortem = None;
+    if opts.force_resume || opts.include_resume {
+        if let Some(store) = store {
+            let target = attention
+                .run_id
+                .as_ref()
+                .or_else(|| last_run.as_ref().map(|r| &r.id));
+            if let Some(run_id) = target {
+                if let Ok(Some(run)) = store.get_run(run_id).await {
+                    if let Ok(summary) = crate::summary::build_summary(
+                        store,
+                        &run,
+                        crate::summary::SummaryOptions {
+                            short: true,
+                            full: false,
+                        },
+                    )
+                    .await
+                    {
+                        postmortem = Some(PostmortemHandoffView {
+                            run_id: summary.run_id.clone(),
+                            short_id: summary.short_id.clone(),
+                            narrative: summary.narrative.chars().take(1200).collect(),
+                            next_action: summary.next_action.clone(),
+                            failure_count: summary.errors.len() + summary.tools.failed,
+                            turning_points: summary
+                                .turning_points
+                                .iter()
+                                .map(|p| format!("[{}] {}", p.kind, p.detail))
+                                .collect(),
+                        });
+                    }
+                }
+            }
+        }
+    }
 
     Ok(StatusView {
         project_root: discovery.project_root.display().to_string(),
@@ -304,6 +359,8 @@ pub async fn build_status(
         agent_instructions,
         resume_pack,
         project_memory,
+        product_mode,
+        postmortem,
     })
 }
 
@@ -314,10 +371,17 @@ pub fn format_status_text(v: &StatusView) -> String {
         "  enabled: {}   store: {}\n",
         v.enabled, v.store_db
     ));
+    out.push_str(&format!("  product: {}\n", v.product_mode));
     if v.observe_only {
         out.push_str("  mode: observe-only (no continuity, no prompt mutation)\n");
     } else {
         out.push_str(&format!("  mode: continuity={}\n", v.continuity_mode));
+    }
+    if let Some(ref pm) = v.postmortem {
+        out.push_str(&format!(
+            "  postmortem: {} next_action={}\n",
+            pm.short_id, pm.next_action
+        ));
     }
     out.push_str(&format!("  wrap: {}\n", v.wrap.join(", ")));
     if v.shell_integration.installed {

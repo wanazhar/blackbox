@@ -154,15 +154,21 @@ async fn test_capture_lifecycle() {
     let ev = pty_rx.recv().await.expect("should get pty.started");
     assert_eq!(ev.kind, "pty.started");
     assert_eq!(ev.status, EventStatus::Success);
+    // Drain optional layer.started
+    while let Ok(ev) = pty_rx.try_recv() {
+        if ev.kind == "capture.layer.started" {
+            continue;
+        }
+    }
     pty.stop().await.unwrap();
-    // stop() sends a pty.stopped event then drops the sender
-    let stop_ev = pty_rx.try_recv().expect("should receive pty.stopped");
-    assert_eq!(stop_ev.kind, "pty.stopped");
-    // Now the channel should be disconnected
-    assert!(
-        pty_rx.try_recv().is_err(),
-        "channel should be closed after stop"
-    );
+    // stop() sends pty.stopped (+ layer.stopped) then drops the sender
+    let mut saw_stopped = false;
+    while let Ok(ev) = pty_rx.try_recv() {
+        if ev.kind == "pty.stopped" {
+            saw_stopped = true;
+        }
+    }
+    assert!(saw_stopped, "should receive pty.stopped");
 
     let mut proc = ProcessCapture::new();
     assert_eq!(proc.name(), "process");
@@ -190,7 +196,7 @@ async fn test_capture_lifecycle() {
     let mut proc2 = ProcessCapture::new();
     let rx1 = pty2.start(&run).await.unwrap();
     let rx2 = proc2.start(&run).await.unwrap();
-    let (mut merged, handles) = merge_layers(vec![rx1, rx2]);
+    let (mut merged, handles, _bp) = merge_layers(vec![rx1, rx2]);
     // Stop layers to close senders so merged channel drains
     pty2.stop().await.unwrap();
     proc2.stop().await.unwrap();

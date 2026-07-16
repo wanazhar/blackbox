@@ -318,6 +318,9 @@ impl CaptureLayer for GitCapture {
                     "git capture event channel closed, dropping filesystem manifest event"
                 );
             }
+            let _ = tx
+                .send(crate::capture::health::layer_started(&run.id, "git"))
+                .await;
             self.event_tx = Some(tx);
             return Ok(rx);
         }
@@ -327,6 +330,9 @@ impl CaptureLayer for GitCapture {
         if tx.send(ev).await.is_err() {
             tracing::debug!("git capture event channel closed, dropping observer started event");
         }
+        let _ = tx
+            .send(crate::capture::health::layer_started(&run.id, "git"))
+            .await;
 
         // Capture initial commit hash
         if let Some(hash) = Self::get_commit_hash(&cwd).await {
@@ -420,6 +426,11 @@ impl CaptureLayer for GitCapture {
         if tx.send(stop_ev).await.is_err() {
             tracing::debug!("git capture event channel closed, dropping observer stopped event");
         }
+        let _ = tx
+            .send(crate::capture::health::layer_stopped(
+                &run_id, "git", None,
+            ))
+            .await;
 
         Ok(())
     }

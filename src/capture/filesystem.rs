@@ -211,6 +211,9 @@ impl CaptureLayer for FilesystemCapture {
             .metadata
             .insert("mode".to_string(), serde_json::json!("live-notify"));
         tx.send(started).await?;
+        let _ = tx
+            .send(crate::capture::health::layer_started(&run.id, "filesystem"))
+            .await;
 
         let manifest = Self::snapshot(&run.cwd);
         let mut snap_ev = TraceEvent::new(&run.id, EventSource::Filesystem, "filesystem.snapshot");
@@ -240,6 +243,13 @@ impl CaptureLayer for FilesystemCapture {
                 error = %e,
                 "filesystem watch failed; falling back to snapshot-only mode"
             );
+            let _ = tx
+                .send(crate::capture::health::layer_failed(
+                    &run.id,
+                    "filesystem",
+                    &format!("watch failed: {e}; snapshot-only fallback"),
+                ))
+                .await;
         } else {
             tracing::debug!(path = %watch_path.display(), "filesystem live watch started");
             self._watcher = Some(watcher);
@@ -318,6 +328,13 @@ impl CaptureLayer for FilesystemCapture {
         );
         stop_ev.status = EventStatus::Success;
         let _ = tx.send(stop_ev).await;
+        let _ = tx
+            .send(crate::capture::health::layer_stopped(
+                &run_id,
+                "filesystem",
+                None,
+            ))
+            .await;
 
         Ok(())
     }

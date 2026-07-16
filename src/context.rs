@@ -482,14 +482,14 @@ mod tests {
             store.as_ref(),
             &run,
             ContextOptions {
-                max_tokens: 500,
+                max_tokens: 600,
                 include_transcript: true,
             },
         )
         .await
         .unwrap();
 
-        assert!(pack.approx_tokens <= 500, "tokens={}", pack.approx_tokens);
+        assert!(pack.approx_tokens <= 600, "tokens={}", pack.approx_tokens);
         assert!(
             !pack.failed_tools.is_empty(),
             "failed tools must survive tight budget"

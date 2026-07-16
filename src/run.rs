@@ -236,7 +236,8 @@ impl RunSupervisor {
         let fs_rx = fs_capture.start(run).await?;
         let process_rx = process_capture.start(run).await?;
 
-        let (mut merged_rx, _layer_handles) = merge_layers(vec![pty_rx, git_rx, fs_rx, process_rx]);
+        let (mut merged_rx, _layer_handles, merge_stats) =
+            merge_layers(vec![pty_rx, git_rx, fs_rx, process_rx]);
         // H-22: merge_layers uses fixed insertion-order priority (first receiver wins on
         // concurrent events). Timestamp-based merge is too risky for this fix cycle.
         // Order (pty -> git -> fs -> process) is intentional: terminal output is highest priority.
@@ -864,8 +865,10 @@ impl RunSupervisor {
                         .unwrap_or(false)
             })
             .count() as u64;
-        // Layer failures: events marked Error from capture sources, or kind contains failed
-        let layer_err = |src: EventSource| {
+        // Prefer structured capture.layer.failed signals; fall back to Error status.
+        let structured_fails = crate::capture::health::failed_layers_from_events(&all_events);
+        let layer_failed = |name: &str| structured_fails.iter().any(|(l, _)| l == name);
+        let layer_err_src = |src: EventSource| {
             all_events.iter().any(|e| {
                 e.source == src
                     && (e.status == EventStatus::Error
@@ -875,7 +878,17 @@ impl RunSupervisor {
         };
         let process_tree_available = cfg!(target_os = "linux");
         let health = writer.health_snapshot();
-        let capture_lag_note = health.soft_warning();
+        let (merge_lag, merge_send_fail) = merge_stats.snapshot();
+        let mut capture_lag_note = health.soft_warning();
+        if merge_lag > 0 || merge_send_fail > 0 {
+            let merge_msg = format!(
+                "capture merge lag samples={merge_lag} send_failures={merge_send_fail}"
+            );
+            capture_lag_note = Some(match capture_lag_note {
+                Some(w) => format!("{w}; {merge_msg}"),
+                None => merge_msg,
+            });
+        }
 
         let coverage = crate::capture::coverage::CaptureCoverage::from_run_signals(
             crate::capture::coverage::RunCoverageSignals {
@@ -886,10 +899,10 @@ impl RunSupervisor {
                 env_events,
                 process_tree_available,
                 native_log_events: Some(native_log_events),
-                process_failed: layer_err(EventSource::Process),
-                pty_failed: layer_err(EventSource::Terminal),
-                git_failed: layer_err(EventSource::Git),
-                fs_failed: layer_err(EventSource::Filesystem),
+                process_failed: layer_failed("process") || layer_err_src(EventSource::Process),
+                pty_failed: layer_failed("pty") || layer_err_src(EventSource::Terminal),
+                git_failed: layer_failed("git") || layer_err_src(EventSource::Git),
+                fs_failed: layer_failed("filesystem") || layer_err_src(EventSource::Filesystem),
                 capture_lag_note: capture_lag_note.clone(),
             },
         );
@@ -922,6 +935,9 @@ impl RunSupervisor {
             warn.metadata
                 .insert("message".into(), serde_json::json!(lag));
             let _ = writer.write(warn).await;
+            // Timeline marker for when lag was observed (end-of-run summary).
+            let lag_ev = crate::capture::health::layer_lag(&run.id, "merge", lag);
+            let _ = writer.write(lag_ev).await;
             eprintln!("warning: {lag}");
         }
         let session_id = adapter.discover_session_id(&all_events);

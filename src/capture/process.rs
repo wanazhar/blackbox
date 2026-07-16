@@ -116,6 +116,9 @@ impl CaptureLayer for ProcessCapture {
             serde_json::json!(cfg!(target_os = "linux")),
         );
         tx.send(ev).await?;
+        let _ = tx
+            .send(crate::capture::health::layer_started(&run.id, "process"))
+            .await;
 
         self.run_id = Some(run.id.clone());
         self.event_tx = Some(tx);
@@ -134,6 +137,21 @@ impl CaptureLayer for ProcessCapture {
             tokio::spawn(async move {
                 proc_poller_loop(run_id, event_tx, pid_rx, stop_rx).await;
             });
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            // Honest platform limitation as a structured health signal.
+            if let Some(tx) = &self.event_tx {
+                let _ = tx
+                    .send(crate::capture::health::layer_event(
+                        &run.id,
+                        "process",
+                        "healthy",
+                        EventStatus::Success,
+                        Some("basic PID tracking only (no /proc process-tree)"),
+                    ))
+                    .await;
+            }
         }
 
         Ok(rx)
@@ -169,6 +187,13 @@ impl CaptureLayer for ProcessCapture {
                         .insert("tree_depth".to_string(), serde_json::json!(tree.depth()));
                 }
                 let _ = tx.send(ev).await;
+                let _ = tx
+                    .send(crate::capture::health::layer_stopped(
+                        run_id,
+                        "process",
+                        Some("observer stopped"),
+                    ))
+                    .await;
             }
         }
         Ok(())
@@ -584,14 +609,25 @@ mod tests {
         assert!(cap.stop().await.is_ok());
     }
 
+    fn drain_until(rx: &mut mpsc::Receiver<TraceEvent>, kind: &str) -> TraceEvent {
+        for _ in 0..16 {
+            let ev = rx.try_recv().expect("expected event");
+            if ev.kind == kind {
+                return ev;
+            }
+        }
+        panic!("never saw event kind {kind}");
+    }
+
     #[tokio::test]
     async fn stop_emits_stopped_event() {
         let mut cap = ProcessCapture::new();
         let run = Run::new(vec!["test".into()], "/tmp".into());
         let mut rx = cap.start(&run).await.unwrap();
-        let _start = rx.try_recv().unwrap();
+        let _ = drain_until(&mut rx, "process.observer.started");
+        let _ = drain_until(&mut rx, "capture.layer.started");
         cap.stop().await.unwrap();
-        let ev = rx.try_recv().unwrap();
+        let ev = drain_until(&mut rx, "process.observer.stopped");
         assert_eq!(ev.kind, "process.observer.stopped");
     }
 
@@ -600,10 +636,11 @@ mod tests {
         let mut cap = ProcessCapture::new();
         let run = Run::new(vec!["sleep".into(), "1".into()], "/tmp".into());
         let mut rx = cap.start(&run).await.unwrap();
-        let _start = rx.try_recv().unwrap();
+        let _ = drain_until(&mut rx, "process.observer.started");
+        let _ = drain_until(&mut rx, "capture.layer.started");
         cap.set_pid(42);
         cap.emit_spawned().await;
-        let ev = rx.try_recv().unwrap();
+        let ev = drain_until(&mut rx, "process.spawned");
         assert_eq!(ev.kind, "process.spawned");
         assert_eq!(ev.metadata.get("pid").and_then(|v| v.as_u64()), Some(42));
     }
@@ -613,7 +650,8 @@ mod tests {
         let mut cap = ProcessCapture::new();
         let run = Run::new(vec!["true".into()], "/tmp".into());
         let mut rx = cap.start(&run).await.unwrap();
-        let _start = rx.try_recv().unwrap();
+        let _ = drain_until(&mut rx, "process.observer.started");
+        let _ = drain_until(&mut rx, "capture.layer.started");
         cap.emit_spawned().await;
         assert!(rx.try_recv().is_err());
     }

@@ -60,6 +60,28 @@ pub fn plan_deletions(runs: &[Run], cfg: &RetentionConfig) -> Vec<RetentionCandi
     candidates
 }
 
+/// Soft progressive-degradation advice when store is large.
+/// Prefer GC order: oldest success runs → blob GC → keep failures longer.
+pub fn progressive_gc_advice(run_count: usize, total_bytes: u64, keep_runs: u32) -> Vec<String> {
+    let mut tips = Vec::new();
+    if total_bytes > 512 * 1024 * 1024 {
+        tips.push(
+            "store >512MiB: run `blackbox gc --apply` then `blackbox scrub --gc`".into(),
+        );
+    }
+    if run_count as u32 > keep_runs.saturating_mul(2).max(20) {
+        tips.push(format!(
+            "run count {run_count} exceeds 2× keep_runs ({keep_runs}): tighten retention or gc"
+        ));
+    }
+    if total_bytes > 1024 * 1024 * 1024 {
+        tips.push(
+            "store >1GiB: consider lowering keep_runs and enabling retention.auto_apply".into(),
+        );
+    }
+    tips
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -123,5 +145,11 @@ mod tests {
         };
         let plan = plan_deletions(&runs, &cfg);
         assert_eq!(plan.len(), 2);
+    }
+
+    #[test]
+    fn progressive_advice_on_large_store() {
+        let tips = progressive_gc_advice(100, 600 * 1024 * 1024, 20);
+        assert!(!tips.is_empty());
     }
 }

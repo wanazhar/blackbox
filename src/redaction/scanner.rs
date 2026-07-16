@@ -136,6 +136,24 @@ static BASE_PATTERNS: LazyLock<Vec<(RedactionReason, Regex)>> = LazyLock::new(||
         RedactionReason::PatternMatch,
         r"(?i)(machine\s+\S+\s+login\s+\S+\s+password\s+)\S+",
     );
+    // HuggingFace / HF tokens
+    add(
+        &mut patterns,
+        RedactionReason::ApiKey,
+        r"\bhf_[A-Za-z0-9]{20,}\b",
+    );
+    // DigitalOcean tokens
+    add(
+        &mut patterns,
+        RedactionReason::ApiKey,
+        r"\bdop_v1_[a-f0-9]{64}\b",
+    );
+    // Generic Authorization: Token …
+    add(
+        &mut patterns,
+        RedactionReason::AuthorizationHeader,
+        r"(?i)authorization\s*[:=]\s*token\s+[A-Za-z0-9\-._~+/]+=*",
+    );
     // Intentionally NO whole-string base64/hex pattern (e.g. `^[A-Za-z0-9+/]{40,}={0,2}$`).
     // That class matched git SHAs, content-addressed blob keys, and other structural
     // identifiers. PEM private keys are covered by the BEGIN PRIVATE KEY header pattern.

@@ -244,10 +244,30 @@ blackbox import run.bbx.json --passphrase 'long random phrase'
 
 Format: `blackbox.export.sealed/v1` JSON envelope (`ciphertext_b64`, optional salt).
 
-**SQLite note:** Run metadata remains in `blackbox.db` unencrypted. High-value
-payloads live in blobs (encryptable) and sealed sticky files. Full SQLCipher
-is not required for daily-driver privacy; treat the DB as metadata index and
-keep `encrypt_blobs=true` + sealed exports for secrets-bearing content.
+**SQLite note:** Run metadata remains in `blackbox.db` unencrypted at runtime.
+Use a **sealed store backup** to vault the DB offline:
+
+```bash
+# Passphrase vault (key never leaves the archive crypto; store.key not included)
+blackbox backup -o vault.bbx.json --passphrase '…' --include-db
+# Optional: also embed blobs (size-capped)
+blackbox backup -o vault.bbx.json --passphrase '…' --include-db --include-blobs
+
+blackbox restore vault.bbx.json --passphrase '…'
+```
+
+### External key (recommended)
+
+Keep the encryption key **outside** the project tree so a stolen checkout is useless:
+
+```bash
+mkdir -p ~/.config/blackbox
+# either:
+export BLACKBOX_STORE_KEY_FILE=~/.config/blackbox/default.key
+# or place a key at ~/.config/blackbox/default.key (auto-detected when present)
+```
+
+`doctor` warns when the key still lives under `.blackbox/store.key`.
 
 ### Network binding
 

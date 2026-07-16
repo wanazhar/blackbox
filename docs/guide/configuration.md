@@ -171,6 +171,10 @@ None of these are deterministic LLM replay.
 | `BLACKBOX_PROCESS_DENSE_POLL` | Tighter process poll (25–100 ms) | `1` \| `0` |
 | `BLACKBOX_PROCESS_ENVIRON` | Sample redacted `/proc` environ into process events | `1` \| `0` |
 | `BLACKBOX_PROCESS_SUBREAPER` | Linux child subreaper for waitpid exit codes | `1` \| `0` (default on) |
+| `BLACKBOX_ENCRYPT_BLOBS` | Enable at-rest blob encryption | `1` \| `0` |
+| `BLACKBOX_STORE_KEY` | 64-hex store encryption key | — |
+| `BLACKBOX_STORE_KEY_FILE` | Path to key file **outside** project (recommended) | `~/.config/blackbox/default.key` |
+| `BLACKBOX_EXPORT_PASSPHRASE` | Passphrase for sealed export/backup | — |
 
 ### Ambient capture
 

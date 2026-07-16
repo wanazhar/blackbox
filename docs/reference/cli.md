@@ -486,6 +486,26 @@ Sealed packs are unwrapped automatically when `--passphrase` or the project stor
 
 ---
 
+## 19b. `backup` / `restore`
+
+Sealed offline vault of sticky files + optional SQLite DB / blobs.
+
+```bash
+blackbox backup -o vault.bbx.json --passphrase '…' [--include-db] [--include-blobs]
+blackbox restore vault.bbx.json --passphrase '…'
+```
+
+| Arg | Description |
+|---|---|
+| `--passphrase` | Seal/open with PBKDF2 (recommended) |
+| `--store-key` | Seal with project store key instead |
+| `--include-db` | Embed `blackbox.db` (default true) |
+| `--include-blobs` | Embed content blobs (size-capped) |
+
+`store.key` is never embedded in backups.
+
+---
+
 ## 20. `sync push` / `sync pull`
 
 Sync traces with a remote backend.

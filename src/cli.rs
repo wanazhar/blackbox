@@ -113,6 +113,41 @@ pub enum Command {
     Ack,
     /// MCP stdio server (tools for status/handoff/postmortem/search/…)
     Mcp,
+    /// Sealed offline backup of store sticky files (+ optional DB/blobs)
+    Backup(BackupArgs),
+    /// Restore a sealed store backup
+    Restore(RestoreArgs),
+}
+
+#[derive(Args, Clone)]
+pub struct BackupArgs {
+    /// Output path for sealed backup (`-` = stdout)
+    #[arg(short = 'o', long, default_value = "blackbox-backup.bbx.json")]
+    pub output: String,
+    /// Passphrase for the sealed archive (preferred; also BLACKBOX_EXPORT_PASSPHRASE)
+    #[arg(long, env = "BLACKBOX_EXPORT_PASSPHRASE")]
+    pub passphrase: Option<String>,
+    /// Seal with project store key instead of passphrase
+    #[arg(long)]
+    pub store_key: bool,
+    /// Include SQLite database file
+    #[arg(long, default_value_t = true)]
+    pub include_db: bool,
+    /// Include content-addressed blobs (can be large)
+    #[arg(long, default_value_t = false)]
+    pub include_blobs: bool,
+    /// Max blob bytes to embed when --include-blobs (default 64MiB)
+    #[arg(long, default_value_t = 64 * 1024 * 1024)]
+    pub max_blob_bytes: u64,
+}
+
+#[derive(Args, Clone)]
+pub struct RestoreArgs {
+    /// Path to sealed backup (`-` = stdin)
+    pub path: String,
+    /// Passphrase (or BLACKBOX_EXPORT_PASSPHRASE)
+    #[arg(long, env = "BLACKBOX_EXPORT_PASSPHRASE")]
+    pub passphrase: Option<String>,
 }
 
 #[derive(Args, Default)]
@@ -788,6 +823,8 @@ impl Cli {
             Command::Claim(args) => cmd_claim(self, args).await,
             Command::Ack => cmd_ack(self).await,
             Command::Mcp => cmd_mcp(self).await,
+            Command::Backup(args) => cmd_backup(self, args).await,
+            Command::Restore(args) => cmd_restore(self, args).await,
         }
     }
 }
@@ -814,7 +851,7 @@ fn open_store(cli: &Cli) -> anyhow::Result<SqliteStore> {
             .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
             .unwrap_or(false);
     let crypto = if encrypt {
-        let key_path = crate::crypto::default_key_path(&discovery.paths.root);
+        let key_path = crate::crypto::resolve_key_path(&discovery.paths.root);
         Some(crate::crypto::BlobCrypto::load_or_create(&key_path)?)
     } else {
         None
@@ -2291,7 +2328,7 @@ async fn cmd_export(cli: &Cli, args: &ExportArgs) -> anyhow::Result<()> {
     if want_seal {
         let discovery = discover(cli).ok();
         let store_crypto = discovery.as_ref().and_then(|d| {
-            crate::crypto::BlobCrypto::load_existing(&crate::crypto::default_key_path(
+            crate::crypto::BlobCrypto::load_existing(&crate::crypto::resolve_key_path(
                 &d.paths.root,
             ))
             .ok()
@@ -2301,7 +2338,7 @@ async fn cmd_export(cli: &Cli, args: &ExportArgs) -> anyhow::Result<()> {
         let store_crypto = store_crypto.or_else(|| {
             if store.blob_encryption_enabled() {
                 discovery.as_ref().and_then(|d| {
-                    crate::crypto::BlobCrypto::load_or_create(&crate::crypto::default_key_path(
+                    crate::crypto::BlobCrypto::load_or_create(&crate::crypto::resolve_key_path(
                         &d.paths.root,
                     ))
                     .ok()
@@ -2338,7 +2375,7 @@ async fn cmd_import(cli: &Cli, args: &ImportArgs) -> anyhow::Result<()> {
     if crate::crypto::is_sealed_export_pack(&json) {
         let discovery = discover(cli).ok();
         let store_crypto = discovery.as_ref().and_then(|d| {
-            crate::crypto::BlobCrypto::load_existing(&crate::crypto::default_key_path(
+            crate::crypto::BlobCrypto::load_existing(&crate::crypto::resolve_key_path(
                 &d.paths.root,
             ))
             .ok()
@@ -3569,6 +3606,92 @@ async fn cmd_disable(cli: &Cli) -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn cmd_backup(cli: &Cli, args: &BackupArgs) -> anyhow::Result<()> {
+    use crate::backup::{create_sealed_backup, BackupOptions};
+
+    let discovery = discover(cli)?;
+    discovery.paths.ensure_dirs()?;
+    // Flush WAL so the on-disk DB is as consistent as possible.
+    if discovery.paths.db_path.exists() {
+        if let Ok(store) = open_store(cli) {
+            let _ = store.wal_checkpoint();
+        }
+    }
+    let opts = BackupOptions {
+        include_db: args.include_db,
+        include_blobs: args.include_blobs,
+        max_blob_bytes: args.max_blob_bytes,
+    };
+    let key_path = crate::crypto::resolve_key_path(&discovery.paths.root);
+    let store_crypto = if args.store_key {
+        Some(crate::crypto::BlobCrypto::load_or_create(&key_path)?)
+    } else {
+        crate::crypto::BlobCrypto::load_existing(&key_path)?.filter(|_| args.passphrase.is_none())
+    };
+    if args.passphrase.is_none() && !args.store_key && store_crypto.is_none() {
+        anyhow::bail!(
+            "backup requires --passphrase (recommended) or --store-key with encrypt_blobs/store.key"
+        );
+    }
+    let sealed = create_sealed_backup(
+        &discovery.paths.root,
+        &discovery.paths.db_path,
+        &discovery.paths.blob_dir,
+        &opts,
+        args.passphrase.as_deref(),
+        store_crypto.as_ref(),
+    )?;
+    if args.output == "-" {
+        print!("{sealed}");
+    } else {
+        std::fs::write(&args.output, &sealed)
+            .map_err(|e| anyhow::anyhow!("write {}: {e}", args.output))?;
+        crate::privacy::restrict_file(std::path::Path::new(&args.output));
+        println!(
+            "sealed backup written: {} ({} bytes)",
+            args.output,
+            sealed.len()
+        );
+        println!("  restore: blackbox restore {} --passphrase …", args.output);
+    }
+    Ok(())
+}
+
+async fn cmd_restore(cli: &Cli, args: &RestoreArgs) -> anyhow::Result<()> {
+    use crate::backup::restore_sealed_backup;
+
+    let discovery = discover(cli)?;
+    let sealed = if args.path == "-" {
+        use std::io::Read;
+        let mut buf = String::new();
+        std::io::stdin().read_to_string(&mut buf)?;
+        buf
+    } else {
+        std::fs::read_to_string(&args.path)
+            .map_err(|e| anyhow::anyhow!("read {}: {e}", args.path))?
+    };
+    let key_path = crate::crypto::resolve_key_path(&discovery.paths.root);
+    let store_crypto = crate::crypto::BlobCrypto::load_existing(&key_path)?;
+    let report = restore_sealed_backup(
+        &sealed,
+        &discovery.paths.root,
+        &discovery.paths.db_path,
+        &discovery.paths.blob_dir,
+        args.passphrase.as_deref(),
+        store_crypto.as_ref(),
+    )?;
+    println!(
+        "restored {} file(s), {} bytes → {}",
+        report.files_written,
+        report.bytes_written,
+        discovery.paths.root.display()
+    );
+    for n in report.notes.iter().take(6) {
+        println!("  note: {n}");
+    }
+    Ok(())
+}
+
 async fn cmd_mcp(cli: &Cli) -> anyhow::Result<()> {
     // MCP is stdio JSON-RPC; never emit human chatter on stdout.
     crate::mcp::run_mcp_stdio(cli.store.as_deref()).await
@@ -4273,13 +4396,28 @@ async fn cmd_doctor(cli: &Cli, args: &DoctorArgs) -> anyhow::Result<()> {
             cfg.capture.native_log_scope.as_str()
         ));
         if cfg.capture.encrypt_blobs {
-            dd_notes.push("blob encryption: on (store.key / BLACKBOX_STORE_KEY)".into());
+            let kp = crate::crypto::resolve_key_path(&paths.root);
+            let ext = crate::crypto::key_is_external(&paths.root);
+            dd_notes.push(format!(
+                "blob encryption: on (key={}{})",
+                kp.display(),
+                if ext { "; external to project" } else { "" }
+            ));
+            if !ext {
+                dd_notes.push(
+                    "tip: set BLACKBOX_STORE_KEY_FILE=~/.config/blackbox/default.key so project theft without key is useless"
+                        .into(),
+                );
+            }
         } else {
             dd_notes.push(
                 "blob encryption: off — set capture.encrypt_blobs=true for at-rest protection"
                     .into(),
             );
         }
+        dd_notes.push(
+            "offline vault: blackbox backup -o vault.bbx.json --passphrase …".into(),
+        );
     }
     if running_count.unwrap_or(0) > 0 {
         dd_score = dd_score.saturating_sub(10);
@@ -4568,6 +4706,8 @@ mod tests {
             "status",
             "handoff",
             "mcp",
+            "backup",
+            "restore",
         ];
         for sub in all_subs {
             let result = Cli::command().try_get_matches_from(["blackbox", sub, "--help"]);

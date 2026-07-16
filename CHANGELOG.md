@@ -17,6 +17,8 @@ All notable changes to **blackbox** are documented here.
 - **Optional blob encryption**: `encrypt_blobs=true` + `.blackbox/store.key` (ChaCha20-Poly1305)
 - **Sealed export packs**: `export --passphrase` / `--encrypt` + `import` unwrap
 - **Sticky file seal**: `state.json` + `MEMORY.json` encrypted when store.key exists
+- **Sealed store backup/restore**: `blackbox backup` / `restore` (DB + sticky; optional blobs)
+- **External key path**: `BLACKBOX_STORE_KEY_FILE` / `~/.config/blackbox/default.key`
 
 ## [1.2.0] — 2026-07-12
 

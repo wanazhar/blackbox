@@ -1,5 +1,6 @@
 pub mod adapters;
 pub mod analysis;
+pub mod backup;
 pub mod capture;
 pub mod cli;
 pub mod config;

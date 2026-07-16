@@ -59,6 +59,18 @@ impl BlobCrypto {
                 .context("BLACKBOX_STORE_KEY must be 64 hex characters")?;
             return Ok(Some(Self::from_key_bytes(key)));
         }
+        // Also honor BLACKBOX_STORE_KEY_FILE even if caller passed project path.
+        let path = if let Ok(p) = std::env::var("BLACKBOX_STORE_KEY_FILE") {
+            let path = PathBuf::from(p.trim());
+            if path.as_os_str().is_empty() {
+                key_path.to_path_buf()
+            } else {
+                path
+            }
+        } else {
+            key_path.to_path_buf()
+        };
+        let key_path = path.as_path();
         if !key_path.exists() {
             return Ok(None);
         }
@@ -156,6 +168,42 @@ pub fn default_key_path(store_root: &Path) -> PathBuf {
     store_root.join("store.key")
 }
 
+/// Resolve where the store encryption key lives.
+///
+/// Priority:
+/// 1. `BLACKBOX_STORE_KEY_FILE` (path; keeps key off the project tree)
+/// 2. Existing XDG `~/.config/blackbox/default.key` if present
+/// 3. Project `.blackbox/store.key`
+///
+/// Prefer (1)/(2) so a stolen project checkout without the key is useless.
+pub fn resolve_key_path(store_root: &Path) -> PathBuf {
+    if let Ok(p) = std::env::var("BLACKBOX_STORE_KEY_FILE") {
+        let path = PathBuf::from(p.trim());
+        if !path.as_os_str().is_empty() {
+            return path;
+        }
+    }
+    // Prefer existing external key (do not auto-create outside project unless env set).
+    let xdg = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config"))
+        });
+    if let Some(cfg) = xdg {
+        let external = cfg.join("blackbox").join("default.key");
+        if external.is_file() {
+            return external;
+        }
+    }
+    default_key_path(store_root)
+}
+
+/// True when key material is expected to live outside the project tree.
+pub fn key_is_external(store_root: &Path) -> bool {
+    let p = resolve_key_path(store_root);
+    !p.starts_with(store_root)
+}
+
 /// SHA-256 hex of plaintext (content-addressed key).
 pub fn content_key(plaintext: &[u8]) -> String {
     let mut hasher = Sha256::new();
@@ -204,19 +252,19 @@ pub fn read_maybe_sealed(path: &Path, store_root: &Path) -> anyhow::Result<Vec<u
     if !is_encrypted_blob(&data) {
         return Ok(data);
     }
-    let key_path = default_key_path(store_root);
+    let key_path = resolve_key_path(store_root);
     let crypto = BlobCrypto::load_existing(&key_path)?.ok_or_else(|| {
         anyhow::anyhow!(
-            "{} is encrypted but no store.key / BLACKBOX_STORE_KEY found",
+            "{} is encrypted but no store.key / BLACKBOX_STORE_KEY / BLACKBOX_STORE_KEY_FILE found",
             path.display()
         )
     })?;
     crypto.open(&data)
 }
 
-/// Crypto for sticky files: present only when store.key (or env) exists.
+/// Crypto for sticky files: present only when a key (or env) exists.
 pub fn sticky_crypto(store_root: &Path) -> Option<BlobCrypto> {
-    BlobCrypto::load_existing(&default_key_path(store_root))
+    BlobCrypto::load_existing(&resolve_key_path(store_root))
         .ok()
         .flatten()
 }

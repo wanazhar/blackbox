@@ -459,26 +459,30 @@ Export a run trace to a shareable format.
 
 ```bash
 blackbox export <run-id> [--format jsonl|html|portable]
-                         [--no-redact] [--inline-blobs]
-                         -o <output-path> [--store <path>]
+                         [--no-redact]
+                         [--encrypt] [--passphrase <phrase>]
 ```
 
 | Arg | Description |
 |---|---|
-| `--format` | Output format: `jsonl`, `html`, or `portable` (default portable) |
+| `--format` | Output format: `jsonl`, `html`, or `portable` (default `jsonl`) |
 | `--no-redact` | Export unredacted (dangerous) |
-| `--inline-blobs` | Include blob content inline (portable only) |
-| `-o <file>` | Output file path |
+| `--encrypt` | Seal portable with store key (requires `encrypt_blobs` / `store.key`) |
+| `--passphrase` | Seal portable with PBKDF2-derived key (`BLACKBOX_EXPORT_PASSPHRASE`) |
+
+Sealed packs use format `blackbox.export.sealed/v1` (ChaCha20-Poly1305).
 
 ---
 
 ## 19. `import`
 
-Import a portable JSON archive into the store.
+Import a portable JSON archive (or sealed pack) into the store.
 
 ```bash
-blackbox import <file> [--store <path>]
+blackbox import <file> [--keep-ids] [--passphrase <phrase>]
 ```
+
+Sealed packs are unwrapped automatically when `--passphrase` or the project store key is available.
 
 ---
 

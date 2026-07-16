@@ -72,10 +72,7 @@ impl EvalScore {
             *by_kind.entry(a.kind.clone()).or_default() += 1;
         }
 
-        let capture_quality = summary
-            .capture_coverage
-            .as_ref()
-            .map(|c| c.quality_score);
+        let capture_quality = summary.capture_coverage.as_ref().map(|c| c.quality_score);
 
         Self {
             schema: SCORE_SCHEMA.into(),

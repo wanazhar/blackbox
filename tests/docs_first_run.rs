@@ -92,7 +92,9 @@ async fn first_run_happy_path_matches_getting_started_contract() {
         .await
         .expect("postmortem builds");
     assert!(
-        !summary.headline.is_empty() || !summary.next_action.is_empty() || summary.exit_code.is_some(),
+        !summary.headline.is_empty()
+            || !summary.next_action.is_empty()
+            || summary.exit_code.is_some(),
         "postmortem should expose headline/next/exit for docs examples"
     );
     let text = format_summary_text(&summary);
@@ -180,7 +182,8 @@ async fn first_run_happy_path_matches_getting_started_contract() {
 
     // run.json is a re-loadable Run shape for CI upload docs
     let run_back: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(artifacts.join("run.json")).unwrap()).unwrap();
+        serde_json::from_str(&std::fs::read_to_string(artifacts.join("run.json")).unwrap())
+            .unwrap();
     assert_eq!(run_back["id"], run.id);
     assert_eq!(run_back["exit_code"], 0);
 }
@@ -270,7 +273,7 @@ fn capture_quality_weights_match_doctor_guide() {
 
     let mut partial = surfaces;
     partial[0].status = SurfaceStatus::Partial; // pty 0.5 * 0.30
-    // expected: (0.5*0.3 + 0.25 + 0.15 + 0.15 + 0.05 + 0.10) / 1.0 * 100 = 85
+                                                // expected: (0.5*0.3 + 0.25 + 0.15 + 0.15 + 0.05 + 0.10) / 1.0 * 100 = 85
     let score = CaptureCoverage::compute_quality_score(&partial);
     assert_eq!(score, 85, "pty partial → 85% per documented weights");
 }

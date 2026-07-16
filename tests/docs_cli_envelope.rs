@@ -112,13 +112,7 @@ fn summary_txt_artifact_lines_documented() {
         .collect();
     assert_eq!(
         lines,
-        vec![
-            "headline:",
-            "next:",
-            "status:",
-            "exit:",
-            "anomalies:",
-        ]
+        vec!["headline:", "next:", "status:", "exit:", "anomalies:",]
     );
 }
 
@@ -170,13 +164,7 @@ async fn live_postmortem_text_uses_doc_labels() {
         summary.exit_code,
         summary.anomalies.len()
     );
-    for prefix in [
-        "headline:",
-        "next:",
-        "status:",
-        "exit:",
-        "anomalies:",
-    ] {
+    for prefix in ["headline:", "next:", "status:", "exit:", "anomalies:"] {
         assert!(
             artifact.lines().any(|l| l.starts_with(prefix)),
             "artifact missing line starting with {prefix}"

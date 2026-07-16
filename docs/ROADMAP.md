@@ -74,7 +74,7 @@ Full plan: [plan/trust-explain-1.3.md](plan/trust-explain-1.3.md).
 | **T5** | **Harden** project profile | ✅ `setup`/`enable --harden` + security docs |
 | **T6** | **Adapter drought** honesty | ✅ coverage + `capture.warning` + doctor |
 | **T7** | Optional **ambient notice** | ✅ `ambient_notice` default off; A1 quiet |
-| **T8** | **Release gate** | tests + CHANGELOG + version — *last* |
+| **T8** | **Release gate** | ✅ **1.3.0** published (crates.io; local tag) |
 
 #### Already counted toward 1.3 (landed on master, unreleased)
 

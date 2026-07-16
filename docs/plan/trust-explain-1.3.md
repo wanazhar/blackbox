@@ -4,7 +4,7 @@
 |---|---|
 | **Document** | Product + technical plan for 1.3 |
 | **Date** | 2026-07-16 |
-| **Status** | **In progress** — Phases 1–4 done (T1–T7); Phase 5 docs polish; **do not cut release (T8) yet** |
+| **Status** | **Shipped 1.3.0** — T1–T8 complete (crates.io publish; no GHA required) |
 | **Baseline** | 1.2.0 + large unreleased master train (trust, debug, docs) |
 | **Target tag** | **1.3.0** (when exit criteria below pass) |
 | **North star** | Leave ambient on safely; when something fails, get a **story and a jump target** in one breath; agents can load that story without shell-scraping |
@@ -94,7 +94,7 @@ Leave the **1.3.0** tag only when **all** hold:
 | **T5** | **Hardened project profile** | ✅ `setup --harden` / `enable --harden`: encrypt_blobs, external key + HARDEN.txt, retention, native_log_scope=project, env allowlist; security guide |
 | **T6** | **Adapter honesty** | ✅ Drought → coverage notes + `capture.warning` (`adapter_drought`) + doctor note; unit tests in `coverage.rs` |
 | **T7** | **Ambient acknowledgment** | ✅ `capture.ambient_notice` default **false**; one stderr line on ambient record when on; A1 quiet (passthrough/OFF unchanged) |
-| **T8** | **Release gate** | `cargo test` + clippy + doc links + docs site build green; CHANGELOG 1.3.0 section; version bump; **only then** tag/publish/Pages |
+| **T8** | **Release gate** | ✅ 1.3.0 — tests/clippy/doc links; CHANGELOG; `cargo publish` (Pages optional if Actions minutes allow) |
 
 A1–A7 and M1–M7 remain permanent.
 

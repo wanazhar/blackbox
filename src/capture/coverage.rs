@@ -99,8 +99,7 @@ pub fn adapter_tool_drought(sig: &RunCoverageSignals) -> Option<String> {
     if sig.tool_call_count > 0 {
         return None;
     }
-    let long_enough = sig.total_events_window >= 20
-        || sig.duration_ms.is_some_and(|d| d >= 5_000);
+    let long_enough = sig.total_events_window >= 20 || sig.duration_ms.is_some_and(|d| d >= 5_000);
     if !long_enough {
         return None;
     }

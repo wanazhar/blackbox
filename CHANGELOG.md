@@ -4,88 +4,44 @@ All notable changes to **blackbox** are documented here.
 
 ## [Unreleased]
 
-### Planning
-- **1.3 scope locked in plan** (not released yet): [docs/plan/trust-explain-1.3.md](docs/plan/trust-explain-1.3.md)
-  — fail/setup spines, MCP timeline+anomalies, eval `score.json`, harden profile,
-  adapter drought honesty, ambient notice; release (T8) only after T1–T7 green
+## [1.3.0] — 2026-07-16
 
-### 1.3 Phase 1 (T1/T2) — in tree, unreleased
-- **`blackbox setup`**: one-shot enable + optional `--memory-bus` / `--install-shell` /
-  `--harden` / sample run + doctor readiness snapshot
-- **`blackbox fail`**: one-shot failure focus (unresolved → last failure → latest) with
-  postmortem + anomalies + next commands; `--json` / `--fail-on-failure`
+**Trust & explain** — when a run fails (or you return tomorrow), get a story and a jump target fast, as a human and as an agent. Ambient stays leave-on safe; trust is a packaged mode; eval has a stable score contract.
 
-### 1.3 Phase 2 (T3) — in tree, unreleased
-- **MCP debug spine**: `blackbox_timeline` (semantic/kind/limit), `blackbox_anomalies`,
-  `blackbox_fail` (same focus order as CLI); skill + docs updated
+Plan: [docs/plan/trust-explain-1.3.md](docs/plan/trust-explain-1.3.md).
 
-### 1.3 Phase 3 (T4) — in tree, unreleased
-- **`blackbox.score/v1`**: `score.json` written with every `--artifact-dir` (exit, anomalies
-  by severity/kind, capture_quality, tools/errors, tags)
-- **GitHub Action**: `.github/actions/blackbox-eval` runs `--eval --ci --artifact-dir` + upload
+### One-shot spines
+- **`blackbox setup`**: enable + optional `--memory-bus` / `--install-shell` / `--harden` + sample run + doctor readiness
+- **`blackbox fail`**: focus unresolved → last failure → latest; postmortem + anomalies + next commands (`--json` / `--fail-on-failure`)
+- **`enable --harden`** / **`setup --harden`**: encrypt_blobs, project native logs, env allowlist, retention; external key + `.blackbox/HARDEN.txt`
+
+### MCP debug spine
+- **`blackbox_timeline`**, **`blackbox_anomalies`**, **`blackbox_fail`** (same focus order as CLI)
+- Skill + MCP reference when-to-use updated
+
+### Eval productization
+- **`blackbox.score/v1`**: `score.json` with every `--artifact-dir` (exit, anomalies by severity/kind, capture_quality, tools/errors, tags)
+- Optional composite action: `.github/actions/blackbox-eval` (not required to install the crate)
 - Reference: `docs/reference/score.md`
 
-### 1.3 Phase 4 (T5/T6/T7) — in tree, unreleased
-- **Harden profile**: `setup --harden` and `enable --harden` set encrypt_blobs, project
-  native logs, env allowlist, retention; external key + `.blackbox/HARDEN.txt` tip
-- **Adapter drought**: known harness + 0 `tool.call` on long runs → coverage note +
-  `capture.warning` (`adapter_drought`) + doctor daily-driver note
-- **Ambient notice**: `capture.ambient_notice` (default false) prints one stderr line after
-  ambient record when enabled; A1 remains quiet by default
+### Capture honesty & ambient presence
+- **Adapter drought**: known harness + 0 `tool.call` on long runs → coverage note + `capture.warning` (`adapter_drought`) + doctor note
+- **`capture.ambient_notice`**: default false; optional one stderr line after ambient record (A1 quiet by default)
 
-### 1.3 Phase 5 — docs spine (in tree, unreleased)
-- Landing paths lead with `setup` / `fail`; harden + ambient_notice + drought documented
-  (security, configuration, doctor-and-capture, leave-it-on, skill, cheatsheet)
+### Human docs track
+- Docs index by question; guides (what-is, install, everyday-use, debug-a-failure, leave-it-on, concepts, recipes, cheatsheet, adapters, doctor-and-capture, examples)
+- Deep rewrites: configuration, security (threat model + hardened profile), troubleshooting, export/sync, overhead
+- CLI/MCP/json-api when-to-use; glossary; skill rewrite; link + first-run + CLI envelope goldens
+- Optional MkDocs site (`mkdocs serve` locally; GitHub Pages only if Actions minutes allow)
 
-### Docs
-- **Human-track revamp:** `docs/README.md` index by question; `docs/WRITING.md` style guide
-  (competent technical audience — no dumbing down)
-- New guides: what-is, install, everyday-use, debug-a-failure, leave-it-on; rewritten
-  getting-started + README landing
-- Historical `docs/plan/*` / `docs/history/*` and internals/reference pages labeled so
-  design archives are not mistaken for how-to
-- Deep rewrites: configuration (precedence + full knobs), security (threat model first),
-  troubleshooting (Q→fix), export/sync (decision table + vault), overhead (cost knobs)
-- CLI reference: command index by job; **when to use** on every subcommand; sample outputs in guides
-- Glossary (`docs/guide/glossary.md`); agent skill rewrite aligned with human track
-- CI: `python3 scripts/check_doc_links.py` — relative files **and** GitHub-style heading anchors
-- Golden first-run contract: `tests/docs_first_run.rs` (run → list → postmortem → artifact files)
-- MCP reference: **when to use / when not** per tool + job index
-- Further revamp: [concepts](docs/guide/concepts.md), [recipes](docs/guide/recipes.md) cookbook;
-  rewritten json-api / memory-pack / portable-format; readable ROADMAP; internals **Answers:** banners;
-  historical AUDIT labeled; PUBLISH preflight includes doc link + first-run tests
-- [cheatsheet](docs/guide/cheatsheet.md), [adapters](docs/guide/adapters.md); docs_first_run golden
-  covers postmortem JSON fields + adapter detection table
-- [doctor-and-capture](docs/guide/doctor-and-capture.md), [examples](docs/guide/examples.md) (annotated
-  handoff/status JSON); optional `mkdocs.yml` Material site; coverage weight golden test
-- GitHub Pages workflow (`.github/workflows/docs.yml`) + `requirements-docs.txt`
-- CLI envelope / summary.txt goldens: `tests/docs_cli_envelope.rs`, `tests/fixtures/docs/`
-
-### Daily-driver trust (post-1.2)
-- **Observe-only default** for ambient capture; product mode `recorder` | `continuity`
-- **Path-scoped claims**: non-overlapping `--path` scopes; project claim remains exclusive
-- **Process-tree enrich**: dense poll, optional redacted environ, Linux child-subreaper exit codes
-- **Capture coverage / lag / doctor daily-driver score**
-- **Published local overhead numbers** (Linux aarch64 debug): see `docs/guide/overhead.md`
-- **RAM**: counters-only PTY recorder, capped end-of-run loads, incremental SSE, SQLite cache cap
-- **Privacy**: owner-only store modes; env allowlist default; env value scan; git/process argv redaction
-- **Export/sync/serve**: H-08 blob re-scan on portable; serve Bearer-only (no `?token=`); scrub env/diff blobs + auto-GC
-- **Native logs**: `native_log_scope=project` default (no home-dir ingest)
-- **Optional blob encryption**: `encrypt_blobs=true` + `.blackbox/store.key` (ChaCha20-Poly1305)
-- **Sealed export packs**: `export --passphrase` / `--encrypt` + `import` unwrap
-- **Sticky file seal**: `state.json` + `MEMORY.json` encrypted when store.key exists
-- **Sealed store backup/restore**: `blackbox backup` / `restore` (DB + sticky; optional blobs)
-- **External key path**: `BLACKBOX_STORE_KEY_FILE` / `~/.config/blackbox/default.key`
-- **Explain & compare**: postmortem `headline` + `evidence` links; trajectory `explanation` /
-  `next_hint` / files after divergence; `diff` always prints explain text first
-- **Anomalies**: tool loops, destructive ops, error storms, token spikes, long silence,
-  process fan-out in postmortem JSON + TUI (`e` failure story, `a` anomalies)
-- **TUI polish**: `Enter` / `g` jumps from evidence/anomaly/fix-chain lines to timeline seq
-- **Dashboard**: `/api/runs/{id}/anomalies` + anomaly badge chips on run list/detail/live
-- **Eval harness**: `run --eval` forces observe-only + CI exit codes + tags; artifacts include
-  `anomalies.json` + `summary.txt`
-- **At-rest vault**: sealed blob encryption + `blackbox backup`/`restore` (practical alternative
-  to live SQLCipher; offline passphrase vault for DB + sticky)
+### Daily-driver trust (landed after 1.2, released in 1.3)
+- Observe-only default for ambient; product mode `recorder` | `continuity`
+- Path-scoped claims; process-tree enrich; capture coverage / lag / doctor daily-driver score
+- Published overhead numbers; RAM caps; owner-only store modes; env allowlist + value scan
+- Export/sync/serve: H-08 blob re-scan; serve Bearer-only; scrub + auto-GC
+- `native_log_scope=project` default; optional blob encryption + sealed sticky + sealed backup/restore
+- Postmortem headline/evidence; trajectory explain; anomalies (tool loops, destructive, storms, …)
+- TUI jump (`Enter`/`g`); dashboard anomaly badges; `run --eval` artifacts
 
 ## [1.2.0] — 2026-07-12
 

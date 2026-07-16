@@ -3594,10 +3594,7 @@ async fn cmd_fail(cli: &Cli, args: &FailArgs) -> anyhow::Result<()> {
     if !summary.anomalies.is_empty() {
         println!("── Anomalies (top) ───────────────────────────────");
         for a in summary.anomalies.iter().take(8) {
-            let seq = a
-                .sequence
-                .map(|s| format!(" seq={s}"))
-                .unwrap_or_default();
+            let seq = a.sequence.map(|s| format!(" seq={s}")).unwrap_or_default();
             println!(
                 "  ! [{}|{}] {}{seq}",
                 a.severity,
@@ -3652,7 +3649,11 @@ async fn cmd_setup(cli: &Cli, args: &SetupArgs) -> anyhow::Result<()> {
         cfg.enabled = true;
         apply_harden_profile(&mut cfg);
         cfg.write_to_path(&config_path)?;
-        key_path_note = Some(ensure_harden_key(&discovery.paths.root)?.display().to_string());
+        key_path_note = Some(
+            ensure_harden_key(&discovery.paths.root)?
+                .display()
+                .to_string(),
+        );
     }
 
     // 3) Sample run
@@ -4967,9 +4968,7 @@ async fn cmd_doctor(cli: &Cli, args: &DoctorArgs) -> anyhow::Result<()> {
                     }
                     if events.iter().any(|e| {
                         e.kind == "capture.warning"
-                            && e.metadata
-                                .get("warning")
-                                .and_then(|v| v.as_str())
+                            && e.metadata.get("warning").and_then(|v| v.as_str())
                                 == Some("adapter_drought")
                     }) {
                         dd_score = dd_score.saturating_sub(10);

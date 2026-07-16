@@ -91,7 +91,11 @@ async fn ci_artifact_dir_writes_run_and_postmortem() {
     )
     .unwrap();
     let score = blackbox::score::EvalScore::from_run_summary(&run, &summary);
-    std::fs::write(artifacts.join("score.json"), score.to_pretty_json().unwrap()).unwrap();
+    std::fs::write(
+        artifacts.join("score.json"),
+        score.to_pretty_json().unwrap(),
+    )
+    .unwrap();
 
     assert!(artifacts.join("run.json").is_file());
     assert!(artifacts.join("postmortem.json").is_file());

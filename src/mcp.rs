@@ -457,10 +457,7 @@ async fn resolve_fail_run(
     Ok((runs.into_iter().next().unwrap(), "latest"))
 }
 
-async fn tool_fail(
-    store_override: Option<&std::path::Path>,
-    args: &Value,
-) -> Result<Value, Value> {
+async fn tool_fail(store_override: Option<&std::path::Path>, args: &Value) -> Result<Value, Value> {
     let (discovery, store) = open_ctx(store_override).await?;
     let store = store
         .ok_or_else(|| rpc_err(-32000, "no store; run blackbox enable / record a run first"))?;
@@ -587,10 +584,7 @@ async fn tool_anomalies(
         .and_then(|v| v.as_str())
         .unwrap_or("latest");
     let run = resolve_run(&store, run_id).await?;
-    let scan_limit = args
-        .get("limit")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(8_000) as usize;
+    let scan_limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(8_000) as usize;
     let events = store
         .get_events_limited(&run.id, scan_limit)
         .await
@@ -988,7 +982,8 @@ mod tests {
         let store = SqliteStore::open_with_blobs(&db, &blobs).unwrap();
         let store: std::sync::Arc<dyn TraceStore> = std::sync::Arc::new(store);
 
-        let mut run = crate::core::run::Run::new(vec!["true".into()], dir.path().display().to_string());
+        let mut run =
+            crate::core::run::Run::new(vec!["true".into()], dir.path().display().to_string());
         run.status = crate::core::run::RunStatus::Succeeded;
         run.exit_code = Some(0);
         store.insert_run(&run).await.unwrap();
@@ -1034,9 +1029,7 @@ mod tests {
         assert!(body["anomalies"].is_array());
         assert_eq!(body["count"], 0);
 
-        let fail = tool_fail(Some(db.as_path()), &json!({}))
-            .await
-            .unwrap();
+        let fail = tool_fail(Some(db.as_path()), &json!({})).await.unwrap();
         let text = fail["content"][0]["text"].as_str().unwrap();
         let body: Value = serde_json::from_str(text).unwrap();
         assert_eq!(body["focus"], "latest");

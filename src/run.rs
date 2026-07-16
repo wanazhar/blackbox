@@ -940,19 +940,23 @@ impl RunSupervisor {
 
         let tool_call_count = all_events.iter().filter(|e| e.kind == "tool.call").count() as u64;
         // Adapter id may not be on run yet; notes / argv detection.
-        let adapter_guess = run.adapter.clone().or_else(|| {
-            run.notes.as_deref().and_then(|n| {
-                n.split(';')
-                    .find_map(|p| p.trim().strip_prefix("adapter:"))
-                    .map(|s| s.to_string())
+        let adapter_guess = run
+            .adapter
+            .clone()
+            .or_else(|| {
+                run.notes.as_deref().and_then(|n| {
+                    n.split(';')
+                        .find_map(|p| p.trim().strip_prefix("adapter:"))
+                        .map(|s| s.to_string())
+                })
             })
-        }).or_else(|| {
-            Some(
-                crate::adapters::detect::detect_adapter(&run.command)
-                    .id()
-                    .to_string(),
-            )
-        });
+            .or_else(|| {
+                Some(
+                    crate::adapters::detect::detect_adapter(&run.command)
+                        .id()
+                        .to_string(),
+                )
+            });
         let duration_ms = run
             .duration_ms
             .or_else(|| {
@@ -1013,10 +1017,9 @@ impl RunSupervisor {
                 .metadata
                 .insert("adapter".into(), serde_json::json!(a));
         }
-        cov_ev.metadata.insert(
-            "tool_call_count".into(),
-            serde_json::json!(tool_call_count),
-        );
+        cov_ev
+            .metadata
+            .insert("tool_call_count".into(), serde_json::json!(tool_call_count));
         let _ = writer.write(cov_ev).await;
 
         // Adapter drought → first-class capture.warning (doctor / fail path surface it)

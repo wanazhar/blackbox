@@ -91,6 +91,10 @@ pub enum Command {
     Enable(EnableArgs),
     /// Disable ambient capture for this project
     Disable,
+    /// One-shot project setup (enable + optional shell/memory/harden + sample run)
+    Setup(SetupArgs),
+    /// One-shot failure debugger (postmortem + anomalies + next steps)
+    Fail(FailArgs),
     /// One-command postmortem of a run
     Postmortem(SummaryArgs),
     /// Alias for postmortem
@@ -614,6 +618,49 @@ pub struct EnableArgs {
     pub memory_bus: bool,
 }
 
+/// `blackbox setup` — first-time project onboarding (1.3 T2).
+#[derive(Args, Default, Clone)]
+pub struct SetupArgs {
+    /// Enable memory bus (continuity=always)
+    #[arg(long)]
+    pub memory_bus: bool,
+
+    /// Install shell wrappers for harness basenames
+    #[arg(long)]
+    pub install_shell: bool,
+
+    /// Shell for install: fish, bash, zsh, powershell (default: detect)
+    #[arg(long)]
+    pub shell: Option<String>,
+
+    /// Hardened trust profile: encrypt_blobs + project native logs + retention
+    #[arg(long)]
+    pub harden: bool,
+
+    /// Skip the sample supervised `true` run
+    #[arg(long)]
+    pub no_sample: bool,
+
+    /// Exit non-zero if doctor daily-driver is not ready after setup
+    #[arg(long)]
+    pub require_ready: bool,
+}
+
+/// `blackbox fail` — one-shot failure story (1.3 T1).
+#[derive(Args, Default, Clone)]
+pub struct FailArgs {
+    /// Run ID, prefix, or "latest" (default: best failure / attention focus)
+    pub run_id: Option<String>,
+
+    /// Larger SQL window for big runs
+    #[arg(long)]
+    pub full: bool,
+
+    /// Exit 1 if the focused run failed/cancelled (CI-friendly)
+    #[arg(long)]
+    pub fail_on_failure: bool,
+}
+
 #[derive(Args)]
 pub struct SummaryArgs {
     /// Run ID, prefix, or "latest"
@@ -816,8 +863,10 @@ impl Cli {
             Command::Serve(args) => cmd_serve(self, args).await,
             Command::Sync(args) => cmd_sync(self, args).await,
             Command::MaybeRun(args) => cmd_maybe_run(self, args).await,
-            Command::Enable(args) => cmd_enable(self, args).await,
+            Command::Enable(args) => cmd_enable(self, args, false).await,
             Command::Disable => cmd_disable(self).await,
+            Command::Setup(args) => cmd_setup(self, args).await,
+            Command::Fail(args) => cmd_fail(self, args).await,
             Command::Postmortem(args) | Command::Summary(args) => cmd_summary(self, args).await,
             Command::Gc(args) => cmd_gc(self, args).await,
             Command::Context(args) => cmd_context(self, args).await,
@@ -3401,7 +3450,396 @@ async fn cmd_maybe_run(cli: &Cli, args: &MaybeRunArgs) -> anyhow::Result<()> {
     }
 }
 
-async fn cmd_enable(cli: &Cli, args: &EnableArgs) -> anyhow::Result<()> {
+/// Resolve which run `blackbox fail` should explain.
+///
+/// Order: explicit spec → sticky unresolved failure → last failed in list → latest.
+async fn resolve_fail_focus(
+    store: &dyn TraceStore,
+    discovery: &crate::config::ProjectDiscovery,
+    spec: Option<&str>,
+) -> anyhow::Result<(String, &'static str)> {
+    if let Some(s) = spec {
+        let id = resolve_run_id(store, s).await?;
+        return Ok((id, "explicit"));
+    }
+
+    // Sticky unresolved failure (M6)
+    if let Ok(Some(st)) = crate::state::ProjectState::load(&discovery.paths.root) {
+        if let Some(fid) = st.unresolved_failure_id {
+            if store.get_run(&fid).await?.is_some() {
+                return Ok((fid, "unresolved_failure"));
+            }
+        }
+    }
+
+    let runs = store.list_runs().await?;
+    if runs.is_empty() {
+        anyhow::bail!("no runs recorded — blackbox run -- <cmd> first");
+    }
+
+    // Prefer failed/cancelled or non-zero exit
+    if let Some(r) = runs.iter().find(|r| {
+        matches!(
+            r.status,
+            crate::core::run::RunStatus::Failed | crate::core::run::RunStatus::Cancelled
+        ) || r.exit_code.is_some_and(|c| c != 0)
+    }) {
+        return Ok((r.id.clone(), "last_failure"));
+    }
+
+    Ok((runs[0].id.clone(), "latest"))
+}
+
+async fn cmd_fail(cli: &Cli, args: &FailArgs) -> anyhow::Result<()> {
+    use crate::summary::{build_summary, format_summary_text, SummaryOptions};
+
+    let discovery = discover(cli)?;
+    let store = open_store(cli)?;
+    let (run_id, focus_reason) =
+        resolve_fail_focus(&store, &discovery, args.run_id.as_deref()).await?;
+    let run = store
+        .get_run(&run_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("run not found: {run_id}"))?;
+
+    let opts = if args.full {
+        SummaryOptions {
+            short: false,
+            full: true,
+        }
+    } else {
+        SummaryOptions::default()
+    };
+    let summary = build_summary(&store, &run, opts).await?;
+    let short = short_id(&run.id).to_string();
+    let failed = matches!(
+        run.status,
+        crate::core::run::RunStatus::Failed | crate::core::run::RunStatus::Cancelled
+    ) || run.exit_code.is_some_and(|c| c != 0);
+
+    let next_commands = vec![
+        format!("blackbox timeline {short} --semantic"),
+        format!("blackbox show {short} --tui"),
+        format!("blackbox postmortem {short} --json"),
+        "blackbox resolve".into(),
+    ];
+
+    #[derive(serde::Serialize)]
+    struct FailView {
+        focus: String,
+        run_id: String,
+        short_id: String,
+        failed: bool,
+        summary: crate::summary::SummaryView,
+        next_commands: Vec<String>,
+    }
+
+    let view = FailView {
+        focus: focus_reason.into(),
+        run_id: run.id.clone(),
+        short_id: short.clone(),
+        failed,
+        summary: summary.clone(),
+        next_commands: next_commands.clone(),
+    };
+
+    if cli.json {
+        let result = output::emit_ok("fail", &view);
+        if args.fail_on_failure && failed {
+            std::process::exit(1);
+        }
+        return result;
+    }
+
+    println!(
+        "blackbox fail · focus={} · {} · {:?} · exit={:?}",
+        focus_reason, short, run.status, run.exit_code
+    );
+    print!("{}", format_summary_text(&summary));
+    if !summary.anomalies.is_empty() {
+        println!("── Anomalies (top) ───────────────────────────────");
+        for a in summary.anomalies.iter().take(8) {
+            let seq = a
+                .sequence
+                .map(|s| format!(" seq={s}"))
+                .unwrap_or_default();
+            println!(
+                "  ! [{}|{}] {}{seq}",
+                a.severity,
+                a.kind,
+                crate::util::truncate(&a.detail, 100)
+            );
+        }
+    }
+    println!("── Next ──────────────────────────────────────────");
+    for c in &next_commands {
+        println!("  {c}");
+    }
+    if args.fail_on_failure && failed {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+async fn cmd_setup(cli: &Cli, args: &SetupArgs) -> anyhow::Result<()> {
+    use crate::config::{BlackboxConfig, NativeLogScope};
+
+    // 1) Enable (reuse enable flags). Force text mode so --json only emits setup once.
+    let enable_args = EnableArgs {
+        install_shell: args.install_shell,
+        uninstall_shell: false,
+        shell: args.shell.clone(),
+        continuity: None,
+        observe_only: false,
+        memory_bus: args.memory_bus,
+    };
+    // Quiet enable: no JSON/text so `setup --json` emits a single envelope.
+    let enable_cli = Cli {
+        store: cli.store.clone(),
+        json: false,
+        command: Command::Disable, // unused by cmd_enable
+    };
+    cmd_enable(&enable_cli, &enable_args, true).await?;
+
+    let cwd = std::env::current_dir()?;
+    let discovery = discover_project(&cwd, cli.store.as_deref())?;
+    let config_path = discovery.paths.root.join("config.toml");
+
+    let mut key_path_note: Option<String> = None;
+    let mut hardened = false;
+
+    // 2) Harden profile
+    if args.harden {
+        hardened = true;
+        let mut cfg = BlackboxConfig::load_from_path(&config_path)?
+            .unwrap_or_else(crate::maybe_run::default_enable_config);
+        cfg.enabled = true;
+        cfg.capture.encrypt_blobs = true;
+        cfg.capture.native_log_scope = NativeLogScope::Project;
+        if cfg.retention.keep_runs == 0 {
+            cfg.retention.keep_runs = 50;
+        }
+        cfg.retention.auto_apply = true;
+        cfg.write_to_path(&config_path)?;
+
+        // Prefer external key under ~/.config/blackbox/default.key
+        let ext = dirs_config_blackbox_key();
+        let key_path = if let Some(ref p) = ext {
+            if let Some(parent) = p.parent() {
+                let _ = std::fs::create_dir_all(parent);
+                crate::privacy::restrict_dir(parent);
+            }
+            p.clone()
+        } else {
+            crate::crypto::default_key_path(&discovery.paths.root)
+        };
+        let _crypto = crate::crypto::BlobCrypto::load_or_create(&key_path)?;
+        key_path_note = Some(key_path.display().to_string());
+        // Also ensure project store.key exists when external path unused — load_or_create handled path
+        if ext.is_none() {
+            // project-local key already created
+        } else {
+            // Symlink or copy pointer: set BLACKBOX_STORE_KEY_FILE is env-only; write a note file
+            let tip = discovery.paths.root.join("HARDEN.txt");
+            let _ = std::fs::write(
+                &tip,
+                format!(
+                    "blackbox setup --harden\nencrypt_blobs=true\nkey={}\nexport BLACKBOX_STORE_KEY_FILE={}\nbackup: blackbox backup -o vault.bbx.json --passphrase …\n",
+                    key_path.display(),
+                    key_path.display()
+                ),
+            );
+        }
+    }
+
+    // 3) Sample run
+    let mut sample_run_id: Option<String> = None;
+    if !args.no_sample {
+        let store = open_store(cli)?;
+        let store: std::sync::Arc<dyn crate::storage::TraceStore> = std::sync::Arc::new(store);
+        let supervisor = crate::run::RunSupervisor::new(store);
+        let run_args = RunArgs {
+            name: Some("setup-sample".into()),
+            project: Some(discovery.project_root.display().to_string()),
+            tag: vec!["setup".into()],
+            insecure_raw: false,
+            no_redact: false,
+            no_auto_resume: true,
+            auto_resume: false,
+            ci: false,
+            eval: false,
+            observe_only: true,
+            artifact_dir: None,
+            resume_injection: None,
+            claim_id_note: None,
+            ambient: false,
+            command: vec!["true".into()],
+        };
+        match supervisor.execute(&run_args).await {
+            Ok(run) => sample_run_id = Some(run.id),
+            Err(e) => tracing::warn!(error = %e, "setup sample run failed"),
+        }
+    }
+
+    // 4) Doctor snapshot (reuse open paths)
+    let ready = doctor_ready_snapshot(cli).await;
+
+    #[derive(serde::Serialize)]
+    struct SetupView {
+        project_root: String,
+        config_path: String,
+        memory_bus: bool,
+        install_shell: bool,
+        hardened: bool,
+        key_path: Option<String>,
+        sample_run_id: Option<String>,
+        daily_driver_ready: Option<bool>,
+        daily_driver_score: Option<u8>,
+        next: Vec<String>,
+    }
+
+    let mut next = vec![
+        "blackbox doctor".into(),
+        "blackbox run -- echo hello".into(),
+        "blackbox fail".into(),
+    ];
+    if args.install_shell {
+        next.insert(0, "restart shell or source your rc file".into());
+    }
+    if hardened {
+        next.push("export BLACKBOX_STORE_KEY_FILE=… if key is external".into());
+        next.push("blackbox backup -o vault.bbx.json --passphrase …".into());
+    }
+
+    let view = SetupView {
+        project_root: discovery.project_root.display().to_string(),
+        config_path: config_path.display().to_string(),
+        memory_bus: args.memory_bus,
+        install_shell: args.install_shell,
+        hardened,
+        key_path: key_path_note.clone(),
+        sample_run_id: sample_run_id.clone(),
+        daily_driver_ready: ready.as_ref().map(|r| r.ready),
+        daily_driver_score: ready.as_ref().map(|r| r.score),
+        next: next.clone(),
+    };
+
+    if cli.json {
+        let result = output::emit_ok("setup", &view);
+        if args.require_ready && ready.as_ref().map(|r| !r.ready).unwrap_or(true) {
+            std::process::exit(1);
+        }
+        return result;
+    }
+
+    println!("blackbox setup complete");
+    println!("  project:  {}", view.project_root);
+    println!("  config:   {}", view.config_path);
+    println!(
+        "  memory_bus={}  shell={}  harden={}",
+        args.memory_bus, args.install_shell, hardened
+    );
+    if let Some(ref k) = key_path_note {
+        println!("  store key: {k}");
+        println!("  tip: export BLACKBOX_STORE_KEY_FILE={k}");
+    }
+    if let Some(ref id) = sample_run_id {
+        println!("  sample run: {}", short_id(id));
+    }
+    if let Some(ref r) = ready {
+        println!(
+            "  daily-driver: {} (score {}%)",
+            if r.ready { "ready" } else { "not ready" },
+            r.score
+        );
+        for n in r.notes.iter().take(6) {
+            println!("    · {n}");
+        }
+    }
+    println!("  next:");
+    for c in &next {
+        println!("    {c}");
+    }
+
+    if args.require_ready && ready.as_ref().map(|r| !r.ready).unwrap_or(true) {
+        anyhow::bail!("setup require-ready: daily-driver not ready (see notes above)");
+    }
+    Ok(())
+}
+
+struct DoctorReadySnap {
+    ready: bool,
+    score: u8,
+    notes: Vec<String>,
+}
+
+/// Lightweight ready snapshot for setup (avoids full doctor JSON reimplementation).
+async fn doctor_ready_snapshot(cli: &Cli) -> Option<DoctorReadySnap> {
+    let discovery = discover(cli).ok()?;
+    let mut score: u8 = 100;
+    let mut notes = Vec::new();
+    if discovery.config.as_ref().map(|c| c.enabled) != Some(true) {
+        score = score.saturating_sub(40);
+        notes.push("project not enabled".into());
+    }
+    let on_path = std::process::Command::new("sh")
+        .arg("-c")
+        .arg("command -v blackbox >/dev/null 2>&1")
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !on_path {
+        score = score.saturating_sub(5);
+        notes.push("blackbox not on PATH".into());
+    }
+    if let Ok(store) = open_store(cli) {
+        if let Ok(runs) = store.list_runs().await {
+            let running = runs
+                .iter()
+                .filter(|r| r.status == crate::core::run::RunStatus::Running)
+                .count();
+            if running > 0 {
+                score = score.saturating_sub(10);
+                notes.push("orphan Running run(s)".into());
+            }
+            if runs.is_empty() {
+                notes.push("no runs yet — sample or blackbox run".into());
+            }
+        }
+    } else {
+        score = score.saturating_sub(20);
+        notes.push("store not openable".into());
+    }
+    if discovery
+        .config
+        .as_ref()
+        .map(|c| c.capture.encrypt_blobs)
+        .unwrap_or(false)
+    {
+        notes.push("encrypt_blobs=on".into());
+    }
+    let ready = score >= 80;
+    if ready {
+        notes.push("daily-driver ready (soft)".into());
+    }
+    Some(DoctorReadySnap {
+        ready,
+        score,
+        notes,
+    })
+}
+
+fn dirs_config_blackbox_key() -> Option<std::path::PathBuf> {
+    let home = std::env::var_os("HOME")?;
+    Some(
+        std::path::PathBuf::from(home)
+            .join(".config")
+            .join("blackbox")
+            .join("default.key"),
+    )
+}
+
+async fn cmd_enable(cli: &Cli, args: &EnableArgs, quiet: bool) -> anyhow::Result<()> {
     use crate::config::BlackboxConfig;
     use crate::maybe_run::{default_enable_config, shell_snippet_bash, shell_snippet_fish};
     use crate::shell_install::{self, ShellKind};
@@ -3498,6 +3936,10 @@ async fn cmd_enable(cli: &Cli, args: &EnableArgs) -> anyhow::Result<()> {
             .map(std::path::PathBuf::from)
             .ok_or_else(|| anyhow::anyhow!("HOME not set; cannot install shell wrappers"))?;
         shell_install_result = Some(shell_install::install_shell(shell_kind, &wrap, &home)?);
+    }
+
+    if quiet {
+        return Ok(());
     }
 
     if cli.json {

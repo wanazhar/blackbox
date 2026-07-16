@@ -10,6 +10,18 @@ CI keeps this path honest: `cargo test --test docs_first_run` (record â†’ list â
 
 ## 1. Enable a project
 
+**Fast path (recommended):**
+
+```bash
+cd ~/my-project
+blackbox setup                          # enable + sample `true` + doctor
+# or:
+blackbox setup --memory-bus --install-shell
+blackbox setup --harden                 # encrypt_blobs + key under ~/.config/blackbox/
+```
+
+**Manual enable:**
+
 ```bash
 cd ~/my-project   # or any repo you want traced
 
@@ -20,11 +32,13 @@ blackbox enable
 blackbox enable --memory-bus --install-shell
 ```
 
-| Flag | Effect |
+| Flag / command | Effect |
 |---|---|
-| *(none)* | Creates `.blackbox/`, default `config.toml`, `enabled = true` |
+| `setup` | One-shot enable + optional shell/memory/harden + sample run |
+| `enable` | Creates `.blackbox/`, default `config.toml`, `enabled = true` |
 | `--memory-bus` | Continuity-oriented defaults (`capture.continuity = "always"` among them) |
 | `--install-shell` | Installs managed wrappers for harness basenames on the wrap list |
+| `--harden` (setup) | `encrypt_blobs=true`, project native logs, external key path |
 
 **What lands on disk:**
 

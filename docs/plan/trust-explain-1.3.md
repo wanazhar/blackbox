@@ -4,7 +4,7 @@
 |---|---|
 | **Document** | Product + technical plan for 1.3 |
 | **Date** | 2026-07-16 |
-| **Status** | **Planning / in-progress (do not cut release yet)** |
+| **Status** | **In progress** — Phase 1 (T1 fail + T2 setup) implementing; **do not cut release yet** |
 | **Baseline** | 1.2.0 + large unreleased master train (trust, debug, docs) |
 | **Target tag** | **1.3.0** (when exit criteria below pass) |
 | **North star** | Leave ambient on safely; when something fails, get a **story and a jump target** in one breath; agents can load that story without shell-scraping |
@@ -87,8 +87,8 @@ Leave the **1.3.0** tag only when **all** hold:
 
 | # | Criterion | Measurable target |
 |---|---|---|
-| **T1** | **One-shot failure path** | `blackbox fail` (name TBD) prints postmortem + next commands; JSON includes anomalies + evidence; tests cover success/failure |
-| **T2** | **One-shot setup path** | `blackbox setup` enables project, optional shell + memory-bus, runs sample, prints doctor ready/not + fixes |
+| **T1** | **One-shot failure path** | ✅ `blackbox fail` — postmortem + anomalies + next; JSON; `tests/setup_fail.rs` |
+| **T2** | **One-shot setup path** | ✅ `blackbox setup` — enable/shell/memory/harden/sample/doctor; `tests/setup_fail.rs` |
 | **T3** | **MCP debug spine** | Tools for postmortem (exists), **timeline**, **anomalies** (and preferably **diff**); skill updated; unit list test |
 | **T4** | **Eval score schema** | `blackbox.score/v1` (or artifact `score.json`) with exit, status, anomaly counts by severity/kind, coverage quality, optional tokens; `--eval` writes it; golden test |
 | **T5** | **Hardened project profile** | Documented + implemented `setup --harden` or `enable --harden`: encrypt_blobs, external key hint, retention, native_log_scope=project, doctor notes clean |

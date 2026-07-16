@@ -9,6 +9,12 @@ All notable changes to **blackbox** are documented here.
   — fail/setup spines, MCP timeline+anomalies, eval `score.json`, harden profile,
   adapter drought honesty, ambient notice; release (T8) only after T1–T7 green
 
+### 1.3 Phase 1 (T1/T2) — in tree, unreleased
+- **`blackbox setup`**: one-shot enable + optional `--memory-bus` / `--install-shell` /
+  `--harden` / sample run + doctor readiness snapshot
+- **`blackbox fail`**: one-shot failure focus (unresolved → last failure → latest) with
+  postmortem + anomalies + next commands; `--json` / `--fail-on-failure`
+
 ### Docs
 - **Human-track revamp:** `docs/README.md` index by question; `docs/WRITING.md` style guide
   (competent technical audience — no dumbing down)

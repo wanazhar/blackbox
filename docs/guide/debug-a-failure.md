@@ -14,7 +14,17 @@ If capture itself is broken (no events, doctor errors), start with [troubleshoot
 
 ---
 
-## Fast path (5 commands)
+## Fast path
+
+**One command (1.3):**
+
+```bash
+blackbox fail                 # focuses unresolved failure / last failure / latest
+blackbox fail --json
+blackbox fail <run-id>
+```
+
+**Expanded:**
 
 ```bash
 blackbox status
@@ -28,6 +38,7 @@ What you are looking for:
 
 | Command | Signal |
 |---|---|
+| `fail` | Focused story + anomalies + next commands |
 | `status` | `attention` level, unresolved failure, active claim |
 | `postmortem` | `headline`, `next_action`, `evidence[]`, `anomalies[]` |
 | `timeline` | Concrete seq / tool events behind evidence |

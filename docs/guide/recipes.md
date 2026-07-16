@@ -12,6 +12,8 @@ Assumes [install](install.md) works (`blackbox --version`). Terms: [glossary](gl
 
 ```bash
 cd ~/my-project
+blackbox setup
+# or step-by-step:
 blackbox enable
 blackbox run -- echo "hello blackbox"
 blackbox runs
@@ -21,7 +23,7 @@ blackbox timeline latest --semantic
 
 **Success:** `runs` shows one succeeded row; `show`/`timeline` list events; short id is usable as a prefix.
 
-**Deeper:** [getting-started](getting-started.md) · contract test `cargo test --test docs_first_run`
+**Deeper:** [getting-started](getting-started.md) · `cargo test --test setup_fail --test docs_first_run`
 
 ---
 
@@ -50,11 +52,10 @@ blackbox show latest --tools
 **When:** Exit non-zero, sticky attention, or “it did something weird.”
 
 ```bash
-blackbox status
-blackbox postmortem latest
-blackbox postmortem latest --json | jq '{headline, next_action, anomalies, evidence}'
-blackbox timeline latest --semantic
-blackbox show latest --tui    # e = failure story; Enter/g jumps to seq
+blackbox fail
+blackbox fail --json | jq '{focus: .data.focus, headline: .data.summary.headline, next: .data.summary.next_action, anomalies: .data.summary.anomalies}'
+blackbox timeline <short-id> --semantic
+blackbox show <short-id> --tui    # e = failure story; Enter/g jumps to seq
 ```
 
 **Success:** You can name a next action and at least one evidence `seq` or event id.

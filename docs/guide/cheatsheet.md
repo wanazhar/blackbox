@@ -14,8 +14,11 @@ blackbox --version
 blackbox doctor
 
 cd ~/project
-blackbox enable                              # store + config
-blackbox enable --memory-bus --install-shell # + continuity defaults + ambient wrap
+blackbox setup                               # enable + sample run + doctor
+blackbox setup --memory-bus --install-shell  # + continuity + ambient wrap
+blackbox setup --harden                      # encrypt_blobs + external key path
+blackbox enable                              # store + config only
+blackbox enable --memory-bus --install-shell
 blackbox disable                             # pause (keeps data)
 ```
 
@@ -58,6 +61,9 @@ blackbox serve --token "$TOKEN"
 ## Explain / compare
 
 ```bash
+blackbox fail                                # best failure / attention focus
+blackbox fail --json
+blackbox fail <run-id>
 blackbox postmortem latest
 blackbox postmortem latest --json --fail-on-failure
 blackbox analyze latest

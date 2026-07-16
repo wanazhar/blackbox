@@ -63,6 +63,8 @@ MCP equivalents: `blackbox_handoff`, `blackbox_memory`, `blackbox_status` — ca
 | Search | `blackbox search "error" --json` |
 | Record under supervision | `blackbox run -- <cmd>` |
 | Eval / no launch mutation | `blackbox run --eval --artifact-dir ./out -- <cmd>` |
+| One-shot failure story | `blackbox fail` / `fail --json` |
+| First-time project setup | `blackbox setup` / `setup --memory-bus --install-shell` / `setup --harden` |
 | Ack gate | `blackbox ack` or `BLACKBOX_ACK=1` |
 | Enable project | `blackbox enable --memory-bus --install-shell` |
 

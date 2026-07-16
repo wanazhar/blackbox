@@ -157,6 +157,7 @@ Operator-facing notes for shipped harnesses: [docs/guide/adapters.md](docs/guide
 | `tests/ci_eval.rs` | `--ci` exit code propagation |
 | `tests/docs_first_run.rs` | Getting-started happy path + short_id / artifact contract |
 | `tests/docs_cli_envelope.rs` | CLI JSON envelope + postmortem text labels + examples.md jq paths |
+| `tests/setup_fail.rs` | 1.3 Phase 1: `setup` + `fail` integration |
 | `tests/fixtures/docs/` | Static golden samples for docs contracts |
 | `.github/workflows/docs.yml` | MkDocs build + GitHub Pages deploy |
 | `tests/security.rs` | Security invariants |

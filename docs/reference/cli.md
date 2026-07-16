@@ -10,11 +10,11 @@ Every command accepts global `--json` for machine-readable output (`blackbox.cli
 
 | Job | Commands |
 |---|---|
-| **Project setup** | [`enable`](#1-enable-disable) · [`disable`](#1-enable-disable) |
+| **Project setup** | [`setup`](#setup) · [`enable`](#1-enable-disable) · [`disable`](#1-enable-disable) |
 | **Record** | [`run`](#2-run) · [`maybe-run`](#3-maybe-run) |
 | **Status / memory / multi-agent** | [`status`](#4-status) · [`handoff`](#5-handoff) · [`memory`](#6-memory-show-memory-set) · [`claim`](#7-claim) · [`resolve`](#8-resolve) · [`ack`](#9-ack) · [`context`](#33-context) |
 | **Inspect** | [`runs`](#10-runs) · [`show`](#11-show) · [`timeline`](#12-timeline) · [`inspect`](#13-inspect) · [`watch`](#17-watch) · [`search`](#16-search) |
-| **Explain / compare** | [`postmortem`](#31-postmortem) · [`summary`](#32-summary) · [`analyze`](#15-analyze) · [`diff`](#14-diff) |
+| **Explain / compare** | [`fail`](#fail) · [`postmortem`](#31-postmortem) · [`summary`](#32-summary) · [`analyze`](#15-analyze) · [`diff`](#14-diff) |
 | **Share / move data** | [`export`](#18-export) · [`import`](#19-import) · [`backup` / `restore`](#19b-backup-restore) · [`sync`](#20-sync-push-sync-pull) |
 | **Dashboard / agents** | [`serve`](#21-serve) · [`mcp`](#34-mcp) |
 | **Replay** | [`replay`](#22-replay) · [`fork`](#23-fork) |
@@ -34,6 +34,47 @@ Guide shortcuts: [getting-started](../guide/getting-started.md) · [debug](../gu
 | `--no-redact` | — | Disable redaction on capture/export/sync |
 | `-h` / `--help` | — | Print help |
 | `-V` / `--version` | — | Print version |
+
+---
+
+## `setup`
+
+**When to use:** First time in a repo — enable project, optional shell/memory/harden, sample run, doctor snapshot.
+
+```bash
+blackbox setup [--memory-bus] [--install-shell] [--harden] [--no-sample] [--require-ready]
+               [--shell bash|zsh|fish|powershell]
+```
+
+| Arg | Description |
+|---|---|
+| `--memory-bus` | Continuity=always (not observe-only) |
+| `--install-shell` | Install ambient wrappers |
+| `--harden` | `encrypt_blobs` + project native logs + key under `~/.config/blackbox/default.key` when possible |
+| `--no-sample` | Skip supervised `true` sample run |
+| `--require-ready` | Exit non-zero if soft daily-driver not ready |
+
+**JSON:** `command=setup` with project paths, flags, `sample_run_id`, `daily_driver_ready`, `next`.
+
+---
+
+## `fail`
+
+**When to use:** Something broke — one-shot failure story without hunting run ids.
+
+```bash
+blackbox fail [run-id|latest] [--full] [--fail-on-failure]
+```
+
+**Focus order** (when run id omitted): sticky `unresolved_failure` → last failed/cancelled/non-zero → latest.
+
+| Arg | Description |
+|---|---|
+| `run-id` | Optional explicit run (prefix ok) |
+| `--full` | Larger event window for postmortem |
+| `--fail-on-failure` | Exit 1 if focused run failed (CI) |
+
+**JSON:** `command=fail` with `focus`, `run_id`, `failed`, `summary` (full postmortem), `next_commands`.
 
 ---
 

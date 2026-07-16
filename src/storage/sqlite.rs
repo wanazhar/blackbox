@@ -76,15 +76,35 @@ impl SqliteStore {
 
         if let Some(parent) = db_path.parent() {
             std::fs::create_dir_all(parent).context("failed to create database directory")?;
+            crate::privacy::restrict_dir(parent);
+            // Also restrict grandparent `.blackbox` if present
+            if let Some(grand) = parent.parent() {
+                if grand
+                    .file_name()
+                    .map(|n| n == ".blackbox")
+                    .unwrap_or(false)
+                {
+                    crate::privacy::restrict_dir(grand);
+                }
+            }
         }
         std::fs::create_dir_all(&blob_dir).context("failed to create blob directory")?;
+        crate::privacy::restrict_dir(&blob_dir);
 
         let conn = Connection::open(&db_path).context("failed to open SQLite database")?;
+        crate::privacy::restrict_file(&db_path);
+        // WAL/SHM sidecars if already present
+        crate::privacy::restrict_file(&PathBuf::from(format!("{}-wal", db_path.display())));
+        crate::privacy::restrict_file(&PathBuf::from(format!("{}-shm", db_path.display())));
 
+        // Cap page cache (~8 MiB) so ambient capture stays light on shared machines.
+        // Negative cache_size is KiB units in SQLite.
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
              PRAGMA foreign_keys=ON;
-             PRAGMA busy_timeout=5000;",
+             PRAGMA busy_timeout=5000;
+             PRAGMA cache_size=-8192;
+             PRAGMA temp_store=MEMORY;",
         )
         .context("failed to set pragmas")?;
 
@@ -899,6 +919,31 @@ impl TraceStore for SqliteStore {
         result
     }
 
+    async fn get_events_since(
+        &self,
+        run_id: &str,
+        after_seq: u64,
+        limit: usize,
+    ) -> anyhow::Result<Vec<TraceEvent>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let run_id = run_id.to_string();
+        let result = {
+            let conn = self.lock();
+            let mut stmt = conn.prepare(
+                "SELECT id, run_id, parent_event_id, sequence, source, kind, started_at, ended_at, duration_ms, status, side_effect, input_blob, output_blob, error_blob, metadata
+                 FROM events WHERE run_id = ?1 AND sequence > ?2 ORDER BY sequence ASC LIMIT ?3",
+            )?;
+            let events = stmt
+                .query_map(params![run_id, after_seq as i64, limit as i64], event_from_row)?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(events)
+        };
+        tokio::task::yield_now().await;
+        result
+    }
+
     async fn get_event(&self, event_id: &str) -> anyhow::Result<Option<TraceEvent>> {
         let event_id = event_id.to_string();
         let result = {
@@ -1069,12 +1114,15 @@ impl TraceStore for SqliteStore {
             let data_for_write = data.to_vec();
             task::spawn_blocking(move || -> anyhow::Result<()> {
                 std::fs::create_dir_all(&blob_dir).context("failed to create blob directory")?;
+                crate::privacy::restrict_dir(&blob_dir);
                 let target = blob_dir.join(&key_for_write);
                 // Use atomic write: write to temp file, then rename
                 let temp = target.with_extension("tmp");
                 std::fs::write(&temp, &data_for_write).context("failed to write blob temp file")?;
+                crate::privacy::restrict_file(&temp);
                 // rename is atomic on the same filesystem
                 std::fs::rename(&temp, &target).context("failed to rename blob temp file")?;
+                crate::privacy::restrict_file(&target);
                 Ok(())
             })
             .await??;

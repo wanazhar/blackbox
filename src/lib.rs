@@ -12,6 +12,7 @@ pub mod memory;
 pub mod output;
 pub mod pipeline;
 pub mod pricing;
+pub mod privacy;
 pub mod redaction;
 pub mod replay;
 pub mod resume;

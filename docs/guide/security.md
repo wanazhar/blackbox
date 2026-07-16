@@ -8,8 +8,9 @@ Blackbox runs on machines that may hold secrets — API keys, tokens, passwords,
 
 | Surface | Redacted by default? | What is redacted |
 |---|---|---|
-| **argv** (command arguments) | ✅ Yes | Arguments that match secret patterns |
-| **Environment variables** | ✅ Yes | Values of known secret variables (`API_KEY`, `TOKEN`, `SECRET`, `PASSWORD`, etc.) |
+| **argv** (command + process tree) | ✅ Yes | Arguments that match secret patterns |
+| **Environment variables** | ✅ Yes | Name denylist **and** value pattern scan (keys, connection strings, tokens) |
+| **Git diffs** | ✅ Yes | Diff text scanned before blob/preview storage |
 | **Terminal output** | ✅ Yes | Inline strings matching secret patterns |
 | **Tool inputs/outputs** | ✅ Yes | Parameters and results matching secret patterns |
 | **Run IDs** | ❌ No | UUIDs — structural identifiers survive |
@@ -44,6 +45,7 @@ Redacted values are replaced with `[REDACTED]`. Event metadata may include a `re
 - Secrets only present in raw PTY blobs under `--insecure-raw` are stored unredacted by design.
 - Overlap window is finite (default 256 bytes); extremely long tokens split with a larger gap may still miss (prefer coalesced storage + scrub).
 - Opt-in danger flags: `--insecure-raw`, `--no-redact` (never enable on shared machines).
+- **Blackbox is not a vault.** Same-UID malware, unlocked-disk theft, and backup exfil of `.blackbox/` still see every redacted-at-best trace. There is no at-rest encryption (yet).
 
 ---
 
@@ -124,7 +126,20 @@ blackbox scrub
 blackbox scrub --gc
 ```
 
-`scrub` re-reads events, re-applies the `SecretScanner` patterns, and updates the stored events in place. It never touches blob content (blobs are the raw bytes; redaction is applied at the event metadata level).
+`scrub` re-reads events, re-applies the `SecretScanner` patterns, and rewrites **event I/O blobs** (input/output/error) plus metadata strings. Prefer `blackbox scrub --gc` afterward so replaced secret blobs are deleted. Environment/diff metadata-key blobs are still a residual gap — treat old stores as potentially hot until scrubbed under a current build.
+
+---
+
+## 4b. Store file permissions (multi-user)
+
+On Unix, blackbox sets **owner-only** modes when creating store artifacts:
+
+| Path | Mode |
+|---|---|
+| `.blackbox/` and `blobs/` | `0700` |
+| `blackbox.db`, blob files, `state.json`, `MEMORY.*` | `0600` |
+
+`blackbox doctor` warns (and best-effort hardens) if the store is group/other-readable. This blocks **other local UIDs** with a default umask — not the same user, not root, and not an unlocked stolen disk.
 
 ---
 
@@ -160,9 +175,9 @@ blackbox serve
 # Listening on http://127.0.0.1:7788
 ```
 
-### Token authentication
+**Non-loopback binds refuse to start without a token** (`--bind 0.0.0.0:7788` requires `--token` / `BLACKBOX_SERVE_TOKEN`). Loopback without a token still warns: any local user can `curl 127.0.0.1:7788` and read full history.
 
-Before exposing the dashboard on a network interface, configure a token:
+### Token authentication
 
 ```bash
 blackbox serve --token my-secret-token
@@ -170,7 +185,7 @@ blackbox serve --token my-secret-token
 BLACKBOX_SERVE_TOKEN=my-secret-token blackbox serve
 ```
 
-Requests to any endpoint must include the token:
+Prefer the Authorization header (query `?token=` is deprecated and may leak into logs):
 
 ```bash
 curl -H "Authorization: Bearer my-secret-token" http://host:7788/api/status

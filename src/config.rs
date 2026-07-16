@@ -116,10 +116,9 @@ impl BlackboxPaths {
         }
     }
 
-    /// Ensure root and blob directories exist.
+    /// Ensure root and blob directories exist with owner-only modes (Unix 0700).
     pub fn ensure_dirs(&self) -> anyhow::Result<()> {
-        std::fs::create_dir_all(&self.root)?;
-        std::fs::create_dir_all(&self.blob_dir)?;
+        crate::privacy::ensure_private_dirs(&self.root, &[&self.blob_dir])?;
         Ok(())
     }
 }

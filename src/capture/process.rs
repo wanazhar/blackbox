@@ -467,8 +467,13 @@ fn apply_snapshot_to_event(ev: &mut TraceEvent, snap: &ProcessSnapshot, method: 
         ev.metadata
             .insert("uid".to_string(), serde_json::json!(uid));
     }
+    // Redact secrets in argv (curl -H Authorization, mysql -p…, etc.)
+    let scanner = crate::redaction::scanner::SecretScanner::new(
+        crate::redaction::RedactionConfig::default(),
+    );
+    let safe_argv = scanner.redact_command(&snap.argv);
     let meta = CommandMetadata::from_proc_argv(
-        snap.argv.clone(),
+        safe_argv,
         snap.executable.clone(),
         snap.cwd.clone(),
         method,

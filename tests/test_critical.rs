@@ -487,23 +487,19 @@ async fn test_terminal_recorder() {
         Some(1)
     );
 
-    // ── Segment cap eviction ───────────────────────────────────
-    // MAX_SEGMENTS is 10_000. Record enough to trigger eviction.
+    // ── Counters-only: no full raw retention (RAM) ─────────────
+    // Logical segment counts stay accurate; bodies are not held in RAM.
     let mut rec2 = RawRecorder::new();
     rec2.start("cap-test").await.unwrap();
-
-    // Record MAX_SEGMENTS + 500 segments
     for i in 0..10_500 {
         let data = format!("segment-{}", i);
         rec2.record_output(data.as_bytes()).await.unwrap();
     }
-    // Should have evicted to 10_000
     assert_eq!(
         rec2.segment_count(),
-        10_000,
-        "should cap at MAX_SEGMENTS after eviction"
+        10_500,
+        "counters track full logical count without retaining bodies"
     );
-
     let total = rec2.total_bytes();
     assert!(total > 0, "should have recorded bytes");
 }

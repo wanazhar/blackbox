@@ -182,14 +182,15 @@ impl RunSupervisor {
 
         let writer = Arc::new(EventWriter::new(self.store.clone(), run.id.clone()));
 
-        // ── Capture and redact environment variables ───────────────
+        // ── Capture and redact environment variables (single map; value+name scan) ──
         let env_redactor = EnvironmentRedactor::new(redact_cfg.clone());
-        let env_vars: HashMap<String, String> = std::env::vars().collect();
-        let redactions = env_redactor.scan_env(&env_vars);
-        let redacted_env = if self.policy.redact {
-            env_redactor.redact_env(&env_vars)
+        let mut env_vars: HashMap<String, String> = std::env::vars().collect();
+        let redactions = if self.policy.redact {
+            let recs = env_redactor.scan_env(&env_vars);
+            env_redactor.redact_env_in_place(&mut env_vars);
+            recs
         } else {
-            env_vars.clone()
+            Vec::new()
         };
 
         if !redactions.is_empty() {
@@ -200,12 +201,15 @@ impl RunSupervisor {
         }
 
         let env_json =
-            serde_json::to_vec(&redacted_env).context("failed to serialize environment")?;
+            serde_json::to_vec(&env_vars).context("failed to serialize environment")?;
         let env_blob = self
             .store
             .store_blob(&env_json)
             .await
             .context("failed to store environment blob")?;
+        // Drop large env map ASAP after serialization.
+        let env_var_count = env_vars.len();
+        drop(env_vars);
 
         let mut env_event = TraceEvent::new(&run.id, EventSource::System, "environment.captured");
         env_event.status = EventStatus::Success;
@@ -215,7 +219,7 @@ impl RunSupervisor {
         );
         env_event.metadata.insert(
             "var_count".to_string(),
-            serde_json::json!(redacted_env.len()),
+            serde_json::json!(env_var_count),
         );
         if !redactions.is_empty() {
             env_event.metadata.insert(
@@ -829,13 +833,25 @@ impl RunSupervisor {
         }
         let end_ev = writer.write(end_ev).await?;
 
-        let all_events = match self.store.get_events(&run.id).await {
-            Ok(events) => events,
+        // Single end-of-run event load (coverage + session + usage). Cap for RAM.
+        const END_OF_RUN_EVENT_CAP: usize = 8_000;
+        let (all_events, events_truncated) = match self
+            .store
+            .get_events_limited(&run.id, END_OF_RUN_EVENT_CAP)
+            .await
+        {
+            Ok(pair) => pair,
             Err(e) => {
-                tracing::warn!(error = %e, "failed to fetch events for session_id discovery; proceeding with empty list");
-                Vec::new()
+                tracing::warn!(error = %e, "failed to fetch events for end-of-run rollup; proceeding with empty list");
+                (Vec::new(), false)
             }
         };
+        if events_truncated {
+            tracing::debug!(
+                cap = END_OF_RUN_EVENT_CAP,
+                "end-of-run rollup used limited event window (RAM cap)"
+            );
+        }
 
         // ── Capture coverage report (honest surface status + lag) ────
         let pty_events = all_events
@@ -982,9 +998,8 @@ impl RunSupervisor {
                 run.adapter = Some(a.to_string());
             }
         }
-        if let Ok(events) = self.store.get_events(&run.id).await {
-            run.apply_usage_from_events(&events);
-        }
+        // Reuse the same event window already loaded for coverage/session.
+        run.apply_usage_from_events(&all_events);
         self.store
             .update_run(run)
             .await

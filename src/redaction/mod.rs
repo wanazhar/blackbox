@@ -69,6 +69,20 @@ impl Default for RedactionConfig {
                 "PRIVATE_KEY".into(),
                 "ACCESS_KEY".into(),
                 "SESSION_KEY".into(),
+                // Expanded name denylist (stolen-device / multi-user residual risk)
+                "DATABASE_URL".into(),
+                "REDIS_URL".into(),
+                "MONGO_URL".into(),
+                "MYSQL_PWD".into(),
+                "PGPASSWORD".into(),
+                "DSN".into(),
+                "CONNECTION_STRING".into(),
+                "AUTH".into(),
+                "BEARER".into(),
+                "WEBHOOK".into(),
+                "CLIENT_SECRET".into(),
+                "PRIVATE".into(),
+                "PASSWD".into(),
             ],
         }
     }

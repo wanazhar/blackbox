@@ -240,6 +240,7 @@ impl ProjectState {
 
     pub fn save(&self, root: &Path) -> anyhow::Result<()> {
         std::fs::create_dir_all(root)?;
+        crate::privacy::restrict_dir(root);
         let mut to_write = self.clone();
         to_write.schema = STATE_SCHEMA.into();
         to_write.attention_needed = !to_write.attention_level.is_none();
@@ -247,7 +248,9 @@ impl ProjectState {
         let tmp = root.join("state.json.tmp");
         let text = serde_json::to_string_pretty(&to_write)?;
         std::fs::write(&tmp, text)?;
+        crate::privacy::restrict_file(&tmp);
         std::fs::rename(&tmp, &p)?;
+        crate::privacy::restrict_file(&p);
         Ok(())
     }
 

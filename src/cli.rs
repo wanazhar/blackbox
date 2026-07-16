@@ -4129,6 +4129,28 @@ async fn cmd_doctor(cli: &Cli, args: &DoctorArgs) -> anyhow::Result<()> {
         dd_score = dd_score.saturating_sub(10);
         dd_notes.push("store size soft warning active — consider blackbox gc".into());
     }
+    // Store filesystem privacy (other local users)
+    #[cfg(unix)]
+    {
+        if crate::privacy::is_world_or_group_readable(&paths.root) {
+            dd_score = dd_score.saturating_sub(20);
+            dd_notes.push(
+                "store directory is group/other-readable — chmod 700 .blackbox (privacy)".into(),
+            );
+        }
+        if paths.db_path.exists() && crate::privacy::is_world_or_group_readable(&paths.db_path) {
+            dd_score = dd_score.saturating_sub(20);
+            dd_notes.push(
+                "database file is group/other-readable — chmod 600 blackbox.db (privacy)".into(),
+            );
+        }
+        // Best-effort harden on doctor for existing installs
+        crate::privacy::restrict_dir(&paths.root);
+        crate::privacy::restrict_dir(&paths.blob_dir);
+        if paths.db_path.exists() {
+            crate::privacy::restrict_file(&paths.db_path);
+        }
+    }
     // Progressive retention tips
     let keep = discovery
         .config

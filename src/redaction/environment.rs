@@ -1,42 +1,54 @@
+use crate::redaction::scanner::SecretScanner;
 use crate::redaction::{RedactionConfig, RedactionReason, RedactionRecord};
 use std::collections::HashMap;
 
 /// Redacts sensitive environment variable values before storage.
 ///
 /// Environment variables are captured at run start and may contain
-/// API keys, tokens, and other credentials. This scanner identifies
-/// likely-secret variable names and replaces their values.
+/// API keys, tokens, and other credentials. Redaction is two-pass:
+/// 1. Name denylist (substring match on the variable name)
+/// 2. Value scan with [`SecretScanner`] (catches secrets in oddly-named vars)
 pub struct EnvironmentRedactor {
     config: RedactionConfig,
+    scanner: SecretScanner,
 }
 
 impl EnvironmentRedactor {
     pub fn new(config: RedactionConfig) -> Self {
-        Self { config }
+        let scanner = SecretScanner::new(config.clone());
+        Self { config, scanner }
+    }
+
+    fn name_is_sensitive(&self, name: &str) -> bool {
+        let upper = name.to_uppercase();
+        self.config
+            .env_var_patterns
+            .iter()
+            .any(|p| upper.contains(p))
     }
 
     /// Scan environment variables and return redaction records
-    /// for any that match sensitive patterns.
+    /// for name matches and value-pattern matches.
     pub fn scan_env(&self, env: &HashMap<String, String>) -> Vec<RedactionRecord> {
         if !self.config.enabled {
             return Vec::new();
         }
 
         let mut records = Vec::new();
-        for name in env.keys() {
-            let upper = name.to_uppercase();
-            if self
-                .config
-                .env_var_patterns
-                .iter()
-                .any(|p| upper.contains(p))
-            {
+        for (name, value) in env {
+            if self.name_is_sensitive(name) {
                 records.push(RedactionRecord {
                     reason: RedactionReason::EnvironmentSecret,
                     pattern: name.clone(),
                     location: format!("env:{}", name),
                     event_id: None,
                 });
+                continue;
+            }
+            // Value scan: oddly named vars carrying tokens/URLs with secrets
+            let hits = self.scanner.scan(value, &format!("env:{}", name), None);
+            for h in hits {
+                records.push(h);
             }
         }
         records
@@ -44,23 +56,37 @@ impl EnvironmentRedactor {
 
     /// Produce a redacted copy of the environment.
     ///
-    /// Sensitive values are replaced with `[REDACTED]`.
+    /// Sensitive names become `[REDACTED]`. Other values are pattern-scanned
+    /// so secrets in `DATABASE_URL`-style or oddly named vars still die.
     pub fn redact_env(&self, env: &HashMap<String, String>) -> HashMap<String, String> {
-        let mut result = HashMap::new();
+        if !self.config.enabled {
+            return env.clone();
+        }
+        let mut result = HashMap::with_capacity(env.len());
         for (name, value) in env {
-            let upper = name.to_uppercase();
-            if self
-                .config
-                .env_var_patterns
-                .iter()
-                .any(|p| upper.contains(p))
-            {
+            if self.name_is_sensitive(name) {
                 result.insert(name.clone(), "[REDACTED]".to_string());
             } else {
-                result.insert(name.clone(), value.clone());
+                let redacted = self.scanner.redact(value);
+                result.insert(name.clone(), redacted);
             }
         }
         result
+    }
+
+    /// Redact in place (single map — lower peak RAM than clone + redact).
+    pub fn redact_env_in_place(&self, env: &mut HashMap<String, String>) {
+        if !self.config.enabled {
+            return;
+        }
+        for (name, value) in env.iter_mut() {
+            if self.name_is_sensitive(name) {
+                *value = "[REDACTED]".to_string();
+            } else {
+                let redacted = self.scanner.redact(value);
+                *value = redacted;
+            }
+        }
     }
 }
 
@@ -79,8 +105,6 @@ mod tests {
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect()
     }
-
-    // --- scan_env finds API_KEY, TOKEN, SECRET, PASSWORD patterns ---
 
     #[test]
     fn scan_env_finds_api_key() {
@@ -119,8 +143,6 @@ mod tests {
         assert_eq!(records[0].reason, RedactionReason::EnvironmentSecret);
     }
 
-    // --- scan_env is case-insensitive for env var names ---
-
     #[test]
     fn scan_env_case_insensitive() {
         let r = default_redactor();
@@ -136,8 +158,6 @@ mod tests {
             "all lowercase/mixed case names should match"
         );
     }
-
-    // --- scan_env skips non-sensitive vars like PATH, HOME ---
 
     #[test]
     fn scan_env_skips_non_sensitive_vars() {
@@ -168,8 +188,6 @@ mod tests {
         assert_eq!(records[0].pattern, "MY_API_KEY");
     }
 
-    // --- redact_env replaces sensitive values with [REDACTED] ---
-
     #[test]
     fn redact_env_replaces_sensitive_values() {
         let r = default_redactor();
@@ -178,8 +196,6 @@ mod tests {
         assert_eq!(result["API_KEY"], "[REDACTED]");
         assert_eq!(result["TOKEN"], "[REDACTED]");
     }
-
-    // --- redact_env preserves non-sensitive values ---
 
     #[test]
     fn redact_env_preserves_non_sensitive_values() {
@@ -209,8 +225,6 @@ mod tests {
         assert_eq!(result["HOME"], "/home/user");
     }
 
-    // --- disabled config returns empty scan results ---
-
     #[test]
     fn disabled_config_returns_empty_scan() {
         let config = RedactionConfig {
@@ -235,14 +249,9 @@ mod tests {
         let r = EnvironmentRedactor::new(config);
         let env = env_from_pairs(&[("API_KEY", "super-secret")]);
         let result = r.redact_env(&env);
-        // Note: redact_env doesn't check config.enabled, it checks patterns.
-        // This test verifies the actual behavior: even when disabled, redact_env
-        // still replaces matching pattern names (the scan is what's gated).
-        // If the contract changes, update this test.
-        assert_eq!(result["API_KEY"], "[REDACTED]");
+        // When disabled, pass through unchanged.
+        assert_eq!(result["API_KEY"], "super-secret");
     }
-
-    // --- redact_env with empty input ---
 
     #[test]
     fn scan_env_with_empty_input() {
@@ -259,8 +268,6 @@ mod tests {
         let result = r.redact_env(&env);
         assert!(result.is_empty());
     }
-
-    // --- additional edge cases ---
 
     #[test]
     fn scan_env_event_id_is_none() {
@@ -279,5 +286,38 @@ mod tests {
         assert!(result.contains_key("A"));
         assert!(result.contains_key("B_API_KEY"));
         assert!(result.contains_key("C"));
+    }
+
+    #[test]
+    fn value_scan_redacts_openai_key_in_odd_name() {
+        let r = default_redactor();
+        // Name does not match denylist; value is a classic OpenAI-style key.
+        let env = env_from_pairs(&[("SVC_CFG", "sk-abcdefghijklmnopqrstuvwxyz012345")]);
+        let result = r.redact_env(&env);
+        assert!(
+            !result["SVC_CFG"].contains("sk-abcdef"),
+            "value scan must redact API key material: got {}",
+            result["SVC_CFG"]
+        );
+    }
+
+    #[test]
+    fn name_database_url_is_redacted_wholesale() {
+        let r = default_redactor();
+        let env = env_from_pairs(&[(
+            "DATABASE_URL",
+            "postgres://user:hunter2@db.internal:5432/app",
+        )]);
+        let result = r.redact_env(&env);
+        assert_eq!(result["DATABASE_URL"], "[REDACTED]");
+    }
+
+    #[test]
+    fn redact_env_in_place_single_map() {
+        let r = default_redactor();
+        let mut env = env_from_pairs(&[("PATH", "/bin"), ("API_KEY", "secret")]);
+        r.redact_env_in_place(&mut env);
+        assert_eq!(env["PATH"], "/bin");
+        assert_eq!(env["API_KEY"], "[REDACTED]");
     }
 }

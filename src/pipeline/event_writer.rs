@@ -22,6 +22,8 @@ use crate::storage::TraceStore;
 const SLOW_WRITE_MS: u128 = 150;
 /// Soft threshold: many slow writes imply capture is falling behind.
 const LAG_WARN_COUNT: u64 = 12;
+/// Cap tool-event fingerprint set so long tool-heavy runs don't grow unbounded.
+const MAX_TOOL_FINGERPRINTS: usize = 50_000;
 
 /// Snapshot of writer health for coverage / doctor.
 #[derive(Debug, Clone, Default)]
@@ -124,7 +126,7 @@ impl EventWriter {
         if let Some(fp) = tool_fingerprint(&event) {
             // M-09: Recover from mutex poison rather than propagating the error.
             let mut seen = self.tool_seen.lock().unwrap_or_else(|e| e.into_inner());
-            if !seen.insert(fp.clone()) {
+            if seen.contains(&fp) {
                 tracing::debug!(
                     kind = %event.kind,
                     fingerprint = %fp,
@@ -138,6 +140,20 @@ impl EventWriter {
                 }
                 return Ok(event);
             }
+            // Soft cap: if full, clear half (rare re-dupes acceptable after eviction).
+            if seen.len() >= MAX_TOOL_FINGERPRINTS {
+                let drop_n = seen.len() / 2;
+                let to_drop: Vec<String> = seen.iter().take(drop_n).cloned().collect();
+                for k in to_drop {
+                    seen.remove(&k);
+                }
+                tracing::debug!(
+                    dropped = drop_n,
+                    remaining = seen.len(),
+                    "tool fingerprint set capped; evicted oldest half"
+                );
+            }
+            seen.insert(fp);
         }
 
         if event.sequence == 0 {

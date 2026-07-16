@@ -227,23 +227,32 @@ impl GitCapture {
         diff: &str,
         tx: &mpsc::Sender<TraceEvent>,
     ) -> Option<String> {
+        // Redact secrets in diffs before blob + preview (stolen-device residual).
+        let scanner = crate::redaction::scanner::SecretScanner::new(
+            crate::redaction::RedactionConfig::default(),
+        );
+        let safe_diff = scanner.redact(diff);
         let mut ev = TraceEvent::new(run_id, EventSource::Git, kind);
         ev.status = EventStatus::Success;
         ev.metadata
-            .insert("diff_size".to_string(), serde_json::json!(diff.len()));
+            .insert("diff_size".to_string(), serde_json::json!(safe_diff.len()));
+        if safe_diff != diff {
+            ev.metadata
+                .insert("diff_redacted".to_string(), serde_json::json!(true));
+        }
         ev.metadata.insert(
             "diff_preview".to_string(),
-            serde_json::json!(if diff.len() > 500 {
-                let end = diff.floor_char_boundary(500);
-                format!("{}...", &diff[..end])
+            serde_json::json!(if safe_diff.len() > 500 {
+                let end = safe_diff.floor_char_boundary(500);
+                format!("{}...", &safe_diff[..end])
             } else {
-                diff.to_string()
+                safe_diff.clone()
             }),
         );
 
         let mut blob_key = None;
         if let Some(ref store) = self.store {
-            match store.store_blob(diff.as_bytes()).await {
+            match store.store_blob(safe_diff.as_bytes()).await {
                 Ok(reference) => {
                     ev.metadata.insert(
                         "diff_blob_key".to_string(),

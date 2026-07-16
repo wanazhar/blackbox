@@ -978,18 +978,22 @@ pub fn write_memory_files(
     also_resume_copies: bool,
 ) -> anyhow::Result<PathBuf> {
     std::fs::create_dir_all(blackbox_root)?;
+    crate::privacy::restrict_dir(blackbox_root);
     let md = format_memory_markdown(pack);
     let md_path = blackbox_root.join("MEMORY.md");
     let json_path = blackbox_root.join("MEMORY.json");
     std::fs::write(&md_path, &md)?;
+    crate::privacy::restrict_file(&md_path);
     std::fs::write(&json_path, serde_json::to_string_pretty(pack)?)?;
+    crate::privacy::restrict_file(&json_path);
     if also_resume_copies {
         // Identical content copies — not symlinks
-        std::fs::write(blackbox_root.join("RESUME.md"), &md)?;
-        std::fs::write(
-            blackbox_root.join("RESUME.json"),
-            serde_json::to_string_pretty(pack)?,
-        )?;
+        let resume_md = blackbox_root.join("RESUME.md");
+        let resume_json = blackbox_root.join("RESUME.json");
+        std::fs::write(&resume_md, &md)?;
+        crate::privacy::restrict_file(&resume_md);
+        std::fs::write(&resume_json, serde_json::to_string_pretty(pack)?)?;
+        crate::privacy::restrict_file(&resume_json);
     }
     Ok(md_path)
 }

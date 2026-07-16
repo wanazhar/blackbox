@@ -63,6 +63,24 @@ pub trait TraceStore: Send + Sync + 'static {
         Ok(self.get_events(run_id).await?.len())
     }
 
+    /// Load events with `sequence > after_seq`, ascending, up to `limit`.
+    ///
+    /// Used by live SSE to avoid reloading the entire run every tick.
+    /// Default falls back to full scan + filter (backends SHOULD override).
+    async fn get_events_since(
+        &self,
+        run_id: &str,
+        after_seq: u64,
+        limit: usize,
+    ) -> anyhow::Result<Vec<TraceEvent>> {
+        let all = self.get_events(run_id).await?;
+        Ok(all
+            .into_iter()
+            .filter(|e| e.sequence > after_seq)
+            .take(limit)
+            .collect())
+    }
+
     /// Load a single event by ID.
     async fn get_event(&self, event_id: &str) -> anyhow::Result<Option<TraceEvent>>;
 

@@ -1,6 +1,6 @@
 //! Local HTTP dashboard with live SSE event streams.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -42,6 +42,15 @@ pub struct ServeOptions {
 
 /// Bind and serve the dashboard until cancelled.
 pub async fn serve(store: Arc<SqliteStore>, opts: ServeOptions) -> anyhow::Result<()> {
+    // Privacy: non-loopback bind requires a token (loopback multi-user still warned).
+    if !crate::privacy::is_loopback_addr(&opts.addr) && opts.token.is_none() {
+        anyhow::bail!(
+            "refusing to serve on non-loopback address {} without authentication. \
+             Set --token or BLACKBOX_SERVE_TOKEN (or bind 127.0.0.1).",
+            opts.addr
+        );
+    }
+
     if opts.reindex {
         let n = store.reindex_fts()?;
         println!("Reindexed FTS ({n} events)");
@@ -84,9 +93,10 @@ pub async fn serve(store: Arc<SqliteStore>, opts: ServeOptions) -> anyhow::Resul
     println!("blackbox dashboard → http://{}", opts.addr);
     if opts.token.is_none() {
         eprintln!(
-            "WARNING: dashboard is running WITHOUT authentication — \
-             anyone on the network can view run data and trigger sync. \
-             Set --token or BLACKBOX_SERVE_TOKEN to enable auth."
+            "WARNING: dashboard is running WITHOUT authentication on loopback — \
+             any local user can curl http://{} and read full run history. \
+             Set --token or BLACKBOX_SERVE_TOKEN to require auth.",
+            opts.addr
         );
     }
     if opts.token.is_some() {
@@ -741,10 +751,22 @@ async fn api_run(
 async fn api_events(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Query(q): Query<EventsQuery>,
 ) -> Result<Response, AppError> {
     let run_id = resolve_prefix(state.store.as_ref(), &id).await?;
-    let events = state.store.get_events(&run_id).await?;
+    // Default cap protects dashboard RAM on huge runs; ?limit=0 means all.
+    let limit = q.limit.unwrap_or(5_000);
+    let events = if limit == 0 {
+        state.store.get_events(&run_id).await?
+    } else {
+        state.store.get_events_limited(&run_id, limit).await?.0
+    };
     Ok(Json(serde_json::to_value(events)?).into_response())
+}
+
+#[derive(Deserialize)]
+struct EventsQuery {
+    limit: Option<usize>,
 }
 
 /// Server-Sent Events stream of run events (historical first, then live tail).
@@ -770,7 +792,7 @@ async fn api_event_stream(
         StreamState {
             store,
             run_id,
-            seen: BoundedSeen::new(),
+            last_seq: 0,
             queue: VecDeque::new(),
             ticks_idle: 0,
             finished: false,
@@ -781,14 +803,20 @@ async fn api_event_stream(
                 return Some((Ok(ev), st));
             }
 
-            // Load new events from store
-            if let Ok(events) = st.store.get_events(&st.run_id).await {
+            // Incremental fetch by sequence — O(delta) not O(entire run) each tick.
+            const BATCH: usize = 500;
+            if let Ok(events) = st
+                .store
+                .get_events_since(&st.run_id, st.last_seq, BATCH)
+                .await
+            {
                 for e in events {
-                    if st.seen.insert(e.id.clone()) {
-                        if let Ok(data) = serde_json::to_string(&e) {
-                            st.queue
-                                .push_back(Event::default().event("event").data(data));
-                        }
+                    if e.sequence > st.last_seq {
+                        st.last_seq = e.sequence;
+                    }
+                    if let Ok(data) = serde_json::to_string(&e) {
+                        st.queue
+                            .push_back(Event::default().event("event").data(data));
                     }
                 }
             }
@@ -835,50 +863,11 @@ async fn api_event_stream(
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
 }
 
-/// Bounded set of seen event IDs to prevent unbounded memory growth
-/// in long-running SSE streams. When capacity is reached, the oldest
-/// entries are evicted.
-struct BoundedSeen {
-    seen: HashSet<String>,
-    order: VecDeque<String>,
-    capacity: usize,
-}
-
-impl BoundedSeen {
-    const MAX_ENTRIES: usize = 10_000;
-
-    fn new() -> Self {
-        Self {
-            seen: HashSet::new(),
-            order: VecDeque::new(),
-            capacity: Self::MAX_ENTRIES,
-        }
-    }
-
-    /// Returns true if the id was newly inserted (not previously seen).
-    fn insert(&mut self, id: String) -> bool {
-        if self.seen.insert(id.clone()) {
-            self.order.push_back(id);
-            self.evict();
-            true
-        } else {
-            false
-        }
-    }
-
-    fn evict(&mut self) {
-        while self.seen.len() > self.capacity {
-            if let Some(oldest) = self.order.pop_front() {
-                self.seen.remove(&oldest);
-            }
-        }
-    }
-}
-
 struct StreamState {
     store: Arc<SqliteStore>,
     run_id: String,
-    seen: BoundedSeen,
+    /// Highest sequence delivered; next poll uses get_events_since.
+    last_seq: u64,
     queue: VecDeque<Event>,
     ticks_idle: u32,
     finished: bool,

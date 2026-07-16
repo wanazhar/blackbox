@@ -14,6 +14,8 @@ Blackbox docs are split by **who is reading** and **what question they have**. T
 | Install and verify | [guide/install.md](guide/install.md) |
 | First project end-to-end | [guide/getting-started.md](guide/getting-started.md) |
 | Copy-paste workflows | [guide/recipes.md](guide/recipes.md) |
+| One-screen commands | [guide/cheatsheet.md](guide/cheatsheet.md) |
+| Agent harness adapters | [guide/adapters.md](guide/adapters.md) |
 | Day-to-day commands | [guide/everyday-use.md](guide/everyday-use.md) |
 | Something failed — debug it | [guide/debug-a-failure.md](guide/debug-a-failure.md) |
 | Ambient capture / shell wrappers | [guide/leave-it-on.md](guide/leave-it-on.md) |

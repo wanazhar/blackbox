@@ -21,6 +21,8 @@ All notable changes to **blackbox** are documented here.
 - Further revamp: [concepts](docs/guide/concepts.md), [recipes](docs/guide/recipes.md) cookbook;
   rewritten json-api / memory-pack / portable-format; readable ROADMAP; internals **Answers:** banners;
   historical AUDIT labeled; PUBLISH preflight includes doc link + first-run tests
+- [cheatsheet](docs/guide/cheatsheet.md), [adapters](docs/guide/adapters.md); docs_first_run golden
+  covers postmortem JSON fields + adapter detection table
 
 ### Daily-driver trust (post-1.2)
 - **Observe-only default** for ambient capture; product mode `recorder` | `continuity`

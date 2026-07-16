@@ -103,8 +103,32 @@ async fn first_run_happy_path_matches_getting_started_contract() {
         "human postmortem text should be non-empty for operator docs"
     );
 
-    // Anomalies field is always present (possibly empty) — dashboard/CI contract
-    let _ = &summary.anomalies;
+    // Docs / JSON API contract: these postmortem fields always serialize
+    let pm = serde_json::to_value(&summary).expect("postmortem serializes");
+    for key in [
+        "headline",
+        "next_action",
+        "anomalies",
+        "evidence",
+        "status",
+        "exit_code",
+    ] {
+        assert!(
+            pm.get(key).is_some(),
+            "postmortem JSON must include '{key}' (json-api / recipes docs)"
+        );
+    }
+    assert!(pm["anomalies"].is_array());
+    assert!(pm["evidence"].is_array());
+
+    // Cheatsheet/docs: short id is a unique prefix of the full UUID (CLI resolves prefix)
+    let matches: Vec<_> = runs.iter().filter(|r| r.id.starts_with(sid)).collect();
+    assert_eq!(
+        matches.len(),
+        1,
+        "short_id prefix must uniquely identify the run"
+    );
+    assert_eq!(matches[0].id, run.id);
 
     // Eval/CI artifact contract still holds when writing the same files getting-started mentions
     let artifacts = project.join("artifacts");
@@ -152,6 +176,13 @@ async fn first_run_happy_path_matches_getting_started_contract() {
     let summary_txt = std::fs::read_to_string(artifacts.join("summary.txt")).unwrap();
     assert!(summary_txt.contains("headline:"));
     assert!(summary_txt.contains("anomalies:"));
+    assert!(summary_txt.contains("next:"));
+
+    // run.json is a re-loadable Run shape for CI upload docs
+    let run_back: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(artifacts.join("run.json")).unwrap()).unwrap();
+    assert_eq!(run_back["id"], run.id);
+    assert_eq!(run_back["exit_code"], 0);
 }
 
 #[test]
@@ -159,4 +190,69 @@ fn short_id_docs_contract() {
     // Documented as ~8 char unique prefix
     assert_eq!(short_id("abcdefghijklmnop"), "abcdefgh");
     assert_eq!(short_id("abc"), "abc");
+}
+
+#[test]
+fn adapters_md_detection_table() {
+    // Keep docs/guide/adapters.md detection table honest
+    use blackbox::adapters::detect::detect_adapter;
+    let cases = [
+        ("claude", "claude"),
+        ("codex", "codex"),
+        ("aider", "aider"),
+        ("gemini", "gemini"),
+        ("cursor", "cursor"),
+        ("cursor-agent", "cursor"),
+        ("opencode", "opencode"),
+        ("grok", "grok"),
+        ("my-custom-agent", "generic"),
+        ("echo", "generic"),
+    ];
+    for (cmd, id) in cases {
+        assert_eq!(
+            detect_adapter(&[cmd.into()]).id(),
+            id,
+            "adapters.md detection for {cmd}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn postmortem_text_has_docs_oriented_sections() {
+    // Even a trivial success run should produce operator-readable summary text
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("t.db");
+    let blobs = dir.path().join("blobs");
+    let store = SqliteStore::open_with_blobs(&db, &blobs).unwrap();
+    let store: Arc<dyn TraceStore> = Arc::new(store);
+    let supervisor = RunSupervisor::new(store.clone());
+    let args = RunArgs {
+        name: Some("pm-text".into()),
+        project: Some(dir.path().to_string_lossy().into()),
+        tag: vec![],
+        insecure_raw: false,
+        no_redact: false,
+        no_auto_resume: true,
+        auto_resume: false,
+        ci: false,
+        eval: false,
+        observe_only: true,
+        artifact_dir: None,
+        resume_injection: None,
+        claim_id_note: None,
+        ambient: false,
+        command: vec!["true".into()],
+    };
+    let run = supervisor.execute(&args).await.unwrap();
+    let summary = build_summary(store.as_ref(), &run, SummaryOptions::default())
+        .await
+        .unwrap();
+    let text = format_summary_text(&summary);
+    // debug-a-failure / cheatsheet expect these human labels somewhere in text or fields
+    assert!(
+        !summary.headline.is_empty() || text.to_lowercase().contains("succeed"),
+        "expected usable headline or success wording: headline={:?} text={text}",
+        summary.headline
+    );
+    assert_eq!(summary.exit_code, Some(0));
 }

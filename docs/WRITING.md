@@ -116,3 +116,4 @@ Design-doc IDs (A1, M6, …) belong in roadmap/plan docs, not in operator guides
 - [ ] Spelling of product terms matches this glossary?
 - [ ] `python3 scripts/check_doc_links.py` passes (files + heading anchors)
 - [ ] Getting-started contract still green: `cargo test --test docs_first_run`
+- [ ] New harness/wrap claims match [guide/adapters.md](guide/adapters.md) detection table

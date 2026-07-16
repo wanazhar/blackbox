@@ -16,6 +16,7 @@ For the full map (agents, reference, internals), see the [docs index](../README.
 | 2 | [Install](install.md) | Binary / cargo, PATH, `doctor` |
 | 3 | [Getting started](getting-started.md) | Enable → first run → inspect (end-to-end) |
 | 4 | [Recipes](recipes.md) | Copy-paste workflows for common jobs |
+| · | [Cheatsheet](cheatsheet.md) | One-screen command reference |
 | 5 | [Everyday use](everyday-use.md) | List, show, timeline, TUI, dashboard, search |
 
 ## Common jobs
@@ -23,6 +24,8 @@ For the full map (agents, reference, internals), see the [docs index](../README.
 | Guide | Answers |
 |---|---|
 | [Recipes](recipes.md) | 15 end-to-end workflows (CI, eval, vault, claims, …) |
+| [Cheatsheet](cheatsheet.md) | Dense command list |
+| [Adapters](adapters.md) | Claude, Codex, aider, gemini, cursor, … |
 | [Debug a failure](debug-a-failure.md) | Postmortem, anomalies, evidence → timeline, handoff |
 | [Leave it on](leave-it-on.md) | Ambient shell wrappers, `BLACKBOX_OFF`, wrap list, nest rules |
 | [Configuration](configuration.md) | Precedence, product modes, full knobs + env |

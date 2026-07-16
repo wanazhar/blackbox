@@ -2,7 +2,7 @@
 
 **Answers:** Copy-paste workflows for common jobs. Each recipe states **when**, **commands**, **what success looks like**, and **where to go deeper**.
 
-Assumes [install](install.md) works (`blackbox --version`). Terms: [glossary](glossary.md).
+Assumes [install](install.md) works (`blackbox --version`). Terms: [glossary](glossary.md). Dense command list: [cheatsheet](cheatsheet.md).
 
 ---
 
@@ -41,7 +41,7 @@ blackbox show latest --tools
 **Success:** New run appears tagged ambient/`auto`; harness still works if `blackbox` missing from PATH (passthrough).
 
 **Opt out one shell:** `export BLACKBOX_OFF=1`  
-**Deeper:** [leave-it-on](leave-it-on.md) · [ambient-contract](../ambient-contract.md)
+**Deeper:** [leave-it-on](leave-it-on.md) · [adapters](adapters.md) · [ambient-contract](../ambient-contract.md)
 
 ---
 

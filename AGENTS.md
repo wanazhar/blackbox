@@ -172,6 +172,8 @@ Runtime artifacts (`.blackbox/`, `*.db`, `*.db-wal`, `*.db-shm`) are gitignored.
 | `docs/guide/install.md` | Operators | Install + verify |
 | `docs/guide/getting-started.md` | Operators | Enable → first run → inspect |
 | `docs/guide/recipes.md` | Operators | Copy-paste workflows |
+| `docs/guide/cheatsheet.md` | Operators | One-screen commands |
+| `docs/guide/adapters.md` | Operators | Harness detection + native logs |
 | `docs/guide/everyday-use.md` | Operators | List/show/TUI/serve/search |
 | `docs/guide/debug-a-failure.md` | Operators | Postmortem, anomalies, handoff |
 | `docs/guide/leave-it-on.md` | Operators | Ambient wrappers + opt-out |

@@ -1,0 +1,151 @@
+# Cheatsheet
+
+One screen of high-signal commands. Full workflows: [recipes](recipes.md). Flags: [CLI reference](../reference/cli.md).
+
+---
+
+## Install & project
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/wanazhar/blackbox/master/install.sh | sh
+# or: cargo install blackbox-recorder
+
+blackbox --version
+blackbox doctor
+
+cd ~/project
+blackbox enable                              # store + config
+blackbox enable --memory-bus --install-shell # + continuity defaults + ambient wrap
+blackbox disable                             # pause (keeps data)
+```
+
+---
+
+## Record
+
+```bash
+blackbox run -- <cmd> [args…]
+blackbox run --name label --tag wip -- <cmd>
+blackbox run --ci --artifact-dir ./out -- <cmd>     # exit = child; write artifacts
+blackbox run --eval --artifact-dir ./out -- <cmd>   # observe-only + tags eval,ci
+blackbox run --observe-only -- <cmd>                # no launch mutation
+```
+
+Ambient (after `--install-shell`): just run `claude` / `codex` / …  
+Off: `BLACKBOX_OFF=1` · nest-safe under active run.
+
+---
+
+## Inspect
+
+```bash
+blackbox runs
+blackbox runs --status failed --limit 10
+blackbox show latest
+blackbox show latest --transcript
+blackbox show latest --tools
+blackbox show latest --tui          # e fail · a anom · Enter/g jump · ? help
+blackbox timeline latest --semantic
+blackbox timeline latest --kind tool.call
+blackbox inspect <event-id>
+blackbox search "timeout"
+blackbox serve                      # http://127.0.0.1:7788
+blackbox serve --token "$TOKEN"
+```
+
+---
+
+## Explain / compare
+
+```bash
+blackbox postmortem latest
+blackbox postmortem latest --json --fail-on-failure
+blackbox analyze latest
+blackbox diff <good> <bad> --trajectory
+```
+
+---
+
+## Continuity / multi-agent
+
+```bash
+blackbox status
+blackbox handoff --json
+blackbox memory show
+blackbox memory set --goal "…" --open "…"
+blackbox claim acquire --holder "$USER"
+blackbox claim acquire --holder a --path src/auth
+blackbox claim status
+blackbox claim release
+blackbox resolve
+blackbox resolve --clear-wip
+blackbox ack                        # gate_mode=require_ack
+blackbox context latest --for-resume --json --max-tokens 4000
+```
+
+---
+
+## Share / vault / hygiene
+
+```bash
+blackbox export latest --format html -o r.html
+blackbox export latest --format portable -o r.json
+blackbox export latest --format portable --passphrase '…' -o r.bbx.json
+blackbox import r.json
+
+blackbox backup -o vault.bbx.json --passphrase '…' --include-db
+blackbox restore vault.bbx.json --passphrase '…'
+
+blackbox scrub --gc
+blackbox stats
+blackbox gc --dry-run && blackbox gc
+blackbox purge --keep 50 --dry-run
+```
+
+---
+
+## JSON & agents
+
+```bash
+blackbox <cmd> --json | jq .
+blackbox mcp                        # stdio MCP server
+```
+
+Session start: `blackbox handoff --json` · skill: [../skills/blackbox.md](../skills/blackbox.md)
+
+---
+
+## Danger flags (avoid)
+
+| Flag | Effect |
+|---|---|
+| `--no-redact` | Disable redaction (capture/export/sync) |
+| `--insecure-raw` | Store raw PTY blobs |
+
+---
+
+## Escape hatches
+
+| Goal | Action |
+|---|---|
+| No ambient this shell | `export BLACKBOX_OFF=1` |
+| Uninstall wrappers | `blackbox enable --uninstall-shell` |
+| Force store path | `--store` / `BLACKBOX_DB` |
+| External crypto key | `BLACKBOX_STORE_KEY_FILE=~/.config/blackbox/default.key` |
+
+---
+
+## TUI keys (show --tui)
+
+| Key | Action |
+|---|---|
+| `t` `e` `a` `p` `d` `h` | timeline · failure · anomalies · postmortem · diff · handoff |
+| `Enter` / `g` | jump to timeline at evidence/`seq=` |
+| `/` | toggle bookkeeping |
+| `?` `q` | help · quit |
+
+---
+
+## See also
+
+[getting-started](getting-started.md) · [recipes](recipes.md) · [adapters](adapters.md) · [glossary](glossary.md) · [troubleshooting](troubleshooting.md)

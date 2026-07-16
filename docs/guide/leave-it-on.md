@@ -124,6 +124,7 @@ Automated gate: `tests/ambient_contract.rs` (A1).
 ## See also
 
 - [getting-started.md](getting-started.md)
+- [adapters.md](adapters.md) — which harnesses wrap / parse
 - [configuration.md](configuration.md)
 - [ambient-contract.md](../ambient-contract.md)
 - [../plan/adoption-1.1.md](../plan/adoption-1.1.md) (historical design for the adoption bar)

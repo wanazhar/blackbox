@@ -21,7 +21,7 @@ Non-goals: marketing fluff, cartoon analogies that hide behavior, or “you don�
 |---|---|---|
 | **Operator** | Person installing and using blackbox day to day | [guide/](guide/README.md) |
 | **Agent / automation** | LLM harnesses, CI, MCP clients | [skills/blackbox.md](skills/blackbox.md), [reference/mcp.md](reference/mcp.md), [reference/json-api.md](reference/json-api.md) |
-| **Contributor** | People changing Rust code | [AGENTS.md](../AGENTS.md), [internals/](internals/) |
+| **Contributor** | People changing Rust code | [AGENTS.md](https://github.com/wanazhar/blackbox/blob/master/AGENTS.md), [internals/](internals/) |
 
 If a page serves more than one track, put the primary track first and link the rest.
 
@@ -38,7 +38,7 @@ Prefer this order:
 5. **Failure modes & limits** — honesty over reassurance.
 6. **See also** — reference, internals, related jobs.
 
-Avoid opening with version archaeology (1.0 / 1.1 / 1.2 bars). Put that in [ROADMAP.md](ROADMAP.md) or [CHANGELOG.md](../CHANGELOG.md).
+Avoid opening with version archaeology (1.0 / 1.1 / 1.2 bars). Put that in [ROADMAP.md](ROADMAP.md) or [CHANGELOG.md](https://github.com/wanazhar/blackbox/blob/master/CHANGELOG.md).
 
 ---
 
@@ -116,4 +116,6 @@ Design-doc IDs (A1, M6, …) belong in roadmap/plan docs, not in operator guides
 - [ ] Spelling of product terms matches this glossary?
 - [ ] `python3 scripts/check_doc_links.py` passes (files + heading anchors)
 - [ ] Getting-started contract still green: `cargo test --test docs_first_run`
+- [ ] Envelope / examples jq paths: `cargo test --test docs_cli_envelope`
 - [ ] New harness/wrap claims match [guide/adapters.md](guide/adapters.md) detection table
+- [ ] Docs site still builds: `bash scripts/prepare_docs_site.sh && mkdocs build --strict` (or docs.yml CI)

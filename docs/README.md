@@ -29,13 +29,16 @@ Blackbox docs are split by **who is reading** and **what question they have**. T
 
 Guide map: [guide/README.md](guide/README.md).
 
-### Optional local docs site
+### Optional docs site (MkDocs)
 
 ```bash
-pip install mkdocs-material
-mkdocs serve          # from repo root — uses mkdocs.yml
-mkdocs build -d site  # static output (gitignored)
+pip install -r requirements-docs.txt   # or: python3 -m venv .venv && source .venv/bin/activate
+bash scripts/prepare_docs_site.sh      # copies AGENTS.md + CHANGELOG.md into docs/
+mkdocs serve                           # http://127.0.0.1:8000
+mkdocs build --strict -d site          # static output (gitignored)
 ```
+
+CI: `.github/workflows/docs.yml` builds on every docs PR and deploys to **GitHub Pages** on `master`/`main` (enable Pages → Source: GitHub Actions once). Published URL (when enabled): `https://wanazhar.github.io/blackbox/`.
 
 ---
 
@@ -69,7 +72,7 @@ mkdocs build -d site  # static output (gitignored)
 
 | Document | Contents |
 |---|---|
-| [../AGENTS.md](../AGENTS.md) | Module map, conventions, how to add features |
+| [AGENTS.md](https://github.com/wanazhar/blackbox/blob/master/AGENTS.md) | Module map, conventions, how to add features |
 | [internals/architecture.md](internals/architecture.md) | Data flow and crates layout |
 | [internals/capture-pipeline.md](internals/capture-pipeline.md) | Layers, PTY, adapters |
 | [internals/storage.md](internals/storage.md) | SQLite, blobs, FTS5, GC |
@@ -83,7 +86,7 @@ mkdocs build -d site  # static output (gitignored)
 | Document | Contents |
 |---|---|
 | [ROADMAP.md](ROADMAP.md) | Quality bar and version story |
-| [../CHANGELOG.md](../CHANGELOG.md) | Released changes |
+| [CHANGELOG.md](https://github.com/wanazhar/blackbox/blob/master/CHANGELOG.md) | Released changes |
 | [plan/](plan/) | **Historical** design docs — do not treat as current how-to |
 | [history/](history/) | Archived plans |
 

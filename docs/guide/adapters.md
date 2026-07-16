@@ -165,7 +165,7 @@ wrap = ["claude", "codex", "my-agent"]
 4. Re-enable shell wrappers if needed: `blackbox enable --install-shell`  
 5. Verify: `blackbox run -- my-agent …` then `timeline latest --kind tool.call`
 
-Contributor path for a first-class adapter: [AGENTS.md](../../AGENTS.md) (“Adding a new harness adapter”).
+Contributor path for a first-class adapter: [AGENTS.md](https://github.com/wanazhar/blackbox/blob/master/AGENTS.md) (“Adding a new harness adapter”).
 
 ---
 

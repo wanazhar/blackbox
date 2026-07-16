@@ -85,7 +85,8 @@ Full walkthrough: [Getting started](docs/guide/getting-started.md).
 | Export / sync / backup | [Export and sync](docs/guide/export-and-sync.md) |
 | Something broken | [Troubleshooting](docs/guide/troubleshooting.md) |
 | **Full docs map** | **[docs/README.md](docs/README.md)** |
-| Local docs site (optional) | `pip install mkdocs-material && mkdocs serve` |
+| Local docs site (optional) | `pip install -r requirements-docs.txt && mkdocs serve` |
+| Published docs (when Pages on) | https://wanazhar.github.io/blackbox/ |
 
 ### Reference & agents
 

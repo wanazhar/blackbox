@@ -7,11 +7,16 @@
 
 site_name: blackbox docs
 site_description: Flight recorder, debugger, and project memory for AI-agent runs
-site_url: https://github.com/wanazhar/blackbox
+# GitHub Pages (project site). Override locally if needed.
+site_url: https://wanazhar.github.io/blackbox/
 repo_url: https://github.com/wanazhar/blackbox
 repo_name: wanazhar/blackbox
+edit_uri: edit/master/docs/
 docs_dir: docs
 site_dir: site
+
+extra:
+  generator: false
 
 theme:
   name: material
@@ -90,6 +95,8 @@ nav:
       - Continuity plane: internals/continuity-plane.md
   - Product:
       - Roadmap: ROADMAP.md
+      - Changelog: CHANGELOG.md
       - Writing docs: WRITING.md
       - Ambient contract: ambient-contract.md
+      - Contributor map (AGENTS): AGENTS.md
       - Publish (maintainers): PUBLISH.md

@@ -1,0 +1,9 @@
+{
+  "ok": false,
+  "schema": "blackbox.cli/v1",
+  "command": "show",
+  "error": {
+    "code": "not_found",
+    "message": "Run not found: abc123"
+  }
+}

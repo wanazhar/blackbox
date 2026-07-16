@@ -25,6 +25,8 @@ All notable changes to **blackbox** are documented here.
   covers postmortem JSON fields + adapter detection table
 - [doctor-and-capture](docs/guide/doctor-and-capture.md), [examples](docs/guide/examples.md) (annotated
   handoff/status JSON); optional `mkdocs.yml` Material site; coverage weight golden test
+- GitHub Pages workflow (`.github/workflows/docs.yml`) + `requirements-docs.txt`
+- CLI envelope / summary.txt goldens: `tests/docs_cli_envelope.rs`, `tests/fixtures/docs/`
 
 ### Daily-driver trust (post-1.2)
 - **Observe-only default** for ambient capture; product mode `recorder` | `continuity`

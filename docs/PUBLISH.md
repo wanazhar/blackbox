@@ -1,7 +1,7 @@
 # Publishing blackbox-recorder
 
 > **Maintainer checklist** for crates.io releases — not an operator guide.  
-> Users: [../README.md](../README.md). Docs quality before release: `python3 scripts/check_doc_links.py` and `cargo test --test docs_first_run`.
+> Users: [README.md](https://github.com/wanazhar/blackbox/blob/master/README.md). Docs quality before release: `python3 scripts/check_doc_links.py` and `cargo test --test docs_first_run --test docs_cli_envelope`.
 
 The **Cargo package name** is `blackbox-recorder` (the name `blackbox` is taken on crates.io).  
 The **CLI binary** and **Rust library path** remain `blackbox` (`use blackbox::…`).
@@ -30,8 +30,10 @@ cargo clippy --all-targets -- -D warnings
 python3 scripts/check_doc_links.py
 cargo test --all-targets
 cargo test --test docs_first_run
-# optional docs site:
-#   pip install mkdocs-material && mkdocs build -d site
+# optional docs site / Pages:
+#   pip install -r requirements-docs.txt
+#   bash scripts/prepare_docs_site.sh && mkdocs build --strict -d site
+#   GitHub: Settings → Pages → Source: GitHub Actions (workflow docs.yml)
 cargo publish --dry-run
 ```
 

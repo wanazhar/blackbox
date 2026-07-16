@@ -73,7 +73,7 @@ Work continues in-tree beyond the original 1.2 checklist, including:
 - Docs revamp for human comprehension (this directory)
 - Path-scoped claims (operator-usable; was backlog)
 
-See [CHANGELOG.md](../CHANGELOG.md) for what actually shipped.
+See [CHANGELOG.md](https://github.com/wanazhar/blackbox/blob/master/CHANGELOG.md) for what actually shipped.
 
 ---
 
@@ -103,6 +103,6 @@ See [CHANGELOG.md](../CHANGELOG.md) for what actually shipped.
 
 ## Related
 
-- [CHANGELOG.md](../CHANGELOG.md)  
+- [CHANGELOG.md](https://github.com/wanazhar/blackbox/blob/master/CHANGELOG.md)  
 - [guide/concepts.md](guide/concepts.md)  
 - [WRITING.md](WRITING.md)  

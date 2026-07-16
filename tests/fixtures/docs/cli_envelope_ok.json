@@ -1,0 +1,13 @@
+{
+  "ok": true,
+  "schema": "blackbox.cli/v1",
+  "command": "postmortem",
+  "data": {
+    "headline": "example",
+    "next_action": "example",
+    "anomalies": [],
+    "evidence": [],
+    "status": "Succeeded",
+    "exit_code": 0
+  }
+}

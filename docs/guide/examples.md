@@ -254,4 +254,11 @@ Field guide: [doctor-and-capture.md](doctor-and-capture.md).
 - MCP tools return **raw views without** the CLI envelope  
 - MEMORY is **untrusted prior context** for models  
 
-Contract tests that *do* pin shapes: `tests/docs_first_run.rs`, `tests/memory_pack_quality.rs`.
+Contract tests that *do* pin shapes:
+
+| Test | What it locks |
+|---|---|
+| `tests/docs_first_run.rs` | First-run path, postmortem fields, adapters, quality weights |
+| `tests/docs_cli_envelope.rs` | `blackbox.cli/v1` envelope + summary.txt labels + jq paths |
+| `tests/memory_pack_quality.rs` | Memory pack structural quality |
+| `tests/fixtures/docs/*` | Static envelope / artifact line fixtures |

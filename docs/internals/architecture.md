@@ -19,7 +19,7 @@
 | How do layers merge and redact? | [capture-pipeline.md](capture-pipeline.md) |
 | SQLite schema / blobs / FTS / GC? | [storage.md](storage.md) |
 | Sticky state, MEMORY, claims, inject? | [continuity-plane.md](continuity-plane.md) |
-| Repo conventions for PRs? | [../../AGENTS.md](../../AGENTS.md) |
+| Repo conventions for PRs? | [AGENTS.md](https://github.com/wanazhar/blackbox/blob/master/AGENTS.md) |
 
 ---
 

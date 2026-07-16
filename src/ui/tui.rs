@@ -46,6 +46,7 @@ enum ContentMode {
     Postmortem,
     Handoff,
     Replay,
+    Diff,
     Help,
 }
 
@@ -61,6 +62,7 @@ impl ContentMode {
             Self::Postmortem => "Postmortem",
             Self::Handoff => "Handoff",
             Self::Replay => "Replay preflight",
+            Self::Diff => "Diff vs previous",
             Self::Help => "Help",
         }
     }
@@ -76,6 +78,7 @@ impl ContentMode {
             Self::Postmortem => "p",
             Self::Handoff => "h",
             Self::Replay => "r",
+            Self::Diff => "d",
             Self::Help => "?",
         }
     }
@@ -96,6 +99,8 @@ struct App {
     status: String,
     postmortem_text: String,
     handoff_text: String,
+    /// Cached trajectory diff text for `d` panel (selected vs previous run).
+    diff_text: String,
     store: SqliteStore,
 }
 
@@ -128,6 +133,7 @@ impl App {
             status: "Tab focus · ? help · q quit".into(),
             postmortem_text: String::new(),
             handoff_text: String::new(),
+            diff_text: String::new(),
             store,
         };
         app.reload_selected_run().await;
@@ -141,6 +147,7 @@ impl App {
             self.content_lines.clear();
             self.postmortem_text.clear();
             self.handoff_text.clear();
+            self.diff_text.clear();
             return;
         };
 
@@ -205,6 +212,7 @@ impl App {
             }
         }
 
+        self.refresh_diff_cache().await;
         self.rebuild_content_lines();
         self.status = format!(
             "loaded {} · {} events · mode={}",
@@ -212,6 +220,38 @@ impl App {
             self.events.len(),
             self.header.mode
         );
+    }
+
+    /// Compare selected run (A) with the next-older run in the list (B = previous).
+    async fn refresh_diff_cache(&mut self) {
+        // list_runs is most-recent-first: previous chronologically is index+1.
+        let prev_idx = self.selected_run_idx + 1;
+        let (Some(run_a), Some(run_b)) = (
+            self.runs.get(self.selected_run_idx).cloned(),
+            self.runs.get(prev_idx).cloned(),
+        ) else {
+            self.diff_text =
+                "(no previous run to compare — select a run that is not the oldest)".into();
+            return;
+        };
+        let events_b = match self.store.get_events(&run_b.id).await {
+            Ok(e) => e,
+            Err(e) => {
+                self.diff_text = format!("(failed to load previous run: {e})");
+                return;
+            }
+        };
+        let diff = crate::trajectory::diff_trajectories(
+            &run_a.id,
+            &self.events,
+            &run_b.id,
+            &events_b,
+        );
+        self.diff_text = crate::ui::panels::trajectory_diff_lines(&diff)
+            .into_iter()
+            .map(|l| l.text)
+            .collect::<Vec<_>>()
+            .join("\n");
     }
 
     fn rebuild_content_lines(&mut self) {
@@ -257,6 +297,14 @@ impl App {
                 })
                 .collect(),
             ContentMode::Replay => replay_preflight_lines(&self.events),
+            ContentMode::Diff => self
+                .diff_text
+                .lines()
+                .map(|l| PanelLine {
+                    text: l.to_string(),
+                    event_id: None,
+                })
+                .collect(),
             ContentMode::Help => help_lines(),
         };
         if self.content_idx >= self.content_lines.len() {
@@ -318,12 +366,8 @@ impl App {
                 return true;
             }
             KeyCode::Char('d') => {
-                self.status = if let Some(run) = self.runs.get(self.selected_run_idx) {
-                    let short = run.id.chars().take(8).collect::<String>();
-                    format!("diff: blackbox diff previous {short} --trajectory")
-                } else {
-                    "diff: blackbox diff previous latest --trajectory".into()
-                };
+                self.refresh_diff_cache().await;
+                self.set_mode(ContentMode::Diff);
                 return true;
             }
             KeyCode::Char('/') => {
@@ -580,7 +624,7 @@ fn render_keymap(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {
         Focus::Content => "content",
     };
     let text = format!(
-        " focus={focus} │ t timeline  o proc  f files  e fail  x side  c cover  p post  h handoff  r replay  d diff  / filter  ? help  q quit "
+        " focus={focus} │ t timeline  o proc  f files  e fail  x side  c cover  p post  h handoff  r replay  d diff  / filter  ? help  q quit"
     );
     let para = Paragraph::new(Span::styled(
         text.chars().take(area.width as usize).collect::<String>(),

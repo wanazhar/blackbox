@@ -309,7 +309,7 @@ record mode) plus a content panel switched by keys:
 | `p` | Postmortem |
 | `h` | Handoff / resume |
 | `r` | Replay preflight (guarantees) |
-| `d` | Diff CLI hint |
+| `d` | Diff vs previous run (trajectory LCP) |
 | `/` | Toggle bookkeeping on timeline |
 | `?` | Help |
 | `q` | Quit |

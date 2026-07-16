@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::core::command::{CommandFidelity, CommandMetadata};
 use crate::core::event::{EventSource, SideEffect, TraceEvent};
 use crate::core::run::Run;
 use crate::replay::{events_from, ReplayEngine, ReplayOutcome, ReplayPolicy};
@@ -104,23 +105,16 @@ impl SandboxReplay {
         }
     }
 
-    /// Extract a shell command from an event, if any.
-    fn extract_command(event: &TraceEvent) -> Option<Vec<String>> {
-        // Explicit command array in metadata
-        if let Some(arr) = event.metadata.get("command").and_then(|v| v.as_array()) {
-            let parts: Vec<String> = arr
-                .iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect();
-            if !parts.is_empty() {
-                return Some(parts);
-            }
+    /// Extract a command for sandbox re-execution.
+    ///
+    /// Prefers exact/inferred [`CommandMetadata`]. Lossy whitespace-split
+    /// reconstructions are returned with fidelity Lossy so the caller can
+    /// refuse them under default sandbox policy.
+    fn extract_command_meta(event: &TraceEvent) -> Option<CommandMetadata> {
+        if let Some(meta) = CommandMetadata::from_event(event) {
+            return Some(meta);
         }
-        // String command
-        if let Some(s) = event.metadata.get("command").and_then(|v| v.as_str()) {
-            return Some(shell_split(s));
-        }
-        // Tool call with Bash/shell
+        // Tool call with Bash/shell and only a string in input (no prior meta).
         if event.kind == "tool.call" {
             let name = event
                 .metadata
@@ -130,20 +124,43 @@ impl SandboxReplay {
                 .to_lowercase();
             if matches!(name.as_str(), "bash" | "shell" | "run" | "execute" | "cmd") {
                 if let Some(input) = event.metadata.get("input") {
-                    if let Some(cmd) = input.get("command").and_then(|c| c.as_str()) {
-                        return Some(shell_split(cmd));
+                    if let Some(arr) = input.get("command").and_then(|c| c.as_array()) {
+                        let argv: Vec<String> = arr
+                            .iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect();
+                        if !argv.is_empty() {
+                            return Some(CommandMetadata::from_adapter_argv(argv, None));
+                        }
                     }
-                    if let Some(cmd) = input.get("cmd").and_then(|c| c.as_str()) {
-                        return Some(shell_split(cmd));
+                    if let Some(cmd) = input
+                        .get("command")
+                        .and_then(|c| c.as_str())
+                        .or_else(|| input.get("cmd").and_then(|c| c.as_str()))
+                    {
+                        return Some(CommandMetadata::from_shell_source(cmd, Some("bash")));
                     }
                 }
             }
         }
-        // process.spawned with command string
+        // Legacy process string command → explicitly lossy.
         if event.source == EventSource::Process {
             if let Some(s) = event.metadata.get("command").and_then(|v| v.as_str()) {
-                return Some(shell_split(s));
+                return Some(CommandMetadata::from_display_string(s));
             }
+        }
+        None
+    }
+
+    /// Extract argv for execution when fidelity is safe; otherwise None.
+    fn extract_command(event: &TraceEvent) -> Option<(Vec<String>, CommandFidelity)> {
+        let meta = Self::extract_command_meta(event)?;
+        if let Some(argv) = meta.argv_for_execution() {
+            return Some((argv.to_vec(), meta.fidelity));
+        }
+        // Return lossy argv only so caller can skip with a clear reason.
+        if !meta.argv.is_empty() {
+            return Some((meta.argv.clone(), meta.fidelity));
         }
         None
     }
@@ -173,10 +190,6 @@ impl Default for SandboxReplay {
     }
 }
 
-/// Minimal shell-ish split (whitespace; no quote handling beyond simplicity).
-fn shell_split(s: &str) -> Vec<String> {
-    s.split_whitespace().map(String::from).collect()
-}
 /// Guard that removes a temporary directory on drop (panic-safe).
 /// Call `disarm()` on the success path to prevent cleanup.
 struct TempDirGuard {
@@ -328,10 +341,30 @@ impl ReplayEngine for SandboxReplay {
 
         for event in slice {
             // Only attempt re-execution for process/tool events with a command
-            let cmd = match Self::extract_command(event) {
+            let (cmd, fidelity) = match Self::extract_command(event) {
                 Some(c) => c,
                 None => continue,
             };
+
+            // Block lossy command reconstruction under non-Live policies.
+            // Display-string whitespace splits are ambiguous and unsafe.
+            if self.policy != ReplayPolicy::Live && !fidelity.is_safe_for_sandbox() {
+                println!(
+                    "skip  seq={} kind={} cmd={:?} fidelity={} (lossy reconstruction blocked)",
+                    event.sequence,
+                    event.kind,
+                    cmd,
+                    fidelity.as_str()
+                );
+                tracing::warn!(
+                    seq = event.sequence,
+                    kind = %event.kind,
+                    fidelity = fidelity.as_str(),
+                    "sandbox: skipping lossy command reconstruction"
+                );
+                skipped += 1;
+                continue;
+            }
 
             // Re-classify shell tools as Unknown → treat as blocked unless policy Live
             let side = if event.side_effect == SideEffect::Unknown && event.kind == "tool.call" {
@@ -355,8 +388,12 @@ impl ReplayEngine for SandboxReplay {
 
             if !allowed {
                 println!(
-                    "skip  seq={} kind={} cmd={:?} side={:?}",
-                    event.sequence, event.kind, cmd, event.side_effect
+                    "skip  seq={} kind={} cmd={:?} side={:?} fidelity={}",
+                    event.sequence,
+                    event.kind,
+                    cmd,
+                    event.side_effect,
+                    fidelity.as_str()
                 );
                 tracing::warn!(
                     seq = event.sequence,
@@ -809,6 +846,76 @@ mod tests {
             other => panic!("unexpected {:?}", other),
         }
         let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    #[tokio::test]
+    async fn sandbox_blocks_lossy_display_string_commands() {
+        let run = Run::new(vec!["echo".into()], "/tmp".into());
+        let mut ev = TraceEvent::new(&run.id, EventSource::Process, "process.command");
+        ev.side_effect = SideEffect::Read;
+        // String form only — reconstructs via whitespace split → lossy
+        ev.metadata
+            .insert("command".into(), serde_json::json!("echo hello world"));
+
+        let ws = std::env::temp_dir().join(format!("bb-sbx-lossy-{}", uuid::Uuid::new_v4()));
+        let mut engine = SandboxReplay::new()
+            .with_workspace(ws.clone())
+            .without_seed();
+        let outcome = engine.start(&run, &[ev], None).await.unwrap();
+        match outcome {
+            ReplayOutcome::Sandboxed {
+                executed, skipped, ..
+            } => {
+                assert_eq!(executed, 0, "lossy commands must not execute");
+                assert_eq!(skipped, 1);
+            }
+            other => panic!("unexpected {:?}", other),
+        }
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    #[tokio::test]
+    async fn sandbox_executes_exact_argv_with_spaces() {
+        let run = Run::new(vec!["echo".into()], "/tmp".into());
+        let mut ev = TraceEvent::new(&run.id, EventSource::Process, "process.command");
+        ev.side_effect = SideEffect::Read;
+        // Exact argv preserves "hello world" as one argument
+        CommandMetadata::from_proc_argv(
+            vec!["echo".into(), "hello world".into()],
+            Some("/bin/echo".into()),
+            None,
+            crate::core::command::CaptureMethod::ProcCmdline,
+        )
+        .apply_to_event(&mut ev);
+
+        let ws = std::env::temp_dir().join(format!("bb-sbx-exact-{}", uuid::Uuid::new_v4()));
+        let mut engine = SandboxReplay::new()
+            .with_workspace(ws.clone())
+            .without_seed();
+        let outcome = engine.start(&run, &[ev], None).await.unwrap();
+        match outcome {
+            ReplayOutcome::Sandboxed { executed, .. } => assert_eq!(executed, 1),
+            other => panic!("unexpected {:?}", other),
+        }
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn extract_command_meta_prefers_argv_over_display() {
+        let mut ev = TraceEvent::new("r", EventSource::Process, "process.exec");
+        ev.metadata.insert(
+            "argv".into(),
+            serde_json::json!(["grep", "hello world", "f.txt"]),
+        );
+        ev.metadata.insert(
+            "command".into(),
+            serde_json::json!("grep hello world f.txt"),
+        );
+        ev.metadata
+            .insert("capture_method".into(), serde_json::json!("proc_poller"));
+        let meta = SandboxReplay::extract_command_meta(&ev).unwrap();
+        assert_eq!(meta.argv[1], "hello world");
+        assert_eq!(meta.fidelity, CommandFidelity::Exact);
     }
 
     #[test]

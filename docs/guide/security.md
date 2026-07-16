@@ -23,11 +23,27 @@ The `SecretScanner` (`src/redaction/scanner.rs`) is a multi-strategy scanner:
 | Strategy | Example matches |
 |---|---|
 | Known env var names | `API_KEY=...`, `TOKEN=...`, `SECRET=...`, `PASSWORD=...` |
-| Pattern-based | `sk-...` (OpenAI), `ghp_...` (GitHub PAT), `AKIA...` (AWS), `Bearer ...` |
-| JSON payload scanning | `"apiKey": "..."`, `"token": "..."` |
-| High-entropy detection | Strings with high Shannon entropy over a threshold |
+| Cloud / provider keys | `sk-...` (OpenAI), `sk-ant-...`, `ghp_` / `github_pat_`, `AKIA...`, `xoxb-...`, `AIza...`, `xai-...`, npm/pypi tokens |
+| Auth headers / cookies | `Bearer ...`, `Basic ...`, `Set-Cookie`, `sessionid=` |
+| Connection strings | `postgres://user:pass@...`, `https://user:pass@host` |
+| Signed URL params | `X-Amz-Signature=...`, `access_token=...` |
+| PEM private keys | `-----BEGIN … PRIVATE KEY-----` |
+| JSON payload scanning | Nested string values in tool metadata |
 
-Redacted values are replaced with `[REDACTED n bytes]` in metadata. The `total_redactions` field on events tracks how many redactions were applied.
+**Stream redaction:** PTY capture uses `StreamRedactor` with an overlap window so secrets split across chunk boundaries are still detected before write.
+
+**Structural IDs never scarred:** git SHAs, blob keys (SHA-256 hex), UUIDs, and event kinds are not matched by whole-string base64/hex patterns.
+
+**Adversarial corpus:** `tests/redaction_adversarial.rs` is the permanent regression gate (chunk splits, export, mixed SHA+secret).
+
+Redacted values are replaced with `[REDACTED]`. Event metadata may include a `redactions` count.
+
+### Known limitations
+
+- Perfect redaction is not guaranteed for novel secret formats; defaults are conservative.
+- Secrets only present in raw PTY blobs under `--insecure-raw` are stored unredacted by design.
+- Overlap window is finite (default 256 bytes); extremely long tokens split with a larger gap may still miss (prefer coalesced storage + scrub).
+- Opt-in danger flags: `--insecure-raw`, `--no-redact` (never enable on shared machines).
 
 ---
 
@@ -76,6 +92,23 @@ blackbox sync push --dir /mnt/backup --no-redact
 | `--no-redact` | Disable all redaction on capture, export, or sync | Private offline analysis on a trusted machine; **never** when sharing traces |
 
 Both flags require explicit opt-in. They are purposefully named to discourage casual use.
+
+---
+
+## Overhead benchmarks (local)
+
+Ambient capture must stay cheap enough to leave on. Soft budgets ship in tests; the full suite is **local-only** (not a hard CI gate):
+
+```bash
+# Soft always-on smoke (debug-friendly budgets)
+cargo test --test overhead_smoke
+cargo test --test overhead_bench soft_true event_write
+
+# Full local bench with p50/p95 tables (ignored by default)
+cargo test --test overhead_bench -- --ignored --nocapture
+```
+
+`blackbox stats` reports average events/run and blob bytes/run for storage cost visibility.
 
 ---
 

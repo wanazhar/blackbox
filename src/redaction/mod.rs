@@ -1,6 +1,9 @@
 pub mod environment;
 pub mod export;
 pub mod scanner;
+pub mod stream;
+
+pub use stream::{StreamRedactor, DEFAULT_STREAM_WINDOW};
 
 /// A record that redaction occurred at a specific location.
 #[derive(Debug, Clone)]

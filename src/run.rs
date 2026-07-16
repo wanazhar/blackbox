@@ -24,6 +24,7 @@ use crate::core::run::{Run, RunStatus};
 use crate::pipeline::EventWriter;
 use crate::redaction::environment::EnvironmentRedactor;
 use crate::redaction::scanner::SecretScanner;
+use crate::redaction::stream::StreamRedactor;
 use crate::redaction::RedactionConfig;
 use crate::storage::TraceStore;
 use crate::terminal::ansi::AnsiNormalizer;
@@ -549,6 +550,12 @@ impl RunSupervisor {
             let mut line_buf = String::new();
             let mut total_redactions: u64 = 0;
             let mut coalescer = TerminalCoalescer::new(CoalescePolicy::default(), insecure_raw);
+            // Overlap-window redactor catches secrets split across PTY chunks.
+            let mut stream_redactor = if do_redact {
+                Some(StreamRedactor::new(scanner_term.clone()))
+            } else {
+                None
+            };
 
             // Persist one coalesced terminal.output event
             async fn emit_terminal(
@@ -590,28 +597,19 @@ impl RunSupervisor {
                 }
 
                 let normalized_text = ansi_normalizer.normalize(&data);
-                let redactions = if do_redact {
-                    scanner_term.scan(
-                        &normalized_text,
-                        &format!("terminal:{}", segment_count),
-                        None,
-                    )
-                } else {
-                    Vec::new()
-                };
-                let redact_n = redactions.len() as u64;
-                let safe_text = if do_redact {
-                    if redact_n > 0 {
-                        total_redactions += redact_n;
+                let (safe_text, redact_n) = if let Some(ref mut stream) = stream_redactor {
+                    let (safe, hits) = stream.push(&normalized_text);
+                    if hits > 0 {
+                        total_redactions += hits;
                         tracing::warn!(
-                            count = redact_n,
+                            count = hits,
                             segment = segment_count,
                             "redacted secrets in terminal output"
                         );
                     }
-                    scanner_term.redact(&normalized_text)
+                    (safe, hits)
                 } else {
-                    normalized_text.clone()
+                    (normalized_text.clone(), 0)
                 };
 
                 // Coalesce for storage (adapter parse is still immediate below)

@@ -33,6 +33,12 @@ static BASE_PATTERNS: LazyLock<Vec<(RedactionReason, Regex)>> = LazyLock::new(||
         RedactionReason::ApiKey,
         r"(?i)\b(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{36,}\b",
     );
+    // GitHub fine-grained personal access tokens
+    add(
+        &mut patterns,
+        RedactionReason::ApiKey,
+        r"\bgithub_pat_[A-Za-z0-9_]{20,}\b",
+    );
     add(
         &mut patterns,
         RedactionReason::ApiKey,
@@ -43,10 +49,22 @@ static BASE_PATTERNS: LazyLock<Vec<(RedactionReason, Regex)>> = LazyLock::new(||
         RedactionReason::ApiKey,
         r"\bsk-ant-[A-Za-z0-9\-_]{20,}\b",
     );
+    // Gemini / Google AI studio style keys already covered by AIza; also xai-
+    add(
+        &mut patterns,
+        RedactionReason::ApiKey,
+        r"\bxai-[A-Za-z0-9]{20,}\b",
+    );
     add(
         &mut patterns,
         RedactionReason::CloudCredential,
         r"\b(AKIA|ASIA)[0-9A-Z]{16}\b",
+    );
+    // AWS secret access key assignment (not bare 40-char base64 — that scars SHAs)
+    add(
+        &mut patterns,
+        RedactionReason::CloudCredential,
+        r#"(?i)(aws_secret_access_key|aws_session_token)\s*[:=]\s*['"]?[A-Za-z0-9/+=]{16,}"#,
     );
     add(
         &mut patterns,
@@ -68,6 +86,30 @@ static BASE_PATTERNS: LazyLock<Vec<(RedactionReason, Regex)>> = LazyLock::new(||
         RedactionReason::ConnectionString,
         r#"(?i)(postgres|mysql|mongodb|redis)://[^\s:]+:[^\s@]+@[^\s]+"#,
     );
+    // Generic basic-auth URLs (https://user:pass@host)
+    add(
+        &mut patterns,
+        RedactionReason::ConnectionString,
+        r#"(?i)https?://[^/\s:@]+:[^/\s@]+@[^\s]+"#,
+    );
+    // Signed URL query params
+    add(
+        &mut patterns,
+        RedactionReason::PatternMatch,
+        r#"(?i)([?&](X-Amz-Signature|X-Amz-Credential|Signature|sig|access_token)=)[^&\s]{8,}"#,
+    );
+    // Cookie / session headers and assignments
+    add(
+        &mut patterns,
+        RedactionReason::Cookie,
+        r#"(?i)(set-cookie|cookie)\s*[:=]\s*[^\n;]{8,}"#,
+    );
+    add(
+        &mut patterns,
+        RedactionReason::Cookie,
+        r#"(?i)(session[_-]?id|sessionid|phpsessid|jsessionid)\s*[:=]\s*['"]?[A-Za-z0-9+/=_-]{8,}"#,
+    );
+    // npm / pypi / netrc style tokens
     add(
         &mut patterns,
         RedactionReason::ApiKey,
@@ -83,6 +125,17 @@ static BASE_PATTERNS: LazyLock<Vec<(RedactionReason, Regex)>> = LazyLock::new(||
         RedactionReason::ApiKey,
         r"\bnpm_[A-Za-z0-9]{36}\b",
     );
+    add(
+        &mut patterns,
+        RedactionReason::ApiKey,
+        r#"(?i)(_authToken|pypi-token|PYPI_TOKEN)\s*[:=]\s*['"]?[A-Za-z0-9_\-]{16,}"#,
+    );
+    // .netrc machine login password lines
+    add(
+        &mut patterns,
+        RedactionReason::PatternMatch,
+        r"(?i)(machine\s+\S+\s+login\s+\S+\s+password\s+)\S+",
+    );
     // Intentionally NO whole-string base64/hex pattern (e.g. `^[A-Za-z0-9+/]{40,}={0,2}$`).
     // That class matched git SHAs, content-addressed blob keys, and other structural
     // identifiers. PEM private keys are covered by the BEGIN PRIVATE KEY header pattern.
@@ -94,6 +147,7 @@ static BASE_PATTERNS: LazyLock<Vec<(RedactionReason, Regex)>> = LazyLock::new(||
 ///
 /// Pattern list is intentionally conservative but broader than the
 /// original five-regex set: modern cloud tokens, JWTs, and PEM blocks.
+#[derive(Clone)]
 pub struct SecretScanner {
     config: RedactionConfig,
     patterns: Vec<(RedactionReason, Regex)>,
@@ -133,6 +187,35 @@ impl SecretScanner {
         records
     }
 
+    /// Collect merged byte-spans of secret matches in `text`.
+    ///
+    /// Spans are half-open `[start, end)` into the original string and
+    /// never overlap after merging. Used by stream redaction to catch
+    /// secrets that straddle PTY chunk boundaries.
+    pub fn find_spans(&self, text: &str) -> Vec<(usize, usize)> {
+        if !self.config.enabled || text.is_empty() {
+            return Vec::new();
+        }
+        let mut spans: Vec<(usize, usize)> = Vec::new();
+        for (_, re) in &self.patterns {
+            for m in re.find_iter(text) {
+                spans.push((m.start(), m.end()));
+            }
+        }
+        spans.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| b.1.cmp(&a.1)));
+        let mut merged: Vec<(usize, usize)> = Vec::new();
+        for span in spans {
+            if let Some(last) = merged.last_mut() {
+                if span.0 <= last.1 {
+                    last.1 = last.1.max(span.1);
+                    continue;
+                }
+            }
+            merged.push(span);
+        }
+        merged
+    }
+
     /// Redact sensitive patterns from text, replacing with `[REDACTED]`.
     ///
     /// Uses a span-merging approach: all patterns are applied to the
@@ -145,31 +228,7 @@ impl SecretScanner {
             return text.to_string();
         }
 
-        // Collect all match spans from every pattern against the *original* text.
-        let mut spans: Vec<(usize, usize)> = Vec::new();
-        for (_, re) in &self.patterns {
-            for m in re.find_iter(text) {
-                spans.push((m.start(), m.end()));
-            }
-        }
-
-        // Sort by start position, then by end (longest first) for stable merging.
-        spans.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| b.1.cmp(&a.1)));
-
-        // Merge overlapping spans.
-        let mut merged: Vec<(usize, usize)> = Vec::new();
-        for span in &spans {
-            if let Some(last) = merged.last_mut() {
-                if span.0 <= last.1 {
-                    // Overlapping — extend if this span is wider.
-                    last.1 = last.1.max(span.1);
-                    continue;
-                }
-            }
-            merged.push(*span);
-        }
-
-        // If nothing matched, return as-is.
+        let merged = self.find_spans(text);
         if merged.is_empty() {
             return text.to_string();
         }
@@ -178,11 +237,15 @@ impl SecretScanner {
         let mut result = String::with_capacity(text.len());
         let mut cursor = 0;
         for (start, end) in &merged {
-            if cursor < *start {
-                result.push_str(&text[cursor..*start]);
+            // Ensure we only slice at char boundaries (regex is UTF-8 safe,
+            // but be defensive for adversarial inputs).
+            let start = text.floor_char_boundary(*start);
+            let end = text.floor_char_boundary(*end);
+            if cursor < start {
+                result.push_str(&text[cursor..start]);
             }
             result.push_str("[REDACTED]");
-            cursor = *end;
+            cursor = end;
         }
         if cursor < text.len() {
             result.push_str(&text[cursor..]);

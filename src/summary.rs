@@ -3,6 +3,7 @@
 use chrono::Utc;
 use serde::Serialize;
 
+use crate::analysis::anomalies::{detect_anomalies, Anomaly};
 use crate::analysis::error_detector::ErrorDetector;
 use crate::analysis::failure_fix::FailureFixCorrelator;
 use crate::analysis::retry_waste::RetryWasteDetector;
@@ -57,6 +58,35 @@ pub struct SummaryView {
     /// One-line headline for agents (≤120 chars).
     #[serde(default)]
     pub headline: String,
+    /// First-class anomaly markers (loops, destructive, token spike, …).
+    #[serde(default)]
+    pub anomalies: Vec<AnomalyView>,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct AnomalyView {
+    pub kind: String,
+    pub severity: String,
+    pub detail: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sequence: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub count: Option<usize>,
+}
+
+impl From<Anomaly> for AnomalyView {
+    fn from(a: Anomaly) -> Self {
+        Self {
+            kind: a.kind,
+            severity: a.severity,
+            detail: a.detail,
+            event_id: a.event_id,
+            sequence: a.sequence,
+            count: a.count,
+        }
+    }
 }
 
 /// A pointer agents can use to jump to evidence in the timeline.
@@ -221,8 +251,20 @@ pub async fn build_summary(
         })
         .collect();
 
-    let (next_action, evidence) =
-        recommend_next_action(run, &fix_chains, &retry_waste, &turning_points, &errors);
+    // ── Anomalies (loops / destructive / tokens / silence) ───────────
+    let anomalies: Vec<AnomalyView> = detect_anomalies(&events)
+        .into_iter()
+        .map(AnomalyView::from)
+        .collect();
+
+    let (next_action, evidence) = recommend_next_action(
+        run,
+        &fix_chains,
+        &retry_waste,
+        &turning_points,
+        &errors,
+        &anomalies,
+    );
 
     // ── Capture coverage ─────────────────────────────────────────────
     let coverage_ev = events.iter().find(|e| e.kind == "capture.coverage");
@@ -365,6 +407,7 @@ pub async fn build_summary(
         events_scanned,
         total_events: total,
         headline: &headline,
+        anomalies: &anomalies,
     });
 
     Ok(SummaryView {
@@ -402,6 +445,7 @@ pub async fn build_summary(
         next_action,
         evidence,
         headline,
+        anomalies,
     })
 }
 
@@ -445,10 +489,40 @@ fn recommend_next_action(
     retry_waste: &[RetryWasteView],
     turning_points: &[TurningPointView],
     errors: &[StructuredErrorView],
+    anomalies: &[AnomalyView],
 ) -> (String, Vec<EvidenceLink>) {
     use crate::core::run::RunStatus;
     let short = crate::util::short_id(&run.id).to_string();
     let mut evidence = Vec::new();
+
+    // High-severity anomalies influence next action even on success.
+    if let Some(a) = anomalies.iter().find(|a| a.severity == "high") {
+        evidence.push(EvidenceLink {
+            role: format!("anomaly:{}", a.kind),
+            detail: a.detail.clone(),
+            event_id: a.event_id.clone(),
+            sequence: a.sequence,
+            path: None,
+        });
+        if a.kind == "destructive" {
+            return (
+                format!(
+                    "Destructive action detected — inspect seq {:?} before continuing ({})",
+                    a.sequence, short
+                ),
+                evidence,
+            );
+        }
+        if a.kind == "tool_loop" || a.kind == "error_storm" {
+            return (
+                format!(
+                    "Agent may be stuck ({}) — change approach; `blackbox timeline {} --semantic`",
+                    a.kind, short
+                ),
+                evidence,
+            );
+        }
+    }
 
     if matches!(run.status, RunStatus::Failed | RunStatus::Cancelled) {
         if let Some(tp) = turning_points.iter().find(|p| p.kind == "first_failure") {
@@ -556,6 +630,7 @@ struct SummaryNarrativeData<'a> {
     events_scanned: usize,
     total_events: Option<usize>,
     headline: &'a str,
+    anomalies: &'a [AnomalyView],
 }
 
 /// Build a narrative summary of the run (story-first for agents).
@@ -709,6 +784,14 @@ fn build_narrative(data: &SummaryNarrativeData) -> String {
         }
     }
 
+    // Anomalies
+    if !data.anomalies.is_empty() {
+        n.push_str("Anomalies:\n");
+        for a in data.anomalies.iter().take(8) {
+            n.push_str(&format!("  - [{}|{}] {}\n", a.severity, a.kind, a.detail));
+        }
+    }
+
     if !data.next_action.is_empty() {
         n.push_str(&format!("Recommended next action: {}\n", data.next_action));
     }
@@ -805,6 +888,12 @@ pub fn format_summary_text(s: &SummaryView) -> String {
                 out.push_str(&format!(" path={p}"));
             }
             out.push('\n');
+        }
+    }
+    if !s.anomalies.is_empty() {
+        out.push_str("  anomalies:\n");
+        for a in s.anomalies.iter().take(8) {
+            out.push_str(&format!("    - [{}|{}] {}\n", a.severity, a.kind, a.detail));
         }
     }
 

@@ -405,6 +405,22 @@ pub async fn build_context_pack(
             pack.truncated = true;
             continue;
         }
+        if pack.summary.anomalies.len() > 3 {
+            pack.summary.anomalies.truncate(3);
+            pack.truncated = true;
+            continue;
+        }
+        if !pack.summary.anomalies.is_empty() && pack.approx_tokens > opts.max_tokens {
+            // Keep high severity only
+            pack.summary
+                .anomalies
+                .retain(|a| a.severity == "high");
+            if pack.summary.anomalies.len() > 2 {
+                pack.summary.anomalies.truncate(2);
+            }
+            pack.truncated = true;
+            continue;
+        }
         if pack.summary.errors.len() > 3 {
             pack.summary.errors.truncate(3);
             pack.truncated = true;

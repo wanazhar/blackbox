@@ -402,6 +402,168 @@ pub fn failure_lines(events: &[TraceEvent]) -> Vec<PanelLine> {
     lines
 }
 
+/// Rich failure panel: story headline, next action, anomalies, then error events.
+///
+/// Used by TUI Failures mode as the primary debugger surface.
+pub fn failure_story_lines(
+    run: &Run,
+    events: &[TraceEvent],
+    summary: Option<&crate::summary::SummaryView>,
+) -> Vec<PanelLine> {
+    let mut lines = Vec::new();
+    let short: String = run.id.chars().take(8).collect();
+
+    lines.push(PanelLine {
+        text: format!(
+            "══ Failure story · {} · {:?} · exit={:?} ══",
+            short, run.status, run.exit_code
+        ),
+        event_id: None,
+    });
+
+    if let Some(s) = summary {
+        if !s.headline.is_empty() {
+            lines.push(PanelLine {
+                text: format!("Story: {}", s.headline),
+                event_id: None,
+            });
+        }
+        if !s.next_action.is_empty() {
+            lines.push(PanelLine {
+                text: format!("Next:  {}", s.next_action),
+                event_id: None,
+            });
+        }
+        if !s.evidence.is_empty() {
+            lines.push(PanelLine {
+                text: "Evidence:".into(),
+                event_id: None,
+            });
+            for e in s.evidence.iter().take(8) {
+                let mut t = format!("  · [{}] {}", e.role, truncate(&e.detail, 80));
+                if let Some(seq) = e.sequence {
+                    t.push_str(&format!(" seq={seq}"));
+                }
+                lines.push(PanelLine {
+                    text: t,
+                    event_id: e.event_id.clone(),
+                });
+            }
+        }
+        if !s.anomalies.is_empty() {
+            lines.push(PanelLine {
+                text: "Anomalies:".into(),
+                event_id: None,
+            });
+            for a in s.anomalies.iter().take(10) {
+                lines.push(PanelLine {
+                    text: format!("  ! [{}|{}] {}", a.severity, a.kind, truncate(&a.detail, 90)),
+                    event_id: a.event_id.clone(),
+                });
+            }
+        }
+        if !s.turning_points.is_empty() {
+            lines.push(PanelLine {
+                text: "Turning points:".into(),
+                event_id: None,
+            });
+            for p in s.turning_points.iter().take(8) {
+                lines.push(PanelLine {
+                    text: format!("  → [{}] {}", p.kind, truncate(&p.detail, 90)),
+                    event_id: p.event_id.clone(),
+                });
+            }
+        }
+        if !s.failure_fix_chains.is_empty() {
+            lines.push(PanelLine {
+                text: "Fix chains:".into(),
+                event_id: None,
+            });
+            for c in s.failure_fix_chains.iter().take(5) {
+                lines.push(PanelLine {
+                    text: format!(
+                        "  × {} → files:{}",
+                        truncate(&c.error_message, 50),
+                        if c.files_changed.is_empty() {
+                            "—".into()
+                        } else {
+                            c.files_changed.iter().take(3).cloned().collect::<Vec<_>>().join(",")
+                        }
+                    ),
+                    event_id: Some(c.error_event_id.clone()),
+                });
+            }
+        }
+        lines.push(PanelLine {
+            text: "── Error events ──".into(),
+            event_id: None,
+        });
+    } else {
+        // No summary: still surface live anomalies from events
+        let anoms = crate::analysis::detect_anomalies(events);
+        if !anoms.is_empty() {
+            lines.push(PanelLine {
+                text: "Anomalies:".into(),
+                event_id: None,
+            });
+            for a in anoms.iter().take(10) {
+                lines.push(PanelLine {
+                    text: format!("  ! [{}|{}] {}", a.severity, a.kind, truncate(&a.detail, 90)),
+                    event_id: a.event_id.clone(),
+                });
+            }
+        }
+    }
+
+    let errs = failure_lines(events);
+    if errs.is_empty() {
+        lines.push(PanelLine {
+            text: "(no error-status events — check anomalies / postmortem)".into(),
+            event_id: None,
+        });
+    } else {
+        lines.extend(errs.into_iter().take(40));
+    }
+
+    lines.push(PanelLine {
+        text: format!(
+            "CLI: blackbox postmortem {short} · blackbox timeline {short} --semantic · p=postmortem"
+        ),
+        event_id: None,
+    });
+    lines
+}
+
+/// Anomaly-only panel lines (also folded into Failures).
+pub fn anomaly_lines(events: &[TraceEvent]) -> Vec<PanelLine> {
+    let anoms = crate::analysis::detect_anomalies(events);
+    if anoms.is_empty() {
+        return vec![PanelLine {
+            text: "(no anomalies — no tool loops, destructive actions, token spikes, or long silences)".into(),
+            event_id: None,
+        }];
+    }
+    let mut lines = vec![PanelLine {
+        text: format!("Anomalies ({})", anoms.len()),
+        event_id: None,
+    }];
+    for a in anoms {
+        lines.push(PanelLine {
+            text: format!(
+                "[{}|{}] {}{}",
+                a.severity,
+                a.kind,
+                truncate(&a.detail, 100),
+                a.sequence
+                    .map(|s| format!(" seq={s}"))
+                    .unwrap_or_default()
+            ),
+            event_id: a.event_id,
+        });
+    }
+    lines
+}
+
 /// External / destructive / local-write side effects.
 pub fn side_effect_lines(events: &[TraceEvent]) -> Vec<PanelLine> {
     let mut lines = Vec::new();
@@ -578,7 +740,8 @@ pub fn help_lines() -> Vec<PanelLine> {
         "t            Timeline",
         "o            Processes (process tree events)",
         "f            Files changed",
-        "e            Failures / warnings",
+        "e            Failure story (headline, evidence, anomalies)",
+        "a            Anomalies only (loops, destructive, tokens…)",
         "x            Side effects (write/destructive)",
         "c            Capture quality",
         "p            Postmortem narrative",
@@ -734,6 +897,27 @@ mod tests {
         let lines = failure_lines(&[e]);
         assert_eq!(lines.len(), 1);
         assert!(lines[0].text.contains("boom"));
+    }
+
+    #[test]
+    fn failure_story_includes_anomalies() {
+        let run = sample_run();
+        let mut events = Vec::new();
+        for i in 0..6 {
+            let mut e = ev("tool.call", EventSource::Tool, EventStatus::Success);
+            e.sequence = i;
+            e.metadata
+                .insert("tool_name".into(), serde_json::json!("Bash"));
+            e.metadata
+                .insert("input".into(), serde_json::json!({ "command": "cargo test" }));
+            events.push(e);
+        }
+        let lines = failure_story_lines(&run, &events, None);
+        assert!(
+            lines.iter().any(|l| l.text.contains("tool_loop") || l.text.contains("Anomal")),
+            "expected loop anomaly in story: {:?}",
+            lines.iter().map(|l| &l.text).collect::<Vec<_>>()
+        );
     }
 
     #[test]

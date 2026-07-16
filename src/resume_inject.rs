@@ -271,6 +271,7 @@ fn memory_to_context_pack(
             next_action: String::new(),
             evidence: vec![],
             headline: String::new(),
+            anomalies: vec![],
         }),
         failed_tools: pack.failed_tools.clone(),
         errors_top: pack.errors_top.clone(),

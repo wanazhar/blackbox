@@ -23,8 +23,9 @@ use crate::core::run::Run;
 use crate::storage::sqlite::SqliteStore;
 use crate::storage::TraceStore;
 use crate::ui::panels::{
-    build_header, coverage_lines, failure_lines, file_change_lines, help_lines, process_lines,
-    replay_preflight_lines, side_effect_lines, timeline_lines, PanelLine, RunHeader,
+    anomaly_lines, build_header, coverage_lines, failure_story_lines, file_change_lines,
+    help_lines, process_lines, replay_preflight_lines, side_effect_lines, timeline_lines,
+    PanelLine, RunHeader,
 };
 
 /// Which pane has keyboard focus.
@@ -41,6 +42,7 @@ enum ContentMode {
     Processes,
     Files,
     Failures,
+    Anomalies,
     SideEffects,
     CaptureQuality,
     Postmortem,
@@ -56,7 +58,8 @@ impl ContentMode {
             Self::Timeline => "Timeline",
             Self::Processes => "Processes",
             Self::Files => "Files",
-            Self::Failures => "Failures",
+            Self::Failures => "Failure story",
+            Self::Anomalies => "Anomalies",
             Self::SideEffects => "Side effects",
             Self::CaptureQuality => "Capture quality",
             Self::Postmortem => "Postmortem",
@@ -73,6 +76,7 @@ impl ContentMode {
             Self::Processes => "o",
             Self::Files => "f",
             Self::Failures => "e",
+            Self::Anomalies => "a",
             Self::SideEffects => "x",
             Self::CaptureQuality => "c",
             Self::Postmortem => "p",
@@ -103,6 +107,8 @@ struct App {
     handoff_text: String,
     /// Cached trajectory diff text for `d` panel (selected vs previous run).
     diff_text: String,
+    /// Cached summary for failure-story panel.
+    last_summary: Option<crate::summary::SummaryView>,
     store: SqliteStore,
 }
 
@@ -137,6 +143,7 @@ impl App {
             postmortem_text: String::new(),
             handoff_text: String::new(),
             diff_text: String::new(),
+            last_summary: None,
             store,
         };
         app.reload_selected_run().await;
@@ -151,6 +158,7 @@ impl App {
             self.postmortem_text.clear();
             self.handoff_text.clear();
             self.diff_text.clear();
+            self.last_summary = None;
             return;
         };
 
@@ -182,6 +190,18 @@ impl App {
                     "Run: {} ({:?})\n",
                     summary.short_id, summary.status
                 ));
+                if !summary.headline.is_empty() {
+                    handoff.push_str(&format!("Headline: {}\n", summary.headline));
+                }
+                if !summary.next_action.is_empty() {
+                    handoff.push_str(&format!("Next: {}\n", summary.next_action));
+                }
+                if !summary.anomalies.is_empty() {
+                    handoff.push_str(&format!("\nAnomalies: {}\n", summary.anomalies.len()));
+                    for a in summary.anomalies.iter().take(5) {
+                        handoff.push_str(&format!("  [{}|{}] {}\n", a.severity, a.kind, a.detail));
+                    }
+                }
                 if !summary.narrative.is_empty() {
                     handoff.push_str("\nNarrative (truncated):\n");
                     for line in summary.narrative.lines().take(12) {
@@ -208,10 +228,12 @@ impl App {
                     ));
                 }
                 self.handoff_text = handoff;
+                self.last_summary = Some(summary);
             }
             Err(e) => {
                 self.postmortem_text = format!("(postmortem unavailable: {e})");
                 self.handoff_text = format!("(handoff unavailable: {e})");
+                self.last_summary = None;
             }
         }
 
@@ -272,15 +294,18 @@ impl App {
                 lines
             }
             ContentMode::Failures => {
-                let mut lines = failure_lines(&self.events);
-                if lines.is_empty() {
-                    lines.push(PanelLine {
-                        text: "(no failures or warnings detected)".into(),
+                let run = self.runs.get(self.selected_run_idx);
+                match run {
+                    Some(r) => {
+                        failure_story_lines(r, &self.events, self.last_summary.as_ref())
+                    }
+                    None => vec![PanelLine {
+                        text: "(no run selected)".into(),
                         event_id: None,
-                    });
+                    }],
                 }
-                lines
             }
+            ContentMode::Anomalies => anomaly_lines(&self.events),
             ContentMode::SideEffects => side_effect_lines(&self.events),
             ContentMode::CaptureQuality => coverage_lines(&self.events),
             ContentMode::Postmortem => self
@@ -357,6 +382,10 @@ impl App {
             }
             KeyCode::Char('e') => {
                 self.set_mode(ContentMode::Failures);
+                return true;
+            }
+            KeyCode::Char('a') => {
+                self.set_mode(ContentMode::Anomalies);
                 return true;
             }
             KeyCode::Char('x') => {

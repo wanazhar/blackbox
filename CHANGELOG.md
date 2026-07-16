@@ -21,6 +21,8 @@ All notable changes to **blackbox** are documented here.
 - **External key path**: `BLACKBOX_STORE_KEY_FILE` / `~/.config/blackbox/default.key`
 - **Explain & compare**: postmortem `headline` + `evidence` links; trajectory `explanation` /
   `next_hint` / files after divergence; `diff` always prints explain text first
+- **Anomalies**: tool loops, destructive ops, error storms, token spikes, long silence,
+  process fan-out in postmortem JSON + TUI (`e` failure story, `a` anomalies)
 
 ## [1.2.0] — 2026-07-12
 

@@ -21,6 +21,7 @@ pub mod resume;
 pub mod resume_inject;
 pub mod retention;
 pub mod run;
+pub mod score;
 pub mod scrub;
 pub mod search;
 pub mod serve;

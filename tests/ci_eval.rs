@@ -90,11 +90,14 @@ async fn ci_artifact_dir_writes_run_and_postmortem() {
         ),
     )
     .unwrap();
+    let score = blackbox::score::EvalScore::from_run_summary(&run, &summary);
+    std::fs::write(artifacts.join("score.json"), score.to_pretty_json().unwrap()).unwrap();
 
     assert!(artifacts.join("run.json").is_file());
     assert!(artifacts.join("postmortem.json").is_file());
     assert!(artifacts.join("anomalies.json").is_file());
     assert!(artifacts.join("summary.txt").is_file());
+    assert!(artifacts.join("score.json").is_file());
     let run_json: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(artifacts.join("run.json")).unwrap())
             .unwrap();
@@ -106,6 +109,55 @@ async fn ci_artifact_dir_writes_run_and_postmortem() {
     let summary_txt = std::fs::read_to_string(artifacts.join("summary.txt")).unwrap();
     assert!(summary_txt.contains("headline:"));
     assert!(summary_txt.contains("anomalies:"));
+    let score_v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(artifacts.join("score.json")).unwrap())
+            .unwrap();
+    assert_eq!(score_v["schema"], "blackbox.score/v1");
+    assert_eq!(score_v["run_id"], run.id);
+    assert_eq!(score_v["exit_code"], 0);
+    assert_eq!(score_v["failed"], false);
+    assert!(score_v["anomaly_count"].as_u64().is_some());
+}
+
+#[tokio::test]
+async fn score_json_from_failed_eval_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("t.db");
+    let blobs = dir.path().join("blobs");
+    let store = SqliteStore::open_with_blobs(&db, &blobs).unwrap();
+    let store: Arc<dyn TraceStore> = Arc::new(store);
+    let supervisor = RunSupervisor::new(store.clone());
+    let args = RunArgs {
+        name: Some("eval-fail".into()),
+        project: Some(dir.path().to_string_lossy().into()),
+        tag: vec!["eval".into(), "ci".into()],
+        insecure_raw: false,
+        no_redact: false,
+        no_auto_resume: true,
+        auto_resume: false,
+        ci: false,
+        eval: false,
+        observe_only: true,
+        artifact_dir: None,
+        resume_injection: None,
+        claim_id_note: None,
+        ambient: false,
+        command: vec!["false".into()],
+    };
+    let run = supervisor.execute(&args).await.unwrap();
+    assert_eq!(run.exit_code, Some(1));
+    let summary = blackbox::summary::build_summary(
+        store.as_ref(),
+        &run,
+        blackbox::summary::SummaryOptions::default(),
+    )
+    .await
+    .unwrap();
+    let score = blackbox::score::EvalScore::from_run_summary(&run, &summary);
+    assert_eq!(score.schema, blackbox::score::SCORE_SCHEMA);
+    assert!(score.failed);
+    assert_eq!(score.exit_code, Some(1));
+    assert!(score.tags.iter().any(|t| t == "eval"));
 }
 
 #[test]

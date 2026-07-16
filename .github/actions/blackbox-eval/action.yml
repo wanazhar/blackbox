@@ -1,0 +1,90 @@
+# Composite action: run a command under blackbox --eval and upload artifacts.
+#
+# Example:
+#   - uses: ./.github/actions/blackbox-eval
+#     with:
+#       command: 'python bench.py'
+#       artifact-name: eval-out
+#
+name: blackbox-eval
+description: >
+  Run a command under blackbox --eval --ci --artifact-dir, producing score.json
+  and postmortem artifacts for harness benchmarks.
+
+inputs:
+  command:
+    description: Shell command to run under blackbox eval (after --)
+    required: true
+  artifact-dir:
+    description: Directory for CI/eval artifacts
+    required: false
+    default: blackbox-eval-out
+  artifact-name:
+    description: Name for actions/upload-artifact
+    required: false
+    default: blackbox-eval
+  blackbox-version:
+    description: >
+      crates.io version to install (empty = build from this repo when checked out)
+    required: false
+    default: ""
+  working-directory:
+    description: Working directory for the eval command
+    required: false
+    default: "."
+  fail-on-nonzero:
+    description: Fail the job when the supervised command exits non-zero
+    required: false
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - name: Install blackbox
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ -n "${{ inputs.blackbox-version }}" ]; then
+          cargo install blackbox-recorder --version "${{ inputs.blackbox-version }}" --locked
+        elif [ -f "${{ github.action_path }}/../../../Cargo.toml" ] || [ -f Cargo.toml ]; then
+          # Prefer workspace binary when this action is used from the blackbox repo
+          if [ -f Cargo.toml ] && grep -q 'name = "blackbox-recorder"' Cargo.toml; then
+            cargo install --path . --locked --force
+          else
+            cargo install blackbox-recorder --locked
+          fi
+        else
+          cargo install blackbox-recorder --locked
+        fi
+        blackbox --version
+
+    - name: Run under blackbox eval
+      id: eval
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        OUT="${{ inputs.artifact-dir }}"
+        mkdir -p "$OUT"
+        set +e
+        # shellcheck disable=SC2086
+        blackbox run --eval --ci --artifact-dir "$OUT" -- ${{ inputs.command }}
+        code=$?
+        set -e
+        echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+        if [ -f "$OUT/score.json" ]; then
+          echo "=== score.json ==="
+          cat "$OUT/score.json"
+        fi
+        if [ "${{ inputs.fail-on-nonzero }}" = "true" ] && [ "$code" -ne 0 ]; then
+          exit "$code"
+        fi
+        exit 0
+
+    - name: Upload eval artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ inputs.working-directory }}/${{ inputs.artifact-dir }}/
+        if-no-files-found: warn

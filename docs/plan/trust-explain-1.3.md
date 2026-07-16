@@ -4,7 +4,7 @@
 |---|---|
 | **Document** | Product + technical plan for 1.3 |
 | **Date** | 2026-07-16 |
-| **Status** | **In progress** — Phase 1–2 done (T1/T2 CLI, T3 MCP); **do not cut release yet** |
+| **Status** | **In progress** — Phases 1–3 done (T1–T4); **do not cut release yet** |
 | **Baseline** | 1.2.0 + large unreleased master train (trust, debug, docs) |
 | **Target tag** | **1.3.0** (when exit criteria below pass) |
 | **North star** | Leave ambient on safely; when something fails, get a **story and a jump target** in one breath; agents can load that story without shell-scraping |
@@ -90,7 +90,7 @@ Leave the **1.3.0** tag only when **all** hold:
 | **T1** | **One-shot failure path** | ✅ `blackbox fail` — postmortem + anomalies + next; JSON; `tests/setup_fail.rs` |
 | **T2** | **One-shot setup path** | ✅ `blackbox setup` — enable/shell/memory/harden/sample/doctor; `tests/setup_fail.rs` |
 | **T3** | **MCP debug spine** | ✅ `blackbox_timeline`, `blackbox_anomalies`, `blackbox_fail`; skill + unit tests |
-| **T4** | **Eval score schema** | `blackbox.score/v1` (or artifact `score.json`) with exit, status, anomaly counts by severity/kind, coverage quality, optional tokens; `--eval` writes it; golden test |
+| **T4** | **Eval score schema** | ✅ `blackbox.score/v1` → `score.json` on `--artifact-dir`; GH `blackbox-eval` action; tests |
 | **T5** | **Hardened project profile** | Documented + implemented `setup --harden` or `enable --harden`: encrypt_blobs, external key hint, retention, native_log_scope=project, doctor notes clean |
 | **T6** | **Adapter honesty** | Doctor (or postmortem) flags “structured-tool drought” for known harness adapters when tool.call count is 0 on a long run; test with synthetic events |
 | **T7** | **Ambient acknowledgment** | Optional quiet-default **one-line** ambient complete notice (config off for power users); contract test that notice does not break passthrough/OFF |

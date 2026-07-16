@@ -72,12 +72,13 @@ blackbox show <short-id> --tui    # e = failure story; Enter/g jumps to seq
 blackbox run --ci --artifact-dir ./bb-out --tag ci -- npm test
 # exit code == child exit code
 ls ./bb-out
-# run.json  postmortem.json  anomalies.json  summary.txt  [portable…]
+# run.json postmortem.json anomalies.json summary.txt score.json [portable…]
+jq -e '.failed == false' ./bb-out/score.json
 ```
 
-**Success:** Non-zero test → non-zero process exit; artifacts present for upload.
+**Success:** Non-zero test → non-zero process exit; `score.json` is `blackbox.score/v1`.
 
-**Deeper:** [configuration](configuration.md) · [CLI run](../reference/cli.md#2-run)
+**Deeper:** [score schema](../reference/score.md) · [CLI run](../reference/cli.md#2-run)
 
 ---
 
@@ -88,11 +89,12 @@ ls ./bb-out
 ```bash
 blackbox run --eval --artifact-dir ./eval-out -- \
   your-agent --prompt "solve the task"
+# or GitHub Actions: uses: ./.github/actions/blackbox-eval
 ```
 
-**Success:** Tags include `eval` and `ci`; observe-only (no MEMORY inject); artifacts include anomalies.
+**Success:** Tags include `eval` and `ci`; observe-only (no MEMORY inject); `score.json` + anomalies.
 
-**Deeper:** getting-started “Variants”; CLI `--eval`
+**Deeper:** [score.md](../reference/score.md) · CLI `--eval`
 
 ---
 

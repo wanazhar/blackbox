@@ -1415,6 +1415,10 @@ async fn write_ci_artifacts(
         ),
     )?;
 
+    // Stable eval scorer document (blackbox.score/v1)
+    let score = crate::score::EvalScore::from_run_summary(run, &summary);
+    std::fs::write(dir.join("score.json"), score.to_pretty_json()?)?;
+
     // Optional portable export for offline eval scoring
     if let Ok(events) = store.get_events(&run.id).await {
         if let Ok(archive) = crate::export::export_portable_secure(store, run, &events, true).await

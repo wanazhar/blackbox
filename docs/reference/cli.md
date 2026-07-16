@@ -139,7 +139,7 @@ blackbox run [--name <label>] [--ci] [--eval] [--artifact-dir <dir>] [--tag <tag
 | `--ci` | Propagate child exit code (exit 1 on failure) |
 | `--eval` | Eval harness mode: force observe-only + CI exit codes + tags `eval`/`ci` (no launch mutation) |
 | `--observe-only` | No prompt mutation, continuity inject, or env injection |
-| `--artifact-dir <dir>` | Write run.json, postmortem.json, anomalies.json, summary.txt, portable.json |
+| `--artifact-dir <dir>` | Write run.json, postmortem.json, anomalies.json, summary.txt, **score.json**, portable.json |
 | `--tag <tag>` | Add tags (repeatable) |
 | `--no-auto-resume` | Skip auto-resume injection |
 | `--continuity <mode>` | Override continuity mode |
@@ -160,7 +160,7 @@ blackbox run --ci --artifact-dir ./ci-artifacts --tag ci -- npm test
 
 ```bash
 blackbox run --eval --artifact-dir ./eval-out -- claude -p "solve the task"
-# writes: run.json postmortem.json anomalies.json summary.txt [portable]
+# writes: run.json postmortem.json anomalies.json summary.txt score.json [portable]
 ```
 
 **Scenario: Debug a failing agent harness:**

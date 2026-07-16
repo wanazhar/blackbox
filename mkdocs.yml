@@ -86,6 +86,7 @@ nav:
       - JSON API: reference/json-api.md
       - MCP: reference/mcp.md
       - Memory pack: reference/memory-pack.md
+      - Eval score: reference/score.md
       - Portable format: reference/portable-format.md
       - Stream protocol: reference/stream-protocol.md
   - Agents:

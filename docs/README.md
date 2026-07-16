@@ -50,6 +50,7 @@ CI: `.github/workflows/docs.yml` builds on every docs PR and deploys to **GitHub
 | MCP tools | [reference/mcp.md](reference/mcp.md) |
 | `--json` envelope and view schemas | [reference/json-api.md](reference/json-api.md) |
 | Project memory pack schema | [reference/memory-pack.md](reference/memory-pack.md) |
+| Eval score.json | [reference/score.md](reference/score.md) |
 | Stream / portable formats | [reference/stream-protocol.md](reference/stream-protocol.md), [reference/portable-format.md](reference/portable-format.md) |
 | Ambient decision order (normative) | [ambient-contract.md](ambient-contract.md) |
 

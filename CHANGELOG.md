@@ -19,6 +19,12 @@ All notable changes to **blackbox** are documented here.
 - **MCP debug spine**: `blackbox_timeline` (semantic/kind/limit), `blackbox_anomalies`,
   `blackbox_fail` (same focus order as CLI); skill + docs updated
 
+### 1.3 Phase 3 (T4) — in tree, unreleased
+- **`blackbox.score/v1`**: `score.json` written with every `--artifact-dir` (exit, anomalies
+  by severity/kind, capture_quality, tools/errors, tags)
+- **GitHub Action**: `.github/actions/blackbox-eval` runs `--eval --ci --artifact-dir` + upload
+- Reference: `docs/reference/score.md`
+
 ### Docs
 - **Human-track revamp:** `docs/README.md` index by question; `docs/WRITING.md` style guide
   (competent technical audience — no dumbing down)

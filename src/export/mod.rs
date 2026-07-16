@@ -61,7 +61,11 @@ pub async fn export_portable_secure(
 }
 
 /// HTML export + ExportRedactor second pass (matches CLI `export --format html`).
-pub fn export_html_secure(run: &Run, events: &[TraceEvent], redact: bool) -> anyhow::Result<String> {
+pub fn export_html_secure(
+    run: &Run,
+    events: &[TraceEvent],
+    redact: bool,
+) -> anyhow::Result<String> {
     let output = html::export_html(run, events, redact)?;
     if !redact {
         return Ok(output);
@@ -113,8 +117,7 @@ pub fn apply_portable_blob_redaction(output: &str) -> anyhow::Result<String> {
                     entry.as_str().map(|s| s.to_string())
                 };
                 if let Some(data_b64) = data_str {
-                    if let Ok(decoded) =
-                        base64::engine::general_purpose::STANDARD.decode(&data_b64)
+                    if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(&data_b64)
                     {
                         if let Ok(text) = String::from_utf8(decoded) {
                             let redacted_text = redactor.scanner.redact(&text);

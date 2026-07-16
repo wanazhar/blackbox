@@ -266,12 +266,8 @@ impl App {
                 return;
             }
         };
-        let diff = crate::trajectory::diff_trajectories(
-            &run_a.id,
-            &self.events,
-            &run_b.id,
-            &events_b,
-        );
+        let diff =
+            crate::trajectory::diff_trajectories(&run_a.id, &self.events, &run_b.id, &events_b);
         self.diff_text = crate::ui::panels::trajectory_diff_lines(&diff)
             .into_iter()
             .map(|l| l.text)
@@ -296,9 +292,7 @@ impl App {
             ContentMode::Failures => {
                 let run = self.runs.get(self.selected_run_idx);
                 match run {
-                    Some(r) => {
-                        failure_story_lines(r, &self.events, self.last_summary.as_ref())
-                    }
+                    Some(r) => failure_story_lines(r, &self.events, self.last_summary.as_ref()),
                     None => vec![PanelLine {
                         text: "(no run selected)".into(),
                         event_id: None,
@@ -464,15 +458,13 @@ impl App {
             KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
             KeyCode::PageUp => self.move_selection(-10),
             KeyCode::PageDown => self.move_selection(10),
-            KeyCode::Home => {
-                match self.focus {
-                    Focus::Runs => self.selected_run_idx = 0,
-                    Focus::Content => {
-                        self.content_idx = 0;
-                        self.scroll = 0;
-                    }
+            KeyCode::Home => match self.focus {
+                Focus::Runs => self.selected_run_idx = 0,
+                Focus::Content => {
+                    self.content_idx = 0;
+                    self.scroll = 0;
                 }
-            }
+            },
             KeyCode::End => match self.focus {
                 Focus::Runs if !self.runs.is_empty() => {
                     self.selected_run_idx = self.runs.len() - 1;
@@ -482,35 +474,71 @@ impl App {
                 }
                 _ => {}
             },
-            KeyCode::Enter => match self.focus {
+            KeyCode::Enter | KeyCode::Char('g') => match self.focus {
                 Focus::Runs => {
                     self.reload_selected_run().await;
                     self.focus = Focus::Content;
                 }
                 Focus::Content => {
-                    if let Some(line) = self.content_lines.get(self.content_idx) {
+                    if let Some(line) = self.content_lines.get(self.content_idx).cloned() {
                         if let Some(ref id) = line.event_id {
-                            // Inline inspect: pull event from loaded list
-                            if let Some(ev) = self.events.iter().find(|e| e.id == *id || e.id.starts_with(id)) {
+                            // Jump to timeline at this event (evidence/anomaly → story)
+                            if let Some(ev) = self
+                                .events
+                                .iter()
+                                .find(|e| e.id == *id || e.id.starts_with(id.as_str()))
+                                .cloned()
+                            {
+                                let from = self.mode;
+                                if from != ContentMode::Timeline {
+                                    self.set_mode(ContentMode::Timeline);
+                                } else {
+                                    self.rebuild_content_lines();
+                                }
+                                // Select matching timeline line
+                                if let Some(idx) = self
+                                    .content_lines
+                                    .iter()
+                                    .position(|l| l.event_id.as_ref() == Some(&ev.id))
+                                {
+                                    self.content_idx = idx;
+                                    self.scroll = idx.saturating_sub(3) as u16;
+                                }
                                 let meta = serde_json::to_string(&ev.metadata).unwrap_or_default();
-                                let meta = if meta.len() > 200 {
-                                    format!("{}…", &meta[..meta.floor_char_boundary(200)])
+                                let meta = if meta.len() > 120 {
+                                    format!("{}…", &meta[..meta.floor_char_boundary(120)])
                                 } else {
                                     meta
                                 };
                                 self.status = format!(
-                                    "inspect {} seq={} {:?} blob={} meta={}",
-                                    &ev.id[..8.min(ev.id.len())],
-                                    ev.sequence,
-                                    ev.status,
-                                    ev.output_blob.as_deref().unwrap_or("—"),
-                                    meta
+                                    "→ timeline seq={} {} {:?}  {}",
+                                    ev.sequence, ev.kind, ev.status, meta
                                 );
+                                self.focus = Focus::Content;
                             } else {
                                 self.status = format!(
-                                    "event {} — blackbox show/timeline for full payload",
+                                    "event {} not in loaded events — try blackbox timeline",
                                     &id[..8.min(id.len())]
                                 );
+                            }
+                        } else if let Some(seq) = parse_seq_from_line(&line.text) {
+                            // Jump by sequence mentioned in text (e.g. "seq=42")
+                            self.set_mode(ContentMode::Timeline);
+                            if let Some(idx) = self.content_lines.iter().position(|l| {
+                                l.text.contains(&format!("seq={seq}"))
+                                    || l.text.starts_with(&format!("{seq} "))
+                            }) {
+                                self.content_idx = idx;
+                                self.scroll = idx.saturating_sub(3) as u16;
+                                self.status = format!("→ timeline seq={seq}");
+                            } else if let Some(ev) = self.events.iter().find(|e| e.sequence == seq)
+                            {
+                                self.status = format!(
+                                    "→ seq={} {} (not in filtered timeline; toggle / for all events)",
+                                    ev.sequence, ev.kind
+                                );
+                            } else {
+                                self.status = format!("seq={seq} not found");
                             }
                         } else {
                             self.status = line.text.chars().take(120).collect();
@@ -531,6 +559,7 @@ impl App {
                 }
                 let new = (self.selected_run_idx as i32 + delta).max(0) as usize;
                 self.selected_run_idx = new.min(self.runs.len() - 1);
+                // Optional: auto-reload on move is heavy; Enter/load still used.
             }
             Focus::Content => {
                 if self.content_lines.is_empty() {
@@ -588,12 +617,10 @@ fn render_header(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {
             h.adapter, h.duration, h.mode
         )),
     ]);
-    let line2 = Line::from(vec![
-        Span::raw(format!(
-            "capture={}  files={}  failures={}  side-effects={}",
-            h.capture_quality, h.files_changed, h.failure_count, h.side_effect_risk
-        )),
-    ]);
+    let line2 = Line::from(vec![Span::raw(format!(
+        "capture={}  files={}  failures={}  side-effects={}",
+        h.capture_quality, h.files_changed, h.failure_count, h.side_effect_risk
+    ))]);
     let para = Paragraph::new(vec![line1, line2]).block(
         Block::default()
             .borders(Borders::ALL)
@@ -700,7 +727,10 @@ fn render_body(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {
 
 fn render_status(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {
     let para = Paragraph::new(Span::styled(
-        app.status.chars().take(area.width as usize).collect::<String>(),
+        app.status
+            .chars()
+            .take(area.width as usize)
+            .collect::<String>(),
         Style::default().fg(Color::DarkGray),
     ));
     frame.render_widget(para, area);
@@ -712,13 +742,25 @@ fn render_keymap(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {
         Focus::Content => "content",
     };
     let text = format!(
-        " focus={focus} │ t timeline  o proc  f files  e fail  x side  c cover  p post  h handoff  r replay  d diff  / filter  ? help  q quit"
+        " focus={focus} │ t timeline  e fail  a anom  d diff  p post  Enter/g→jump  / filter  ? help  q quit"
     );
     let para = Paragraph::new(Span::styled(
         text.chars().take(area.width as usize).collect::<String>(),
         Style::default().bg(Color::DarkGray).fg(Color::White),
     ));
     frame.render_widget(para, area);
+}
+
+/// Parse `seq=123` from a panel line for jump-to-timeline.
+fn parse_seq_from_line(text: &str) -> Option<u64> {
+    let idx = text.find("seq=")?;
+    let rest = &text[idx + 4..];
+    let num: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if num.is_empty() {
+        None
+    } else {
+        num.parse().ok()
+    }
 }
 
 /// Run the TUI event loop, opening the default store path.
@@ -774,4 +816,21 @@ pub async fn run_tui_with_store(store: SqliteStore, run_id: Option<&str>) -> any
     }
 
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_seq_from_line;
+
+    #[test]
+    fn parse_seq_from_evidence_and_anomaly_lines() {
+        assert_eq!(parse_seq_from_line("  · [error] boom seq=42"), Some(42));
+        assert_eq!(
+            parse_seq_from_line("[high|tool_loop] Bash×5 seq=99 more"),
+            Some(99)
+        );
+        assert_eq!(parse_seq_from_line("no sequence here"), None);
+        assert_eq!(parse_seq_from_line("seq="), None);
+        assert_eq!(parse_seq_from_line("seq=0"), Some(0));
+    }
 }

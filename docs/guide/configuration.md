@@ -230,7 +230,9 @@ Key flags that appear on multiple subcommands:
 | `--insecure-raw` | `run` | Store raw PTY bytes (dangerous) |
 | `--no-auto-resume` | `run` | Skip auto-resume injection |
 | `--ci` | `run` | Propagate child exit code |
-| `--artifact-dir` | `run` | Write artifacts to directory |
+| `--eval` | `run` | Eval harness: observe-only + CI + tags `eval`/`ci` |
+| `--observe-only` | `run` | No launch mutation / continuity inject |
+| `--artifact-dir` | `run` | Write run/postmortem/anomalies/summary artifacts |
 | `--tui` | `show` | Interactive TUI viewer |
 
 ---

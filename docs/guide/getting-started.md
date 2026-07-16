@@ -87,9 +87,12 @@ blackbox run -- echo hello world
 
 ```bash
 blackbox run --ci --artifact-dir ./artifacts -- npm test
+
+# Model/harness eval (observe-only; tags eval+ci; no continuity inject)
+blackbox run --eval --artifact-dir ./eval-out -- your-agent --prompt "…"
 ```
 
-`--ci` propagates the child exit code. `--artifact-dir` writes `run.json`, `postmortem.json`, and `portable.json` to the specified directory.
+`--ci` propagates the child exit code. `--eval` is the benchmark mode: forces observe-only + CI exit codes + tags `eval`/`ci`. `--artifact-dir` writes `run.json`, `postmortem.json`, `anomalies.json`, `summary.txt`, and optional `portable.json`.
 
 ---
 

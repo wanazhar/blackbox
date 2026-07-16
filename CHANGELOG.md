@@ -23,6 +23,12 @@ All notable changes to **blackbox** are documented here.
   `next_hint` / files after divergence; `diff` always prints explain text first
 - **Anomalies**: tool loops, destructive ops, error storms, token spikes, long silence,
   process fan-out in postmortem JSON + TUI (`e` failure story, `a` anomalies)
+- **TUI polish**: `Enter` / `g` jumps from evidence/anomaly/fix-chain lines to timeline seq
+- **Dashboard**: `/api/runs/{id}/anomalies` + anomaly badge chips on run list/detail/live
+- **Eval harness**: `run --eval` forces observe-only + CI exit codes + tags; artifacts include
+  `anomalies.json` + `summary.txt`
+- **At-rest vault**: sealed blob encryption + `blackbox backup`/`restore` (practical alternative
+  to live SQLCipher; offline passphrase vault for DB + sticky)
 
 ## [1.2.0] — 2026-07-12
 

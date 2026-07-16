@@ -606,9 +606,9 @@ pub fn claim_acquire_scoped(
                 }
             }
             // Replace same-holder same-scope, else push
-            state.path_claims.retain(|c| {
-                !(c.holder == holder && c.scope_key() == scope)
-            });
+            state
+                .path_claims
+                .retain(|c| !(c.holder == holder && c.scope_key() == scope));
             state.path_claims.push(claim.clone());
         }
         state.updated_at = now;
@@ -1238,17 +1238,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join(".blackbox");
         std::fs::create_dir_all(&root).unwrap();
-        claim_acquire_scoped(
-            &root,
-            "h1",
-            "claude",
-            None,
-            None,
-            60,
-            Some("docs".into()),
-        )
-        .unwrap()
-        .unwrap();
+        claim_acquire_scoped(&root, "h1", "claude", None, None, 60, Some("docs".into()))
+            .unwrap()
+            .unwrap();
         assert!(claim_heartbeat(&root, "h1", 3600).unwrap());
         let s = ProjectState::load(&root).unwrap().unwrap();
         assert_eq!(s.path_claims.len(), 1);

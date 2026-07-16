@@ -56,6 +56,7 @@ async fn supervised_ms(command: Vec<String>, label: &str) -> (u128, u64, usize) 
         no_auto_resume: true,
         auto_resume: false,
         ci: false,
+        eval: false,
         observe_only: true,
         artifact_dir: None,
         resume_injection: None,
@@ -145,7 +146,11 @@ async fn bench_suite_local() {
     d.clear();
     s.clear();
     for _ in 0..SAMPLES {
-        d.push(direct_ms(&["sh", "-c", "find . -maxdepth 2 -type f | head -50"]));
+        d.push(direct_ms(&[
+            "sh",
+            "-c",
+            "find . -maxdepth 2 -type f | head -50",
+        ]));
         let (ms, b, e) = supervised_ms(
             vec![
                 "sh".into(),
@@ -203,10 +208,7 @@ async fn bench_suite_local() {
 async fn soft_true_overhead_still_bounded() {
     // Always-on soft guard (duplicates A6 but under observe-only for neutrality).
     let (ms, _, _) = supervised_ms(vec!["true".into()], "soft-true").await;
-    assert!(
-        ms < 12_000,
-        "observe-only true overhead too high: {ms}ms"
-    );
+    assert!(ms < 12_000, "observe-only true overhead too high: {ms}ms");
 }
 
 /// Utility for scripts: measure event write throughput via direct store inserts.

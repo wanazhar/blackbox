@@ -201,8 +201,7 @@ pub fn process_lines(events: &[TraceEvent]) -> Vec<PanelLine> {
     }
     if event_lines == 0 && roots.is_empty() {
         lines.push(PanelLine {
-            text: "(no process-tree events — Linux /proc capture or process layer inactive)"
-                .into(),
+            text: "(no process-tree events — Linux /proc capture or process layer inactive)".into(),
             event_id: None,
         });
     }
@@ -210,9 +209,7 @@ pub fn process_lines(events: &[TraceEvent]) -> Vec<PanelLine> {
 }
 
 /// Trajectory diff lines for comparing two runs in the TUI.
-pub fn trajectory_diff_lines(
-    diff: &crate::trajectory::TrajectoryDiffView,
-) -> Vec<PanelLine> {
+pub fn trajectory_diff_lines(diff: &crate::trajectory::TrajectoryDiffView) -> Vec<PanelLine> {
     let mut lines = Vec::new();
     lines.push(PanelLine {
         text: format!(
@@ -269,7 +266,12 @@ pub fn trajectory_diff_lines(
         lines.push(PanelLine {
             text: format!(
                 "Files only A: {}",
-                diff.files_only_a.iter().take(6).cloned().collect::<Vec<_>>().join(", ")
+                diff.files_only_a
+                    .iter()
+                    .take(6)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ),
             event_id: None,
         });
@@ -278,7 +280,12 @@ pub fn trajectory_diff_lines(
         lines.push(PanelLine {
             text: format!(
                 "Files only B: {}",
-                diff.files_only_b.iter().take(6).cloned().collect::<Vec<_>>().join(", ")
+                diff.files_only_b
+                    .iter()
+                    .take(6)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ),
             event_id: None,
         });
@@ -457,7 +464,12 @@ pub fn failure_story_lines(
             });
             for a in s.anomalies.iter().take(10) {
                 lines.push(PanelLine {
-                    text: format!("  ! [{}|{}] {}", a.severity, a.kind, truncate(&a.detail, 90)),
+                    text: format!(
+                        "  ! [{}|{}] {}",
+                        a.severity,
+                        a.kind,
+                        truncate(&a.detail, 90)
+                    ),
                     event_id: a.event_id.clone(),
                 });
             }
@@ -487,7 +499,12 @@ pub fn failure_story_lines(
                         if c.files_changed.is_empty() {
                             "—".into()
                         } else {
-                            c.files_changed.iter().take(3).cloned().collect::<Vec<_>>().join(",")
+                            c.files_changed
+                                .iter()
+                                .take(3)
+                                .cloned()
+                                .collect::<Vec<_>>()
+                                .join(",")
                         }
                     ),
                     event_id: Some(c.error_event_id.clone()),
@@ -508,7 +525,12 @@ pub fn failure_story_lines(
             });
             for a in anoms.iter().take(10) {
                 lines.push(PanelLine {
-                    text: format!("  ! [{}|{}] {}", a.severity, a.kind, truncate(&a.detail, 90)),
+                    text: format!(
+                        "  ! [{}|{}] {}",
+                        a.severity,
+                        a.kind,
+                        truncate(&a.detail, 90)
+                    ),
                     event_id: a.event_id.clone(),
                 });
             }
@@ -554,9 +576,7 @@ pub fn anomaly_lines(events: &[TraceEvent]) -> Vec<PanelLine> {
                 a.severity,
                 a.kind,
                 truncate(&a.detail, 100),
-                a.sequence
-                    .map(|s| format!(" seq={s}"))
-                    .unwrap_or_default()
+                a.sequence.map(|s| format!(" seq={s}")).unwrap_or_default()
             ),
             event_id: a.event_id,
         });
@@ -591,9 +611,8 @@ pub fn side_effect_lines(events: &[TraceEvent]) -> Vec<PanelLine> {
             .and_then(|c| c.get("surfaces"))
             .and_then(|s| s.as_array())
             .and_then(|arr| {
-                arr.iter().find(|s| {
-                    s.get("name").and_then(|n| n.as_str()) == Some("network")
-                })
+                arr.iter()
+                    .find(|s| s.get("name").and_then(|n| n.as_str()) == Some("network"))
             })
             .and_then(|s| s.get("status").and_then(|st| st.as_str()))
             .unwrap_or("unknown");
@@ -748,6 +767,7 @@ pub fn help_lines() -> Vec<PanelLine> {
         "h            Handoff / resume hints",
         "r            Replay guarantees (preflight)",
         "d            Diff vs previous run (trajectory LCP)",
+        "Enter / g    Jump to timeline at selected evidence/event",
         "/            Filter timeline (toggle bookkeeping)",
         "?            This help",
         "q / Esc      quit",
@@ -866,15 +886,9 @@ mod tests {
 
     #[test]
     fn process_lines_include_argv() {
-        let mut e = ev(
-            "process.exec",
-            EventSource::Process,
-            EventStatus::Success,
-        );
-        e.metadata
-            .insert("pid".into(), serde_json::json!(42));
-        e.metadata
-            .insert("ppid".into(), serde_json::json!(0));
+        let mut e = ev("process.exec", EventSource::Process, EventStatus::Success);
+        e.metadata.insert("pid".into(), serde_json::json!(42));
+        e.metadata.insert("ppid".into(), serde_json::json!(0));
         e.metadata.insert(
             "argv".into(),
             serde_json::json!(["grep", "hello world", "f.txt"]),
@@ -908,13 +922,17 @@ mod tests {
             e.sequence = i;
             e.metadata
                 .insert("tool_name".into(), serde_json::json!("Bash"));
-            e.metadata
-                .insert("input".into(), serde_json::json!({ "command": "cargo test" }));
+            e.metadata.insert(
+                "input".into(),
+                serde_json::json!({ "command": "cargo test" }),
+            );
             events.push(e);
         }
         let lines = failure_story_lines(&run, &events, None);
         assert!(
-            lines.iter().any(|l| l.text.contains("tool_loop") || l.text.contains("Anomal")),
+            lines
+                .iter()
+                .any(|l| l.text.contains("tool_loop") || l.text.contains("Anomal")),
             "expected loop anomaly in story: {:?}",
             lines.iter().map(|l| &l.text).collect::<Vec<_>>()
         );
@@ -928,7 +946,11 @@ mod tests {
 
     #[test]
     fn coverage_lines_from_event() {
-        let mut e = ev("capture.coverage", EventSource::System, EventStatus::Success);
+        let mut e = ev(
+            "capture.coverage",
+            EventSource::System,
+            EventStatus::Success,
+        );
         e.metadata.insert(
             "coverage".into(),
             serde_json::json!({

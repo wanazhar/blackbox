@@ -136,9 +136,7 @@ pub fn create_sealed_backup(
     let manifest = BackupManifest {
         format: BACKUP_FORMAT.into(),
         created_at: chrono::Utc::now().to_rfc3339(),
-        project_hint: store_root
-            .parent()
-            .map(|p| p.display().to_string()),
+        project_hint: store_root.parent().map(|p| p.display().to_string()),
         files,
         notes,
     };
@@ -180,7 +178,10 @@ pub fn restore_sealed_backup(
         hasher.update(&bytes);
         let got = hex::encode(hasher.finalize());
         if got != file.sha256 {
-            anyhow::bail!("sha256 mismatch for {name}: expected {} got {got}", file.sha256);
+            anyhow::bail!(
+                "sha256 mismatch for {name}: expected {} got {got}",
+                file.sha256
+            );
         }
         let dest = if name == "blackbox.db" {
             db_path.to_path_buf()
@@ -245,7 +246,11 @@ mod tests {
         let blobs = root.join("blobs");
         let db = root.join("blackbox.db");
         std::fs::create_dir_all(&blobs).unwrap();
-        std::fs::write(root.join("state.json"), br#"{"schema":"blackbox.state/v2"}"#).unwrap();
+        std::fs::write(
+            root.join("state.json"),
+            br#"{"schema":"blackbox.state/v2"}"#,
+        )
+        .unwrap();
         std::fs::write(root.join("config.toml"), b"enabled = true\n").unwrap();
         std::fs::write(&db, b"sqlite-fake").unwrap();
 

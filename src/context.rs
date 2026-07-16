@@ -412,9 +412,7 @@ pub async fn build_context_pack(
         }
         if !pack.summary.anomalies.is_empty() && pack.approx_tokens > opts.max_tokens {
             // Keep high severity only
-            pack.summary
-                .anomalies
-                .retain(|a| a.severity == "high");
+            pack.summary.anomalies.retain(|a| a.severity == "high");
             if pack.summary.anomalies.len() > 2 {
                 pack.summary.anomalies.truncate(2);
             }

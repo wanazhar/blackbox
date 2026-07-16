@@ -280,10 +280,8 @@ impl GitCapture {
                 }
             }
         } else {
-            ev.metadata.insert(
-                "diff_blob_skipped".to_string(),
-                serde_json::json!(true),
-            );
+            ev.metadata
+                .insert("diff_blob_skipped".to_string(), serde_json::json!(true));
             // Line/stat summary without full content
             let lines = safe_diff.lines().count();
             let added = safe_diff
@@ -468,9 +466,7 @@ impl CaptureLayer for GitCapture {
             tracing::debug!("git capture event channel closed, dropping observer stopped event");
         }
         let _ = tx
-            .send(crate::capture::health::layer_stopped(
-                &run_id, "git", None,
-            ))
+            .send(crate::capture::health::layer_stopped(&run_id, "git", None))
             .await;
 
         Ok(())

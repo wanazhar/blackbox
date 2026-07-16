@@ -88,9 +88,14 @@ pub async fn scrub_store(
                 &mut cp.environment_blob,
                 &mut cp.transcript_blob,
             ] {
-                if let Some(new_key) =
-                    scrub_blob_key(store.as_ref(), &scanner, slot.as_deref(), dry_run, &mut report)
-                        .await?
+                if let Some(new_key) = scrub_blob_key(
+                    store.as_ref(),
+                    &scanner,
+                    slot.as_deref(),
+                    dry_run,
+                    &mut report,
+                )
+                .await?
                 {
                     *slot = Some(new_key);
                     dirty = true;
@@ -202,9 +207,7 @@ async fn scrub_event(
         let Some(val) = event.metadata.get(&mk).and_then(|v| v.as_str()) else {
             continue;
         };
-        if let Some(new_key) =
-            scrub_blob_key(store, scanner, Some(val), dry_run, report).await?
-        {
+        if let Some(new_key) = scrub_blob_key(store, scanner, Some(val), dry_run, report).await? {
             dirty = true;
             if !dry_run {
                 event

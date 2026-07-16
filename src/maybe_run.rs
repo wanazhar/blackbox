@@ -41,7 +41,10 @@ pub fn decide(
     }
     if active_run_set {
         if let Ok(d) = discover_project(cwd, db_override) {
-            append_ambient_log(&d.paths.root, "PASSTHROUGH nested under BLACKBOX_ACTIVE_RUN");
+            append_ambient_log(
+                &d.paths.root,
+                "PASSTHROUGH nested under BLACKBOX_ACTIVE_RUN",
+            );
         }
         return Ok(MaybeRunAction::Passthrough {
             reason: "nested under BLACKBOX_ACTIVE_RUN",
@@ -136,6 +139,7 @@ pub fn run_args_for_record(
         no_auto_resume: true,
         auto_resume: false,
         ci: false,
+        eval: false,
         observe_only: true,
         artifact_dir: None,
         command,

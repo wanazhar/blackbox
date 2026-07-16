@@ -473,10 +473,7 @@ fn build_headline(
                 let msg: String = c.error_message.chars().take(60).collect();
                 format!("{short}: {:?} — {msg}", run.status)
             } else {
-                format!(
-                    "{short}: {:?} (exit {:?})",
-                    run.status, run.exit_code
-                )
+                format!("{short}: {:?} (exit {:?})", run.status, run.exit_code)
             }
         }
         other => format!("{short}: {other:?}"),

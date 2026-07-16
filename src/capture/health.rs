@@ -16,15 +16,11 @@ pub fn layer_event(
     let kind = format!("capture.layer.{phase}");
     let mut ev = TraceEvent::new(run_id, EventSource::System, &kind);
     ev.status = status;
-    ev.metadata
-        .insert("layer".into(), serde_json::json!(layer));
-    ev.metadata
-        .insert("phase".into(), serde_json::json!(phase));
+    ev.metadata.insert("layer".into(), serde_json::json!(layer));
+    ev.metadata.insert("phase".into(), serde_json::json!(phase));
     if let Some(d) = detail {
-        ev.metadata
-            .insert("detail".into(), serde_json::json!(d));
-        ev.metadata
-            .insert("message".into(), serde_json::json!(d));
+        ev.metadata.insert("detail".into(), serde_json::json!(d));
+        ev.metadata.insert("message".into(), serde_json::json!(d));
     }
     ev
 }
@@ -34,13 +30,7 @@ pub fn layer_started(run_id: &str, layer: &str) -> TraceEvent {
 }
 
 pub fn layer_failed(run_id: &str, layer: &str, detail: &str) -> TraceEvent {
-    layer_event(
-        run_id,
-        layer,
-        "failed",
-        EventStatus::Error,
-        Some(detail),
-    )
+    layer_event(run_id, layer, "failed", EventStatus::Error, Some(detail))
 }
 
 pub fn layer_stopped(run_id: &str, layer: &str, detail: Option<&str>) -> TraceEvent {
@@ -92,7 +82,9 @@ mod tests {
         events.push(layer_lag("r", "process", "poll backlog"));
         let failed = failed_layers_from_events(&events);
         assert_eq!(failed.len(), 2);
-        assert!(failed.iter().any(|(l, d)| l == "filesystem" && d.contains("watcher")));
+        assert!(failed
+            .iter()
+            .any(|(l, d)| l == "filesystem" && d.contains("watcher")));
         assert!(failed.iter().any(|(l, _)| l == "process"));
     }
 }

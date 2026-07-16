@@ -89,11 +89,7 @@ impl SqliteStore {
             crate::privacy::restrict_dir(parent);
             // Also restrict grandparent `.blackbox` if present
             if let Some(grand) = parent.parent() {
-                if grand
-                    .file_name()
-                    .map(|n| n == ".blackbox")
-                    .unwrap_or(false)
-                {
+                if grand.file_name().map(|n| n == ".blackbox").unwrap_or(false) {
                     crate::privacy::restrict_dir(grand);
                 }
             }
@@ -959,7 +955,10 @@ impl TraceStore for SqliteStore {
                  FROM events WHERE run_id = ?1 AND sequence > ?2 ORDER BY sequence ASC LIMIT ?3",
             )?;
             let events = stmt
-                .query_map(params![run_id, after_seq as i64, limit as i64], event_from_row)?
+                .query_map(
+                    params![run_id, after_seq as i64, limit as i64],
+                    event_from_row,
+                )?
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(events)
         };

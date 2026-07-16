@@ -248,8 +248,7 @@ mod tests {
         ev.id = id.into();
         ev.status = EventStatus::Error;
         ev.started_at = Utc::now();
-        ev.metadata
-            .insert("message".into(), serde_json::json!(msg));
+        ev.metadata.insert("message".into(), serde_json::json!(msg));
         ev
     }
 

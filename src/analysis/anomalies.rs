@@ -303,7 +303,10 @@ fn detect_process_fanout(events: &[TraceEvent]) -> Vec<Anomaly> {
         vec![Anomaly {
             kind: "process_fanout".into(),
             severity: if pids.len() >= 50 { "high" } else { "warn" }.into(),
-            detail: format!("process tree fan-out: {} distinct PIDs observed", pids.len()),
+            detail: format!(
+                "process tree fan-out: {} distinct PIDs observed",
+                pids.len()
+            ),
             event_id: last_id,
             sequence: last_seq,
             count: Some(pids.len()),
@@ -362,7 +365,9 @@ mod tests {
         ev.metadata
             .insert("path".into(), serde_json::json!("/tmp/important"));
         let a = detect_anomalies(&[ev]);
-        assert!(a.iter().any(|x| x.kind == "destructive" && x.severity == "high"));
+        assert!(a
+            .iter()
+            .any(|x| x.kind == "destructive" && x.severity == "high"));
     }
 
     #[test]

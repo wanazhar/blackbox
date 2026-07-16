@@ -188,12 +188,22 @@ fn explain(
             if files_a.is_empty() {
                 "none".into()
             } else {
-                files_a.iter().take(5).cloned().collect::<Vec<_>>().join(", ")
+                files_a
+                    .iter()
+                    .take(5)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
             },
             if files_b.is_empty() {
                 "none".into()
             } else {
-                files_b.iter().take(5).cloned().collect::<Vec<_>>().join(", ")
+                files_b
+                    .iter()
+                    .take(5)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
             }
         ));
     }
@@ -379,8 +389,7 @@ mod tests {
         ev.sequence = seq;
         ev.status = EventStatus::Success;
         ev.side_effect = SideEffect::LocalWrite;
-        ev.metadata
-            .insert("path".into(), serde_json::json!(path));
+        ev.metadata.insert("path".into(), serde_json::json!(path));
         ev
     }
 

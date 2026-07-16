@@ -40,6 +40,7 @@ async fn ci_artifact_dir_writes_run_and_postmortem() {
         no_auto_resume: true,
         auto_resume: false,
         ci: false, // don't process::exit in test
+        eval: false,
         observe_only: false,
         artifact_dir: Some(artifacts.clone()),
         resume_injection: None,
@@ -71,11 +72,53 @@ async fn ci_artifact_dir_writes_run_and_postmortem() {
         serde_json::to_string_pretty(&summary).unwrap(),
     )
     .unwrap();
+    // Eval harness contract: anomalies.json + summary.txt first-class artifacts
+    std::fs::write(
+        artifacts.join("anomalies.json"),
+        serde_json::to_string_pretty(&summary.anomalies).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        artifacts.join("summary.txt"),
+        format!(
+            "headline: {}\nnext: {}\nstatus: {:?}\nexit: {:?}\nanomalies: {}\n",
+            summary.headline,
+            summary.next_action,
+            summary.status,
+            summary.exit_code,
+            summary.anomalies.len()
+        ),
+    )
+    .unwrap();
 
     assert!(artifacts.join("run.json").is_file());
     assert!(artifacts.join("postmortem.json").is_file());
+    assert!(artifacts.join("anomalies.json").is_file());
+    assert!(artifacts.join("summary.txt").is_file());
     let run_json: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(artifacts.join("run.json")).unwrap())
             .unwrap();
     assert_eq!(run_json["id"], run.id);
+    let anoms: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(artifacts.join("anomalies.json")).unwrap())
+            .unwrap();
+    assert!(anoms.is_array());
+    let summary_txt = std::fs::read_to_string(artifacts.join("summary.txt")).unwrap();
+    assert!(summary_txt.contains("headline:"));
+    assert!(summary_txt.contains("anomalies:"));
+}
+
+#[test]
+fn eval_flag_documented_in_clap_help() {
+    use blackbox::cli::Cli;
+    use clap::CommandFactory;
+    let mut cmd = Cli::command();
+    let run = cmd
+        .find_subcommand_mut("run")
+        .expect("run subcommand exists");
+    let help = run.render_long_help().to_string();
+    assert!(
+        help.contains("--eval"),
+        "run --help should mention --eval harness mode; got:\n{help}"
+    );
 }

@@ -6,8 +6,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::export::{export_html_secure, export_portable_secure};
 use crate::export::portable::import_portable;
+use crate::export::{export_html_secure, export_portable_secure};
 use crate::search::search_store;
 use crate::storage::sqlite::SqliteStore;
 use crate::storage::TraceStore;
@@ -75,6 +75,7 @@ pub async fn serve(store: Arc<SqliteStore>, opts: ServeOptions) -> anyhow::Resul
         .route("/api/runs/{id}", get(api_run))
         .route("/api/runs/{id}/events", get(api_events))
         .route("/api/runs/{id}/events/stream", get(api_event_stream))
+        .route("/api/runs/{id}/anomalies", get(api_anomalies))
         .route("/api/search", get(api_search))
         .route("/api/status", get(api_status))
         .route("/api/handoff", get(api_handoff))
@@ -106,7 +107,7 @@ pub async fn serve(store: Arc<SqliteStore>, opts: ServeOptions) -> anyhow::Resul
     println!("  status:  http://{}/status", opts.addr);
     println!("  handoff: http://{}/handoff", opts.addr);
     println!(
-        "  api:     http://{}/api/runs  ·  /api/status  ·  /api/handoff",
+        "  api:     http://{}/api/runs  ·  /api/runs/{{id}}/anomalies  ·  /api/status",
         opts.addr
     );
     println!("  sync:    http://{}/api/sync/manifest", opts.addr);
@@ -245,10 +246,17 @@ function upsert(run) {{
   const badge = document.createElement('span'); badge.className = 'badge'; badge.textContent = status;
   td2.appendChild(badge); td2.appendChild(document.createTextNode(' '));
   const a2 = document.createElement('a'); a2.className = 'muted'; a2.href = `/runs/${{encodeURIComponent(id)}}/live`; a2.textContent = 'live';
-  td2.appendChild(a2); tr.appendChild(td2);
+  td2.appendChild(a2);
+  const anomSlot = document.createElement('span'); anomSlot.className = 'anom-slot'; anomSlot.dataset.for = id;
+  td2.appendChild(document.createTextNode(' ')); td2.appendChild(anomSlot);
+  tr.appendChild(td2);
   const td3 = document.createElement('td'); td3.textContent = exit; tr.appendChild(td3);
   const td4 = document.createElement('td'); td4.textContent = label + ' '; tr.appendChild(td4);
   if (tags) {{ const span = document.createElement('span'); span.className = 'tags'; span.textContent = tags; td4.appendChild(span); }}
+  // Lazy anomaly badge for finished / failed runs
+  if (status === 'Failed' || status === 'Completed' || status === 'Cancelled') {{
+    refreshAnom(id, anomSlot);
+  }}
 }}
 const qs = new URLSearchParams(location.search);
 // Token via sessionStorage after ?token= once (migrated off query auth).
@@ -259,10 +267,33 @@ if (urlTok) {{
   history.replaceState(null, '', u.pathname + u.search + u.hash);
 }}
 function bbToken() {{ try {{ return sessionStorage.getItem('bb_token') || ''; }} catch(_) {{ return ''; }} }}
-async function openSse(path, handlers) {{
+function authHeaders() {{
   const headers = {{}};
   const t = bbToken();
   if (t) headers['Authorization'] = 'Bearer ' + t;
+  return headers;
+}}
+async function refreshAnom(id, slot) {{
+  try {{
+    const res = await fetch('/api/runs/' + encodeURIComponent(id) + '/anomalies', {{ headers: authHeaders() }});
+    if (!res.ok) return;
+    const body = await res.json();
+    const list = body.anomalies || body || [];
+    const n = Array.isArray(list) ? list.length : 0;
+    if (!n) {{ slot.textContent = ''; return; }}
+    const high = list.filter(a => a.severity === 'high').length;
+    const warn = list.filter(a => a.severity === 'warn').length;
+    const sev = high ? 'high' : (warn ? 'warn' : 'info');
+    slot.innerHTML = '';
+    const b = document.createElement('span');
+    b.className = 'badge badge-anom badge-' + sev;
+    b.title = list.map(a => '[' + a.severity + '|' + a.kind + '] ' + (a.detail || '')).slice(0, 5).join('\\n');
+    b.textContent = '⚠ ' + n;
+    slot.appendChild(b);
+  }} catch (_) {{}}
+}}
+async function openSse(path, handlers) {{
+  const headers = authHeaders();
   streamEl.textContent = 'live list: connecting…';
   try {{
     const res = await fetch(path, {{ headers }});
@@ -300,6 +331,11 @@ async function openSse(path, handlers) {{
 openSse('/api/runs/stream', {{
   run: (data) => {{ try {{ upsert(JSON.parse(data)); }} catch(_){{}} }},
 }});
+// Seed anomaly badges for initial rows
+for (const tr of tbody.querySelectorAll('tr[data-id]')) {{
+  const slot = tr.querySelector('.anom-slot');
+  if (slot) refreshAnom(tr.dataset.id, slot);
+}}
 </script>
 <style>.flash {{ animation: flash 1.2s ease; }} @keyframes flash {{ from {{ background: color-mix(in srgb, var(--accent) 35%, transparent); }} to {{ background: transparent; }} }}</style>"#,
             n = runs.len(),
@@ -322,7 +358,7 @@ fn run_row_html(run: &crate::core::run::Run) -> String {
     format!(
         r#"<tr data-id="{id}">
   <td class="mono"><a href="/runs/{id}">{short}</a></td>
-  <td><span class="badge">{status}</span> <a class="muted" href="/runs/{id}/live">live</a></td>
+  <td><span class="badge">{status}</span> <a class="muted" href="/runs/{id}/live">live</a> <span class="anom-slot" data-for="{id}"></span></td>
   <td>{exit}</td>
   <td>{label} {tags}</td>
   <td class="muted">{started}</td>
@@ -340,6 +376,38 @@ fn run_row_html(run: &crate::core::run::Run) -> String {
     )
 }
 
+/// HTML chips for anomaly markers on the run detail page.
+fn anomaly_badges_html(anomalies: &[crate::analysis::Anomaly]) -> String {
+    if anomalies.is_empty() {
+        return String::new();
+    }
+    let mut chips = String::new();
+    for a in anomalies.iter().take(12) {
+        let sev = match a.severity.as_str() {
+            "high" => "high",
+            "warn" => "warn",
+            _ => "info",
+        };
+        let label = if let Some(c) = a.count {
+            format!("{}×{}", a.kind, c)
+        } else {
+            a.kind.clone()
+        };
+        let seq = a.sequence.map(|s| format!(" seq={s}")).unwrap_or_default();
+        chips.push_str(&format!(
+            r#" <span class="badge badge-anom badge-{sev}" title="{title}">{label}</span>"#,
+            sev = sev,
+            label = html_escape(&label),
+            title = html_escape(&format!("[{}] {}{}", a.severity, a.detail, seq)),
+        ));
+    }
+    format!(
+        r#"<div class="meta anom-bar"><div><b>Anomalies</b> {n}{chips}</div></div>"#,
+        n = anomalies.len(),
+        chips = chips,
+    )
+}
+
 async fn run_page(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -349,6 +417,7 @@ async fn run_page(
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
     let events = state.store.get_events(&run_id).await?;
+    let anomalies = crate::analysis::detect_anomalies(&events);
     let tools = rebuild_tool_transcript(&events);
     let transcript = rebuild_terminal_transcript(state.store.as_ref(), &events)
         .await
@@ -360,7 +429,7 @@ async fn run_page(
     }
 
     let body = format!(
-        r#"<p><a href="/">← Runs</a> · <a href="/runs/{id}/live">Live view</a> · <a href="/runs/{id}/export.html">Full HTML export</a></p>
+        r#"<p><a href="/">← Runs</a> · <a href="/runs/{id}/live">Live view</a> · <a href="/runs/{id}/export.html">Full HTML export</a> · <a class="muted" href="/api/runs/{id}/anomalies">anomalies JSON</a></p>
 <h1>{title}</h1>
 <p class="mono muted">{full_id}</p>
 <div class="meta">
@@ -370,6 +439,7 @@ async fn run_page(
   <div><b>Events</b> {}</div>
   <div><b>Tags</b> {}</div>
 </div>
+{anom}
 <h2>Tools</h2>
 <pre>{}</pre>
 <h2>Terminal</h2>
@@ -394,6 +464,7 @@ async fn run_page(
         id = urlencoding(&run_id),
         title = html_escape(run.name.as_deref().unwrap_or("Run")),
         full_id = html_escape(&run_id),
+        anom = anomaly_badges_html(&anomalies),
     );
 
     Ok(Html(shell(
@@ -422,6 +493,7 @@ async fn run_live_page(
   <div><b>Status</b> <span id="status">{status:?}</span></div>
   <div><b>Events</b> <span id="count">0</span></div>
   <div><b>Stream</b> <span id="stream" class="muted">connecting…</span></div>
+  <div><b>Anomalies</b> <span id="anoms" class="muted">…</span></div>
 </div>
 <div class="bar">
   <label><input type="checkbox" id="semantic" checked> semantic only</label>
@@ -437,6 +509,7 @@ const tl = document.getElementById('tl');
 const countEl = document.getElementById('count');
 const statusEl = document.getElementById('status');
 const streamEl = document.getElementById('stream');
+const anomsEl = document.getElementById('anoms');
 const semantic = document.getElementById('semantic');
 const bookkeeping = new Set([
   'pty.started','pty.stopped','git.observer.started','git.observer.stopped',
@@ -445,6 +518,7 @@ const bookkeeping = new Set([
   'git.commit','git.commit.after'
 ]);
 let n = 0;
+let anomRefreshAt = 0;
 function esc(s) {{ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#x27;'); }}
 function detail(ev) {{
   const m = ev.metadata || {{}};
@@ -465,6 +539,9 @@ function add(ev) {{
   n++;
   countEl.textContent = String(n);
   tr.scrollIntoView({{block:'nearest'}});
+  // Throttle anomaly refresh (~every 25 events or 4s)
+  const now = Date.now();
+  if (n % 25 === 0 || now - anomRefreshAt > 4000) refreshAnoms();
 }}
 const qs = new URLSearchParams(location.search);
 const urlTok = qs.get('token');
@@ -474,10 +551,29 @@ if (urlTok) {{
   history.replaceState(null, '', u.pathname + u.search + u.hash);
 }}
 function bbToken() {{ try {{ return sessionStorage.getItem('bb_token') || ''; }} catch(_) {{ return ''; }} }}
-async function openSse(path, handlers) {{
+function authHeaders() {{
   const headers = {{}};
   const t = bbToken();
   if (t) headers['Authorization'] = 'Bearer ' + t;
+  return headers;
+}}
+async function refreshAnoms() {{
+  anomRefreshAt = Date.now();
+  try {{
+    const res = await fetch('/api/runs/' + encodeURIComponent(runId) + '/anomalies', {{ headers: authHeaders() }});
+    if (!res.ok) {{ anomsEl.textContent = '—'; return; }}
+    const body = await res.json();
+    const list = body.anomalies || [];
+    if (!list.length) {{ anomsEl.innerHTML = '<span class="muted">none</span>'; return; }}
+    anomsEl.innerHTML = list.slice(0, 8).map(a => {{
+      const sev = a.severity === 'high' ? 'high' : (a.severity === 'warn' ? 'warn' : 'info');
+      const label = a.count ? (a.kind + '×' + a.count) : a.kind;
+      return '<span class="badge badge-anom badge-' + sev + '" title="' + esc('[' + a.severity + '] ' + (a.detail||'')) + '">' + esc(label) + '</span>';
+    }}).join(' ');
+  }} catch (_) {{ anomsEl.textContent = '—'; }}
+}}
+async function openSse(path, handlers) {{
+  const headers = authHeaders();
   streamEl.textContent = 'stream: connecting…';
   try {{
     const res = await fetch(path, {{ headers }});
@@ -519,9 +615,11 @@ openSse(`/api/runs/${{encodeURIComponent(runId)}}/events/stream`, {{
       const s = JSON.parse(data);
       statusEl.textContent = s.status || statusEl.textContent;
       if (s.exit_code != null) statusEl.textContent += ' exit=' + s.exit_code;
+      refreshAnoms();
     }} catch (_) {{}}
   }},
 }});
+refreshAnoms();
 document.getElementById('clear').onclick = () => {{ tl.textContent=''; n=0; countEl.textContent='0'; }};
 </script>"#,
         id = urlencoding(&run_id),
@@ -831,6 +929,26 @@ async fn api_events(
     Ok(Json(serde_json::to_value(events)?).into_response())
 }
 
+/// Anomaly markers for a run (tool loops, destructive ops, storms, spikes, …).
+async fn api_anomalies(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Response, AppError> {
+    let run_id = resolve_prefix(state.store.as_ref(), &id).await?;
+    if state.store.get_run(&run_id).await?.is_none() {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    }
+    // Cap event load for dashboard RAM; anomaly detectors only need recent/all capped history.
+    let events = state.store.get_events_limited(&run_id, 8_000).await?.0;
+    let anomalies = crate::analysis::detect_anomalies(&events);
+    Ok(Json(serde_json::json!({
+        "run_id": run_id,
+        "count": anomalies.len(),
+        "anomalies": anomalies,
+    }))
+    .into_response())
+}
+
 #[derive(Deserialize)]
 struct EventsQuery {
     limit: Option<usize>,
@@ -1108,6 +1226,12 @@ th {{ color:var(--muted); font-size:0.75rem; text-transform:uppercase; letter-sp
 .num {{ font-family:ui-monospace,Menlo,monospace; text-align:right; }}
 .detail {{ color:var(--muted); max-width:32rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}
 .badge {{ display:inline-block; padding:0.1em 0.45em; border-radius:4px; background:color-mix(in srgb,var(--accent) 18%,transparent); font-size:0.8rem; }}
+.badge-anom {{ margin-left:0.2rem; font-weight:600; }}
+.badge-high {{ background:#7f1d1d; color:#fecaca; }}
+.badge-warn {{ background:#78350f; color:#fde68a; }}
+.badge-info {{ background:color-mix(in srgb,var(--accent) 22%,transparent); }}
+.anom-slot {{ display:inline; }}
+.anom-bar {{ margin-top:0.25rem; }}
 .tags {{ color:var(--muted); font-size:0.8rem; margin-left:0.4rem; }}
 .row-tool {{ background:var(--tool); }}
 .row-error {{ background:var(--err); }}
@@ -1245,6 +1369,7 @@ mod testing {
             .route("/api/runs", get(api_runs))
             .route("/api/runs/{id}", get(api_run))
             .route("/api/runs/{id}/events", get(api_events))
+            .route("/api/runs/{id}/anomalies", get(api_anomalies))
             .with_state(state)
     }
 
@@ -1339,6 +1464,26 @@ mod testing {
         assert_eq!(events.len(), 2, "should return both events for run1");
         assert_eq!(events[0]["sequence"].as_u64().unwrap(), 0);
         assert_eq!(events[1]["sequence"].as_u64().unwrap(), 1);
+
+        // ── Test GET /api/runs/{id}/anomalies ─────────────────
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/runs/{}/anomalies", run1.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let anom_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(anom_json["run_id"].as_str().unwrap(), run1.id);
+        assert!(anom_json["anomalies"].is_array());
+        assert!(anom_json["count"].as_u64().is_some());
 
         // ── Test 404 for non-existent run ────────────────────
         let resp = app

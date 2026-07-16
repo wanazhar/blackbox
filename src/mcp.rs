@@ -518,9 +518,7 @@ async fn tool_claim(
     store_override: Option<&std::path::Path>,
     args: &Value,
 ) -> Result<Value, Value> {
-    use crate::state::{
-        claim_acquire_scoped, claim_holder_id, claim_release, ProjectState,
-    };
+    use crate::state::{claim_acquire_scoped, claim_holder_id, claim_release, ProjectState};
     let (discovery, _) = open_ctx(store_override).await?;
     let action = args
         .get("action")
@@ -547,16 +545,8 @@ async fn tool_claim(
                 .get("path")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
-            match claim_acquire_scoped(
-                &discovery.paths.root,
-                &holder,
-                &kind,
-                None,
-                goal,
-                ttl,
-                path,
-            )
-            .map_err(|e| rpc_err(-32000, &e.to_string()))?
+            match claim_acquire_scoped(&discovery.paths.root, &holder, &kind, None, goal, ttl, path)
+                .map_err(|e| rpc_err(-32000, &e.to_string()))?
             {
                 Ok(c) => {
                     let v =

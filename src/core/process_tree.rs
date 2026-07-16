@@ -156,12 +156,7 @@ impl ProcessNode {
 
     /// Maximum depth of the tree (root = 1).
     pub fn depth(&self) -> usize {
-        1 + self
-            .children
-            .iter()
-            .map(|c| c.depth())
-            .max()
-            .unwrap_or(0)
+        1 + self.children.iter().map(|c| c.depth()).max().unwrap_or(0)
     }
 
     /// Find a node by PID (depth-first).
@@ -449,8 +444,13 @@ pub fn rebuild_from_events(events: &[TraceEvent]) -> Vec<ProcessNode> {
 }
 
 impl ProcessNode {
-
-    fn format_tree_inner(&self, prefix: &str, is_root: bool, is_last: bool, lines: &mut Vec<String>) {
+    fn format_tree_inner(
+        &self,
+        prefix: &str,
+        is_root: bool,
+        is_last: bool,
+        lines: &mut Vec<String>,
+    ) {
         let connector = if is_root {
             ""
         } else if is_last {
@@ -589,8 +589,7 @@ mod tests {
     fn depth_counts_levels() {
         let mut root = ProcessNode::new(1, 0, vec!["a".into()]);
         let mut mid = ProcessNode::new(2, 1, vec!["b".into()]);
-        mid.children
-            .push(ProcessNode::new(3, 2, vec!["c".into()]));
+        mid.children.push(ProcessNode::new(3, 2, vec!["c".into()]));
         root.children.push(mid);
         assert_eq!(root.depth(), 3);
     }

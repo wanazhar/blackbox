@@ -207,8 +207,7 @@ impl RunSupervisor {
             );
         }
 
-        let env_json =
-            serde_json::to_vec(&env_vars).context("failed to serialize environment")?;
+        let env_json = serde_json::to_vec(&env_vars).context("failed to serialize environment")?;
         let env_blob = self
             .store
             .store_blob(&env_json)
@@ -224,10 +223,9 @@ impl RunSupervisor {
             "environment_blob".to_string(),
             serde_json::json!(env_blob.key),
         );
-        env_event.metadata.insert(
-            "var_count".to_string(),
-            serde_json::json!(env_var_count),
-        );
+        env_event
+            .metadata
+            .insert("var_count".to_string(), serde_json::json!(env_var_count));
         env_event.metadata.insert(
             "env_capture".to_string(),
             serde_json::json!(self.policy.env_capture.as_str()),
@@ -932,9 +930,8 @@ impl RunSupervisor {
         let (merge_lag, merge_send_fail) = merge_stats.snapshot();
         let mut capture_lag_note = health.soft_warning();
         if merge_lag > 0 || merge_send_fail > 0 {
-            let merge_msg = format!(
-                "capture merge lag samples={merge_lag} send_failures={merge_send_fail}"
-            );
+            let merge_msg =
+                format!("capture merge lag samples={merge_lag} send_failures={merge_send_fail}");
             capture_lag_note = Some(match capture_lag_note {
                 Some(w) => format!("{w}; {merge_msg}"),
                 None => merge_msg,
@@ -1203,6 +1200,7 @@ mod tests {
             no_auto_resume: false,
             auto_resume: false,
             ci: false,
+            eval: false,
             observe_only: true,
             artifact_dir: None,
             command: vec!["true".into()],

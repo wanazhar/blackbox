@@ -186,9 +186,7 @@ pub fn resolve_key_path(store_root: &Path) -> PathBuf {
     // Prefer existing external key (do not auto-create outside project unless env set).
     let xdg = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config"))
-        });
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")));
     if let Some(cfg) = xdg {
         let external = cfg.join("blackbox").join("default.key");
         if external.is_file() {
@@ -327,12 +325,9 @@ pub fn open_export_pack(
     passphrase: Option<&str>,
     store: Option<&BlobCrypto>,
 ) -> anyhow::Result<String> {
-    let v: serde_json::Value = serde_json::from_str(sealed_json)
-        .context("sealed pack is not JSON")?;
-    let format = v
-        .get("format")
-        .and_then(|f| f.as_str())
-        .unwrap_or("");
+    let v: serde_json::Value =
+        serde_json::from_str(sealed_json).context("sealed pack is not JSON")?;
+    let format = v.get("format").and_then(|f| f.as_str()).unwrap_or("");
     if format != SEALED_FORMAT {
         anyhow::bail!("not a sealed export pack (format={format:?})");
     }
@@ -448,4 +443,3 @@ mod tests {
         assert_eq!(plain, br#"{"a":1}"#);
     }
 }
-

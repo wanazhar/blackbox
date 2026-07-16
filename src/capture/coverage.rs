@@ -449,7 +449,11 @@ mod tests {
         let before = cov.quality_score;
         cov.mark_surface_failed("filesystem", "watcher crashed");
         assert!(cov.quality_score <= before);
-        let fs = cov.surfaces.iter().find(|s| s.name == "filesystem").unwrap();
+        let fs = cov
+            .surfaces
+            .iter()
+            .find(|s| s.name == "filesystem")
+            .unwrap();
         assert_eq!(fs.status, SurfaceStatus::Failed);
     }
 

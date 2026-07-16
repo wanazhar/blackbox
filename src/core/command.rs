@@ -430,8 +430,12 @@ mod tests {
 
     #[test]
     fn shell_source_with_shell_is_inferred() {
-        let meta = CommandMetadata::from_shell_source("cat result.json | jq '.items[]'", Some("bash"));
-        assert_eq!(meta.argv, vec!["bash", "-lc", "cat result.json | jq '.items[]'"]);
+        let meta =
+            CommandMetadata::from_shell_source("cat result.json | jq '.items[]'", Some("bash"));
+        assert_eq!(
+            meta.argv,
+            vec!["bash", "-lc", "cat result.json | jq '.items[]'"]
+        );
         assert_eq!(meta.fidelity, CommandFidelity::Inferred);
         assert!(meta.lossless);
         assert_eq!(
@@ -511,8 +515,10 @@ mod tests {
             "argv".into(),
             serde_json::json!(["grep", "hello world", "f.txt"]),
         );
-        ev.metadata
-            .insert("command".into(), serde_json::json!("grep hello world f.txt"));
+        ev.metadata.insert(
+            "command".into(),
+            serde_json::json!("grep hello world f.txt"),
+        );
         ev.metadata
             .insert("capture_method".into(), serde_json::json!("proc_poller"));
         let meta = CommandMetadata::from_event(&ev).unwrap();

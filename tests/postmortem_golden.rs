@@ -57,8 +57,7 @@ fn tool_result(run_id: &str, seq: u64, ok: bool, msg: &str) -> TraceEvent {
     } else {
         EventStatus::Error
     };
-    ev.metadata
-        .insert("message".into(), serde_json::json!(msg));
+    ev.metadata.insert("message".into(), serde_json::json!(msg));
     ev
 }
 
@@ -68,8 +67,7 @@ fn fs_mod(run_id: &str, seq: u64, path: &str, offset_ms: i64) -> TraceEvent {
     ev.status = EventStatus::Success;
     ev.side_effect = SideEffect::LocalWrite;
     ev.started_at = Utc::now() - Duration::minutes(5) + Duration::milliseconds(offset_ms);
-    ev.metadata
-        .insert("path".into(), serde_json::json!(path));
+    ev.metadata.insert("path".into(), serde_json::json!(path));
     ev
 }
 
@@ -171,7 +169,9 @@ async fn golden_failure_with_fix_chain() {
         "expected non-empty narrative"
     );
     assert!(
-        summary.tools.failed > 0 || !summary.errors.is_empty() || !summary.failure_fix_chains.is_empty(),
+        summary.tools.failed > 0
+            || !summary.errors.is_empty()
+            || !summary.failure_fix_chains.is_empty(),
         "expected failure signal in summary"
     );
 }
@@ -261,9 +261,11 @@ async fn golden_partial_capture() {
     );
     // Network unavailable should appear as a surface, not as "no network happened".
     assert!(
-        cov.surfaces
-            .iter()
-            .any(|s| s.name == "network" || s.note.as_ref().map(|n| n.contains("network")).unwrap_or(false))
+        cov.surfaces.iter().any(|s| s.name == "network"
+            || s.note
+                .as_ref()
+                .map(|n| n.contains("network"))
+                .unwrap_or(false))
             || summary.narrative.to_lowercase().contains("network")
             || cov.notes.iter().any(|n| n.contains("process-tree")),
         "partial capture should surface limitations"

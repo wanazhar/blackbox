@@ -107,7 +107,9 @@ impl StreamRedactor {
         // Advance unredacted carry from original stream.
         self.carry.push_str(chunk);
         if self.carry.len() > self.window {
-            let keep_from = self.carry.floor_char_boundary(self.carry.len() - self.window);
+            let keep_from = self
+                .carry
+                .floor_char_boundary(self.carry.len() - self.window);
             self.carry = self.carry[keep_from..].to_string();
         }
 
@@ -153,7 +155,11 @@ mod tests {
         let (a, _) = s.push(&secret[..mid]);
         let (b, hits_b) = s.push(&format!("{}\n", &secret[mid..]));
         // First half alone is too short for sk-[A-Za-z0-9]{20,}.
-        assert_eq!(a, &secret[..mid], "partial first chunk should pass through: {a}");
+        assert_eq!(
+            a,
+            &secret[..mid],
+            "partial first chunk should pass through: {a}"
+        );
         // Combined stream must catch the secret on the second push.
         assert!(hits_b > 0, "boundary hit expected on second chunk");
         let combined = format!("{a}{b}");
@@ -196,7 +202,8 @@ mod tests {
         let mut s = stream();
         // CSI sequence then secret (ANSI already stripped upstream normally;
         // still ensure redaction works when control-ish text is nearby).
-        let (out, hits) = s.push("status=\x1b[32mok\x1b[0m key=sk-abcdefghijklmnopqrstuvwxyz012345");
+        let (out, hits) =
+            s.push("status=\x1b[32mok\x1b[0m key=sk-abcdefghijklmnopqrstuvwxyz012345");
         assert!(hits > 0);
         assert!(out.contains("[REDACTED]"));
         assert!(!out.contains("sk-abcdef"));

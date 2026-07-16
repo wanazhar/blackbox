@@ -65,9 +65,7 @@ pub fn plan_deletions(runs: &[Run], cfg: &RetentionConfig) -> Vec<RetentionCandi
 pub fn progressive_gc_advice(run_count: usize, total_bytes: u64, keep_runs: u32) -> Vec<String> {
     let mut tips = Vec::new();
     if total_bytes > 512 * 1024 * 1024 {
-        tips.push(
-            "store >512MiB: run `blackbox gc --apply` then `blackbox scrub --gc`".into(),
-        );
+        tips.push("store >512MiB: run `blackbox gc --apply` then `blackbox scrub --gc`".into());
     }
     if run_count as u32 > keep_runs.saturating_mul(2).max(20) {
         tips.push(format!(

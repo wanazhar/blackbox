@@ -71,11 +71,7 @@ pub fn tool_call_event(
 
 /// If this is a shell tool with a command string/array in input, attach
 /// [`CommandMetadata`] so sandbox/analysis never need whitespace reconstruction.
-fn attach_shell_command_meta(
-    ev: &mut TraceEvent,
-    tool_name: &str,
-    input: &serde_json::Value,
-) {
+fn attach_shell_command_meta(ev: &mut TraceEvent, tool_name: &str, input: &serde_json::Value) {
     use crate::core::command::CommandMetadata;
 
     let lower = tool_name.to_lowercase();

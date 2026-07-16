@@ -24,9 +24,7 @@ pub fn detect_turning_points(events: &[TraceEvent]) -> Vec<TurningPoint> {
     for ev in events {
         // First meaningful tool/process work
         if !first_tool
-            && (ev.kind == "tool.call"
-                || ev.kind == "process.exec"
-                || ev.kind == "process.spawned")
+            && (ev.kind == "tool.call" || ev.kind == "process.exec" || ev.kind == "process.spawned")
         {
             first_tool = true;
             let label = ev
@@ -135,11 +133,7 @@ pub fn detect_turning_points(events: &[TraceEvent]) -> Vec<TurningPoint> {
 
     // Unresolved: last error without later success verification
     if first_failure && !first_verify_pass {
-        if let Some(ev) = events
-            .iter()
-            .rev()
-            .find(|e| e.status == EventStatus::Error)
-        {
+        if let Some(ev) = events.iter().rev().find(|e| e.status == EventStatus::Error) {
             points.push(TurningPoint {
                 kind: "unresolved".into(),
                 detail: "Run ended with unresolved failure (no successful verification after)"

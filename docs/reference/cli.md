@@ -63,8 +63,8 @@ Disables project capture. Does NOT remove `.blackbox/` data — you can re-enabl
 Supervise a command under observation.
 
 ```bash
-blackbox run [--name <label>] [--ci] [--artifact-dir <dir>] [--tag <tag>]...
-             [--no-auto-resume] [--continuity always|attention|off]
+blackbox run [--name <label>] [--ci] [--eval] [--artifact-dir <dir>] [--tag <tag>]...
+             [--observe-only] [--no-auto-resume] [--continuity always|attention|off]
              [--gate-mode off|warn|require_ack] [--insecure-raw]
              [--project <dir>]
              [--store <path>]
@@ -75,7 +75,9 @@ blackbox run [--name <label>] [--ci] [--artifact-dir <dir>] [--tag <tag>]...
 |---|---|
 | `--name <label>` | Human-readable label |
 | `--ci` | Propagate child exit code (exit 1 on failure) |
-| `--artifact-dir <dir>` | Write run.json, postmortem.json, portable.json |
+| `--eval` | Eval harness mode: force observe-only + CI exit codes + tags `eval`/`ci` (no launch mutation) |
+| `--observe-only` | No prompt mutation, continuity inject, or env injection |
+| `--artifact-dir <dir>` | Write run.json, postmortem.json, anomalies.json, summary.txt, portable.json |
 | `--tag <tag>` | Add tags (repeatable) |
 | `--no-auto-resume` | Skip auto-resume injection |
 | `--continuity <mode>` | Override continuity mode |
@@ -90,6 +92,13 @@ blackbox run [--name <label>] [--ci] [--artifact-dir <dir>] [--tag <tag>]...
 
 ```bash
 blackbox run --ci --artifact-dir ./ci-artifacts --tag ci -- npm test
+```
+
+**Scenario: Model/harness benchmark (observe-only, never mutates launch):**
+
+```bash
+blackbox run --eval --artifact-dir ./eval-out -- claude -p "solve the task"
+# writes: run.json postmortem.json anomalies.json summary.txt [portable]
 ```
 
 **Scenario: Debug a failing agent harness:**
@@ -549,10 +558,13 @@ blackbox serve [--bind <addr>] [--token <token>] [--store <path>]
 
 | Path | Description |
 |---|---|
-| `GET /` | Dashboard home |
+| `GET /` | Dashboard home (SSE run list + anomaly badges) |
+| `GET /runs/{id}` | Run detail (anomaly chips, tools, timeline) |
+| `GET /runs/{id}/live` | Live SSE timeline + anomaly refresh |
 | `GET /api/status` | Project status |
 | `GET /api/handoff` | Handoff JSON |
 | `GET /api/runs` | Runs list |
+| `GET /api/runs/{id}/anomalies` | Anomaly markers for a run (`{run_id,count,anomalies}`) |
 
 ## 22. `replay`
 

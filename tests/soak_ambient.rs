@@ -39,7 +39,11 @@ async fn soak_extended_multi_scenario() {
             "-c".into(),
             "sh -c 'sh -c \"echo nested; sleep 0.05\"'".into(),
         ],
-        vec!["sh".into(), "-c".into(), "echo secret=sk-abcdefghijklmnopqrstuvwxyz012345".into()],
+        vec![
+            "sh".into(),
+            "-c".into(),
+            "echo secret=sk-abcdefghijklmnopqrstuvwxyz012345".into(),
+        ],
     ];
 
     for round in 0..12 {
@@ -53,6 +57,7 @@ async fn soak_extended_multi_scenario() {
             no_auto_resume: true,
             auto_resume: false,
             ci: false,
+            eval: false,
             observe_only: true,
             artifact_dir: None,
             resume_injection: None,
@@ -99,6 +104,7 @@ async fn soak_observe_only_repeated_true() {
             no_auto_resume: true,
             auto_resume: false,
             ci: false,
+            eval: false,
             observe_only: true,
             artifact_dir: None,
             resume_injection: None,
@@ -126,9 +132,7 @@ async fn soak_observe_only_repeated_true() {
             "missing coverage for {id}"
         );
         assert!(
-            events
-                .iter()
-                .any(|e| e.kind.starts_with("capture.layer.")),
+            events.iter().any(|e| e.kind.starts_with("capture.layer.")),
             "missing layer health for {id}"
         );
     }

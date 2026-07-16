@@ -45,7 +45,7 @@ Redacted values are replaced with `[REDACTED]`. Event metadata may include a `re
 - Secrets only present in raw PTY blobs under `--insecure-raw` are stored unredacted by design.
 - Overlap window is finite (default 256 bytes); extremely long tokens split with a larger gap may still miss (prefer coalesced storage + scrub).
 - Opt-in danger flags: `--insecure-raw`, `--no-redact` (never enable on shared machines).
-- **Blackbox is not a vault.** Same-UID malware, unlocked-disk theft, and backup exfil of `.blackbox/` still see every redacted-at-best trace. There is no at-rest encryption (yet).
+- **Blackbox is not a vault by default.** Same-UID malware and unlocked-disk theft still see traces unless you enable at-rest protections (below). Live SQLCipher for the SQLite DB is intentionally **not** wired; the practical path is blob encryption + sealed offline backup.
 
 ---
 
@@ -140,6 +140,30 @@ On Unix, blackbox sets **owner-only** modes when creating store artifacts:
 | `blackbox.db`, blob files, `state.json`, `MEMORY.*` | `0600` |
 
 `blackbox doctor` warns (and best-effort hardens) if the store is group/other-readable. This blocks **other local UIDs** with a default umask — not the same user, not root, and not an unlocked stolen disk.
+
+---
+
+## 4c. At-rest encryption and offline vault
+
+Live SQLCipher for the SQLite DB is **not** used (adds key-management complexity and FTS friction). Practical protections:
+
+| Layer | How |
+|---|---|
+| **Blob encryption** | `capture.encrypt_blobs=true` → ChaCha20-Poly1305; key in `.blackbox/store.key` or `BLACKBOX_STORE_KEY` / `BLACKBOX_STORE_KEY_FILE` |
+| **Sticky seal** | When store key exists, `state.json` + `MEMORY.json` are sealed on disk |
+| **Sealed export** | `export --format portable --passphrase …` / `--encrypt` |
+| **Offline vault** | `blackbox backup -o vault.bbx.json --passphrase …` then `restore` (DB + sticky; optional blobs). Prefer passphrase so the archive is portable without shipping `store.key`. |
+
+```bash
+# Enable blob encryption (generates store.key if missing)
+# config.toml: [capture] encrypt_blobs = true
+
+# Offline passphrase vault (recommended for laptop theft / cold storage)
+blackbox backup -o ~/vaults/proj.bbx.json --passphrase-env BLACKBOX_EXPORT_PASSPHRASE
+blackbox restore ~/vaults/proj.bbx.json --passphrase-env BLACKBOX_EXPORT_PASSPHRASE
+```
+
+External key path tip: put the key outside the project (`BLACKBOX_STORE_KEY_FILE=~/.config/blackbox/default.key`) so project-tree theft alone is useless.
 
 ---
 

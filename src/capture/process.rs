@@ -184,10 +184,8 @@ impl CaptureLayer for ProcessCapture {
         } else {
             "sysinfo"
         };
-        ev.metadata.insert(
-            "process_tree_capture".to_string(),
-            serde_json::json!(true),
-        );
+        ev.metadata
+            .insert("process_tree_capture".to_string(), serde_json::json!(true));
         ev.metadata.insert(
             "process_tree_backend".to_string(),
             serde_json::json!(tree_backend),
@@ -468,9 +466,8 @@ fn apply_snapshot_to_event(ev: &mut TraceEvent, snap: &ProcessSnapshot, method: 
             .insert("uid".to_string(), serde_json::json!(uid));
     }
     // Redact secrets in argv (curl -H Authorization, mysql -p…, etc.)
-    let scanner = crate::redaction::scanner::SecretScanner::new(
-        crate::redaction::RedactionConfig::default(),
-    );
+    let scanner =
+        crate::redaction::scanner::SecretScanner::new(crate::redaction::RedactionConfig::default());
     let safe_argv = scanner.redact_command(&snap.argv);
     let meta = CommandMetadata::from_proc_argv(
         safe_argv,
@@ -620,10 +617,8 @@ fn attach_redacted_environ(ev: &mut TraceEvent, pid: u32) {
             (k, serde_json::Value::String(truncated))
         })
         .collect();
-    ev.metadata.insert(
-        "environ".to_string(),
-        serde_json::Value::Object(obj),
-    );
+    ev.metadata
+        .insert("environ".to_string(), serde_json::Value::Object(obj));
     ev.metadata
         .insert("environ_available".to_string(), serde_json::json!(true));
     ev.metadata
@@ -981,10 +976,8 @@ fn apply_sysinfo_to_event(
     let rss_kb = proc.memory() / 1024;
     ev.metadata
         .insert("rss_kb".into(), serde_json::json!(rss_kb));
-    ev.metadata.insert(
-        "cpu_usage_pct".into(),
-        serde_json::json!(proc.cpu_usage()),
-    );
+    ev.metadata
+        .insert("cpu_usage_pct".into(), serde_json::json!(proc.cpu_usage()));
     ev.metadata
         .insert("capture_backend".into(), serde_json::json!("sysinfo"));
 }
@@ -1024,15 +1017,11 @@ mod tests {
             Some(true)
         );
         assert_eq!(
-            ev.metadata
-                .get("capture_environ")
-                .and_then(|v| v.as_bool()),
+            ev.metadata.get("capture_environ").and_then(|v| v.as_bool()),
             Some(true)
         );
         assert_eq!(
-            ev.metadata
-                .get("child_subreaper")
-                .and_then(|v| v.as_bool()),
+            ev.metadata.get("child_subreaper").and_then(|v| v.as_bool()),
             Some(false)
         );
     }
@@ -1122,11 +1111,7 @@ mod tests {
         let ev = rx.try_recv().unwrap();
         let cmd = ev.metadata.get("command");
         assert!(cmd.and_then(|v| v.as_array()).is_some());
-        let argv = ev
-            .metadata
-            .get("argv")
-            .and_then(|v| v.as_array())
-            .unwrap();
+        let argv = ev.metadata.get("argv").and_then(|v| v.as_array()).unwrap();
         assert_eq!(argv[0], "echo");
         assert_eq!(argv[1], "hi");
     }
@@ -1190,11 +1175,7 @@ mod tests {
 
         let mut cap = ProcessCapture::new();
         let run = Run::new(
-            vec![
-                "sh".into(),
-                "-c".into(),
-                "sleep 0.8; true".into(),
-            ],
+            vec!["sh".into(), "-c".into(), "sleep 0.8; true".into()],
             "/tmp".into(),
         );
         let mut rx = cap.start(&run).await.unwrap();

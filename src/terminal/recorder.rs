@@ -190,7 +190,9 @@ mod tests {
         let mut r = RawRecorder::new().with_samples();
         r.start("run-1").await.unwrap();
         for i in 0..20 {
-            r.record_output(format!("chunk-{i}").as_bytes()).await.unwrap();
+            r.record_output(format!("chunk-{i}").as_bytes())
+                .await
+                .unwrap();
         }
         assert_eq!(r.segment_count(), 20);
         assert!(r.samples.len() <= MAX_SAMPLE_SEGMENTS);
@@ -216,10 +218,7 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].kind, "terminal.recording");
         assert_eq!(
-            events[0]
-                .metadata
-                .get("segments")
-                .and_then(|v| v.as_u64()),
+            events[0].metadata.get("segments").and_then(|v| v.as_u64()),
             Some(1)
         );
     }

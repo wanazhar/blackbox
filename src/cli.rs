@@ -469,11 +469,16 @@ pub struct RunArgs {
     #[arg(long)]
     pub ci: bool,
 
+    /// Eval harness mode: forces observe-only + CI exit codes + tags `eval` + `ci`.
+    /// Use for model/harness benchmarks where capture must not mutate the launch.
+    #[arg(long)]
+    pub eval: bool,
+
     /// Hard observe-only mode: no prompt mutation, no continuity, no env injection.
     #[arg(long)]
     pub observe_only: bool,
 
-    /// Directory for CI artifacts (run.json, postmortem.json, optional portable export)
+    /// Directory for CI artifacts (run.json, postmortem.json, anomalies.json, optional portable)
     #[arg(long)]
     pub artifact_dir: Option<PathBuf>,
 
@@ -848,7 +853,12 @@ fn open_store(cli: &Cli) -> anyhow::Result<SqliteStore> {
         .map(|c| c.capture.encrypt_blobs)
         .unwrap_or(false)
         || std::env::var("BLACKBOX_ENCRYPT_BLOBS")
-            .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+            .map(|v| {
+                matches!(
+                    v.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
+                )
+            })
             .unwrap_or(false);
     let crypto = if encrypt {
         let key_path = crate::crypto::resolve_key_path(&discovery.paths.root);
@@ -856,11 +866,7 @@ fn open_store(cli: &Cli) -> anyhow::Result<SqliteStore> {
     } else {
         None
     };
-    SqliteStore::open_with_blobs_crypto(
-        &discovery.paths.db_path,
-        &discovery.paths.blob_dir,
-        crypto,
-    )
+    SqliteStore::open_with_blobs_crypto(&discovery.paths.db_path, &discovery.paths.blob_dir, crypto)
 }
 
 /// Discover project without opening the DB (doctor, enable, etc.).
@@ -987,12 +993,28 @@ async fn cmd_run(cli: &Cli, args: &RunArgs) -> anyhow::Result<()> {
         eprintln!("warning: --no-redact disables all secret redaction");
     }
 
+    // Mutate tags for --eval before execute (eval harness markers).
+    let mut args = args.clone();
+    if args.eval {
+        if !args.tag.iter().any(|t| t == "eval") {
+            args.tag.push("eval".into());
+        }
+        if !args.tag.iter().any(|t| t == "ci") {
+            args.tag.push("ci".into());
+        }
+        args.observe_only = true;
+        args.ci = true;
+        args.no_auto_resume = true;
+        args.auto_resume = false;
+    }
+
     tracing::info!(
         command = ?args.command,
         name = ?args.name,
         project = ?args.project,
         tags = ?args.tag,
         insecure_raw = args.insecure_raw,
+        eval = args.eval,
         "run command"
     );
 
@@ -1000,11 +1022,14 @@ async fn cmd_run(cli: &Cli, args: &RunArgs) -> anyhow::Result<()> {
     let store = open_store(cli)?;
     let store: Arc<dyn TraceStore> = Arc::new(store);
     let cfg_ref = discovery.as_ref().and_then(|d| d.config.as_ref());
-    // Effective observe-only: CLI flag, ambient wrap, or project config.
+    // Effective observe-only: CLI flag, --eval, ambient wrap, or project config.
     // Ambient shell capture is always neutral (no continuity inject).
+    // --eval is the model/harness benchmark mode: never mutate launch.
     let observe_only = args.observe_only
+        || args.eval
         || args.ambient
         || cfg_ref.map(|c| c.capture.observe_only).unwrap_or(false);
+    let ci_mode = args.ci || args.eval;
     let mut policy = CapturePolicy {
         insecure_raw: args.insecure_raw,
         redact: !args.no_redact,
@@ -1026,7 +1051,7 @@ async fn cmd_run(cli: &Cli, args: &RunArgs) -> anyhow::Result<()> {
     let gate_mode = cfg_ref
         .map(|c| c.capture.gate_mode)
         .unwrap_or(GateMode::Off);
-    let auto_claim = cfg_ref.map(|c| c.capture.auto_claim).unwrap_or(false) || args.ci;
+    let auto_claim = cfg_ref.map(|c| c.capture.auto_claim).unwrap_or(false) || ci_mode;
     let claim_ttl = cfg_ref.map(|c| c.capture.claim_ttl_secs).unwrap_or(1800);
     let claim_policy = cfg_ref
         .map(|c| c.capture.claim_policy)
@@ -1114,7 +1139,7 @@ async fn cmd_run(cli: &Cli, args: &RunArgs) -> anyhow::Result<()> {
     // Auto-claim when configured (or --ci)
     if auto_claim {
         if let Some(ref disc) = discovery {
-            let (holder, kind) = claim_holder_id(None, None, args.ci);
+            let (holder, kind) = claim_holder_id(None, None, ci_mode);
             match claim_acquire(&disc.paths.root, &holder, &kind, None, None, claim_ttl) {
                 Ok(Ok(c)) => {
                     args.claim_id_note = Some(c.id.clone());
@@ -1217,7 +1242,7 @@ async fn cmd_run(cli: &Cli, args: &RunArgs) -> anyhow::Result<()> {
     if let Some(ref dir) = args.artifact_dir {
         if let Err(e) = write_ci_artifacts(store.as_ref(), &run, dir).await {
             tracing::warn!(error = %e, "failed to write CI artifacts");
-            if args.ci {
+            if ci_mode {
                 anyhow::bail!("CI artifact write failed: {e}");
             }
         } else if !cli.json {
@@ -1241,6 +1266,7 @@ async fn cmd_run(cli: &Cli, args: &RunArgs) -> anyhow::Result<()> {
             handoff_hint: String,
             artifact_dir: Option<String>,
             ci: bool,
+            eval: bool,
         }
         let result = output::emit_ok(
             "run",
@@ -1259,10 +1285,11 @@ async fn cmd_run(cli: &Cli, args: &RunArgs) -> anyhow::Result<()> {
                     "blackbox status --json".into()
                 },
                 artifact_dir: args.artifact_dir.as_ref().map(|p| p.display().to_string()),
-                ci: args.ci,
+                ci: ci_mode,
+                eval: args.eval,
             },
         );
-        if args.ci {
+        if ci_mode {
             let code = run.exit_code.unwrap_or(1);
             if code != 0 {
                 std::process::exit(code);
@@ -1289,7 +1316,7 @@ async fn cmd_run(cli: &Cli, args: &RunArgs) -> anyhow::Result<()> {
     }
 
     // CI/eval: propagate supervised process exit code.
-    if args.ci {
+    if ci_mode {
         let code = run.exit_code.unwrap_or(1);
         if code != 0 {
             std::process::exit(code);
@@ -1321,11 +1348,27 @@ async fn write_ci_artifacts(
         dir.join("postmortem.json"),
         serde_json::to_string_pretty(&summary)?,
     )?;
+    // Anomalies as a first-class eval artifact
+    std::fs::write(
+        dir.join("anomalies.json"),
+        serde_json::to_string_pretty(&summary.anomalies)?,
+    )?;
+    // Headline + next for quick CI logs
+    std::fs::write(
+        dir.join("summary.txt"),
+        format!(
+            "headline: {}\nnext: {}\nstatus: {:?}\nexit: {:?}\nanomalies: {}\n",
+            summary.headline,
+            summary.next_action,
+            summary.status,
+            summary.exit_code,
+            summary.anomalies.len()
+        ),
+    )?;
 
     // Optional portable export for offline eval scoring
     if let Ok(events) = store.get_events(&run.id).await {
-        if let Ok(archive) =
-            crate::export::export_portable_secure(store, run, &events, true).await
+        if let Ok(archive) = crate::export::export_portable_secure(store, run, &events, true).await
         {
             let _ = std::fs::write(dir.join("portable.json"), archive);
         }
@@ -2177,7 +2220,6 @@ async fn cmd_diff(cli: &Cli, args: &DiffArgs) -> anyhow::Result<()> {
     }
     println!();
 
-
     println!("Comparing runs:");
     println!(
         "  A: {} — {} ({} events)",
@@ -2369,13 +2411,12 @@ async fn cmd_import(cli: &Cli, args: &ImportArgs) -> anyhow::Result<()> {
         let parsed: serde_json::Value = serde_json::from_str(&json)
             .map_err(|e| anyhow::anyhow!("--keep-ids requires valid JSON: {e}"))?;
         // Portable packs nest id under run; accept either shape.
-        let has_id = parsed.get("id").is_some()
-            || parsed
-                .get("run")
-                .and_then(|r| r.get("id"))
-                .is_some();
+        let has_id =
+            parsed.get("id").is_some() || parsed.get("run").and_then(|r| r.get("id")).is_some();
         if !has_id {
-            anyhow::bail!("--keep-ids: imported JSON must contain a top-level \"id\" or run.id field");
+            anyhow::bail!(
+                "--keep-ids: imported JSON must contain a top-level \"id\" or run.id field"
+            );
         }
     }
     let result = import_portable(&store, &json, new_ids).await?;
@@ -2659,9 +2700,7 @@ async fn cmd_fork(cli: &Cli, args: &ForkArgs) -> anyhow::Result<()> {
 
     if args.launch {
         let cmd = resume.ok_or_else(|| {
-            anyhow::anyhow!(
-                "--launch requires a known harness session (native resume); none found"
-            )
+            anyhow::anyhow!("--launch requires a known harness session (native resume); none found")
         })?;
         println!();
         println!(
@@ -2682,6 +2721,7 @@ async fn cmd_fork(cli: &Cli, args: &ForkArgs) -> anyhow::Result<()> {
             no_auto_resume: false,
             auto_resume: false,
             ci: false,
+            eval: false,
             observe_only: false,
             artifact_dir: None,
             resume_injection: None,
@@ -4388,9 +4428,12 @@ async fn cmd_doctor(cli: &Cli, args: &DoctorArgs) -> anyhow::Result<()> {
                     .into(),
             );
         }
+        dd_notes.push("offline vault: blackbox backup -o vault.bbx.json --passphrase …".into());
         dd_notes.push(
-            "offline vault: blackbox backup -o vault.bbx.json --passphrase …".into(),
+            "live SQLCipher is not used; at-rest path is encrypt_blobs + sealed backup (DB offline vault)"
+                .into(),
         );
+        dd_notes.push("eval harness: blackbox run --eval --artifact-dir ./out -- <agent>".into());
     }
     if running_count.unwrap_or(0) > 0 {
         dd_score = dd_score.saturating_sub(10);

@@ -4,6 +4,11 @@ All notable changes to **blackbox** are documented here.
 
 ## [Unreleased]
 
+### Planning
+- **1.3 scope locked in plan** (not released yet): [docs/plan/trust-explain-1.3.md](docs/plan/trust-explain-1.3.md)
+  — fail/setup spines, MCP timeline+anomalies, eval `score.json`, harden profile,
+  adapter drought honesty, ambient notice; release (T8) only after T1–T7 green
+
 ### Docs
 - **Human-track revamp:** `docs/README.md` index by question; `docs/WRITING.md` style guide
   (competent technical audience — no dumbing down)

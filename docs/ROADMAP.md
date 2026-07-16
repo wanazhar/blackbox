@@ -1,8 +1,9 @@
 # Roadmap and quality bar
 
-**Answers:** What “good” means for blackbox, what each major version promised, and what remains intentionally out of scope.
+**Answers:** What “good” means for blackbox, what each major version promised, what **1.3** will add, and what remains out of scope.
 
-This is **product direction**, not a how-to. Operators: [guide/README.md](guide/README.md). Design archives: [plan/](plan/) (historical).
+This is **product direction**, not a how-to. Operators: [guide/README.md](guide/README.md).  
+**1.3 plan (active):** [plan/trust-explain-1.3.md](plan/trust-explain-1.3.md).
 
 ---
 
@@ -27,13 +28,14 @@ If a change weakens a bar, it needs an explicit docs + test story.
 
 ---
 
-## Versions (shipped story)
+## Versions
 
-| Version | Story | Operator takeaway |
+| Version | Story | Status |
 |---|---|---|
-| **1.0** | Capability daily-driver | Capture, inspect, export, MCP, resume basics |
-| **1.1** | Adoption (“leave it on”) | Ambient contract, redaction gates, adapters, CI/eval, cost visibility |
-| **1.2** | Continuity / project memory | MEMORY pack, attention, claims, inject on explicit run |
+| **1.0** | Capability daily-driver | Shipped |
+| **1.1** | Adoption (“leave it on”) | Shipped |
+| **1.2** | Continuity / project memory | Shipped **1.2.0** |
+| **1.3** | **Trust, explain, agent-native depth** | **In progress — do not tag yet** |
 
 ### 1.1 adoption bar (permanent)
 
@@ -41,11 +43,11 @@ If a change weakens a bar, it needs an explicit docs + test story.
 |---|---|---|
 | A1 | Ambient shell contract | `tests/ambient_contract.rs` · [ambient-contract.md](ambient-contract.md) |
 | A2 | Redaction regression | `tests/redaction_gate.rs` (+ adversarial) |
-| A3 | Resume-pack quality | postmortem/handoff tests · memory quality |
+| A3 | Resume-pack quality | postmortem/handoff · memory quality |
 | A4 | Cost visibility | `doctor` / `stats` · [guide/overhead.md](guide/overhead.md) |
-| A5 | Docs match reality | link checker · first-run golden · this tree |
+| A5 | Docs match reality | link checker · docs goldens |
 | A6 | Capture overhead smoke | `tests/overhead_smoke.rs` |
-| A7 | Broader adapters | aider/gemini/cursor/opencode/grok detection |
+| A7 | Broader adapters | multi-harness detection |
 
 ### 1.2 memory bar (permanent)
 
@@ -59,50 +61,64 @@ If a change weakens a bar, it needs an explicit docs + test story.
 | M6 | Silent failure discipline | success does not clear unresolved failure |
 | M7 | Trust on MEMORY paths | redaction + doctor fields |
 
-Historical design prose: [plan/adoption-1.1.md](plan/adoption-1.1.md), [plan/agent-memory-bus-1.2.md](plan/agent-memory-bus-1.2.md).
+### 1.3 bar (must pass before tag)
 
----
+Full plan: [plan/trust-explain-1.3.md](plan/trust-explain-1.3.md).
 
-## Post-1.2 themes (already partly landed)
-
-Work continues in-tree beyond the original 1.2 checklist, including:
-
-- Anomaly markers + failure-story TUI / dashboard badges
-- Eval harness (`--eval`) and richer CI artifacts
-- Sealed export packs, blob encryption, offline `backup`/`restore`
-- Docs revamp for human comprehension (this directory)
-- Path-scoped claims (operator-usable; was backlog)
-
-See [CHANGELOG.md](https://github.com/wanazhar/blackbox/blob/master/CHANGELOG.md) for what actually shipped.
-
----
-
-## Backlog (direction, not commitments)
-
-| Priority | Theme | Notes |
+| Id | Criterion | Intent |
 |---|---|---|
-| Med | Docs depth / fixtures | Golden CLI outputs, more recipe coverage |
-| Low | Auto open_items from TODO/FIXME | Explicit memory remains source of truth |
-| Low | Sandbox conflict UX | Best-effort git apply exists |
-| Low | Windows interactive TUI parity | Kill + PowerShell install shipped; PTY edges remain |
-| Low | Per-harness session format notes | Pollers exist; vendor layouts stabilize slowly |
-| Low | Live SQLCipher | **Not** planned as default; vault path is sealed backup + blob encrypt |
+| **T1** | One-shot **fail** path | Postmortem + anomalies + next in one command |
+| **T2** | One-shot **setup** path | Enable / shell / sample / doctor in one command |
+| **T3** | MCP **timeline + anomalies** | Agents debug without shell-scraping |
+| **T4** | Eval **score.json** (`blackbox.score/v1`) + CI action shape | Institutional eval/CI |
+| **T5** | **Harden** project profile | encrypt_blobs + external key path + safe defaults |
+| **T6** | **Adapter drought** honesty | Known harness + 0 tool.call → warning |
+| **T7** | Optional **ambient notice** | One-line “recorded …” without breaking A1 |
+| **T8** | **Release gate** | tests + CHANGELOG + version — *last* |
+
+#### Already counted toward 1.3 (landed on master, unreleased)
+
+Trust/vault, serve Bearer-only, postmortem/anomalies/TUI jump/dashboard badges, `--eval` artifacts, capture quality + daily-driver score, path claims, human docs revamp + MkDocs/Pages pipeline.
+
+#### 1.3 implementation phases
+
+1. T1 fail + T2 setup  
+2. T3 MCP tools  
+3. T4 score.json + Action  
+4. T5 harden + T6 drought + T7 notice  
+5. Docs + goldens  
+6. **T8 release only when green**
 
 ---
 
-## Non-goals
+## After 1.3 (direction)
 
-- Multi-tenant hosted SaaS / remote multi-user ACLs
-- Replacing the harness’s own UI
-- Perfect Windows parity as a release blocker
-- Guaranteeing every interactive TUI agent emits machine-readable tool events
-- Inventing `estimated_cost_usd` when estimation is off or model unknown
-- Deterministic full LLM re-execution as “replay”
+| Theme | Notes |
+|---|---|
+| **1.4 Agent-native** | Marketplace plugins, require-memory-read experiments, richer MCP (diff/search UX) |
+| **1.5 Eval suite** | Multi-run report CLI, regression tables, public scorer recipes |
+| Distribution | Homebrew/Nix formulas |
+| Scale | SSE push, huge-run paging polish |
+| Windows | TUI/PTY parity (non-blocking) |
+
+---
+
+## Non-goals (standing)
+
+- Multi-tenant hosted SaaS / remote multi-user ACLs  
+- Replacing the harness’s own session UI  
+- Perfect Windows parity as a release blocker  
+- Guaranteeing every interactive TUI agent emits machine-readable tool events  
+- Inventing `estimated_cost_usd` when estimation is off or model unknown  
+- Deterministic full LLM re-execution as “replay”  
+- Live SQLCipher as default store encryption  
 
 ---
 
 ## Related
 
+- [plan/trust-explain-1.3.md](plan/trust-explain-1.3.md) — full 1.3 design  
 - [CHANGELOG.md](https://github.com/wanazhar/blackbox/blob/master/CHANGELOG.md)  
 - [guide/concepts.md](guide/concepts.md)  
 - [WRITING.md](WRITING.md)  
+- Historical: [plan/adoption-1.1.md](plan/adoption-1.1.md), [plan/agent-memory-bus-1.2.md](plan/agent-memory-bus-1.2.md)  

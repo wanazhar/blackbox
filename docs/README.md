@@ -86,6 +86,7 @@ CI: `.github/workflows/docs.yml` builds on every docs PR and deploys to **GitHub
 | Document | Contents |
 |---|---|
 | [ROADMAP.md](ROADMAP.md) | Quality bar and version story |
+| [plan/trust-explain-1.3.md](plan/trust-explain-1.3.md) | **Active 1.3 plan** (trust, explain, MCP, eval) — not released yet |
 | [CHANGELOG.md](https://github.com/wanazhar/blackbox/blob/master/CHANGELOG.md) | Released changes |
 | [plan/](plan/) | **Historical** design docs — do not treat as current how-to |
 | [history/](history/) | Archived plans |

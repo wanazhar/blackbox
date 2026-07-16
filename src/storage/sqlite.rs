@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use rusqlite::{params, Connection};
-use sha2::{Digest, Sha256};
 use tokio::task;
 
 use crate::core::blob::BlobReference;
@@ -55,6 +54,8 @@ pub struct SqliteStore {
     conn: Mutex<Connection>,
     blob_dir: PathBuf,
     db_path: PathBuf,
+    /// Optional ChaCha20-Poly1305 at-rest encryption for blob files.
+    blob_crypto: Option<crate::crypto::BlobCrypto>,
 }
 
 impl SqliteStore {
@@ -70,6 +71,15 @@ impl SqliteStore {
     pub fn open_with_blobs(
         db_path: impl AsRef<Path>,
         blob_dir: impl AsRef<Path>,
+    ) -> anyhow::Result<Self> {
+        Self::open_with_blobs_crypto(db_path, blob_dir, None)
+    }
+
+    /// Open with optional blob encryption.
+    pub fn open_with_blobs_crypto(
+        db_path: impl AsRef<Path>,
+        blob_dir: impl AsRef<Path>,
+        blob_crypto: Option<crate::crypto::BlobCrypto>,
     ) -> anyhow::Result<Self> {
         let db_path = db_path.as_ref().to_path_buf();
         let blob_dir = blob_dir.as_ref().to_path_buf();
@@ -117,6 +127,7 @@ impl SqliteStore {
             conn: Mutex::new(conn),
             blob_dir,
             db_path,
+            blob_crypto,
         };
         store.migrate()?;
         // After migrations, checkpoint the WAL so growth from schema changes is reclaimed.
@@ -135,6 +146,17 @@ impl SqliteStore {
     /// Path to the blob directory.
     pub fn blob_dir(&self) -> &Path {
         &self.blob_dir
+    }
+
+    /// Whether at-rest blob encryption is active for new writes.
+    pub fn blob_encryption_enabled(&self) -> bool {
+        self.blob_crypto.is_some()
+    }
+
+    /// Attach / replace blob crypto after open (e.g. when config enables it).
+    pub fn with_blob_crypto(mut self, crypto: Option<crate::crypto::BlobCrypto>) -> Self {
+        self.blob_crypto = crypto;
+        self
     }
 
     /// Mark abandoned `Running` runs as `Failed`.
@@ -180,6 +202,7 @@ impl SqliteStore {
             conn: Mutex::new(conn),
             blob_dir,
             db_path: PathBuf::from(":memory:"),
+            blob_crypto: None,
         };
         store.migrate()?;
         Ok(store)
@@ -1131,28 +1154,29 @@ impl TraceStore for SqliteStore {
     }
 
     async fn store_blob(&self, data: &[u8]) -> anyhow::Result<BlobReference> {
-        let mut hasher = Sha256::new();
-        hasher.update(data);
-        let key = hex::encode(hasher.finalize());
+        // Content key is always over plaintext so addresses stay stable.
+        let key = crate::crypto::content_key(data);
         let size = data.len() as u64;
 
-        // Write blob to disk (content-addressed: key IS the filename)
-        // Write blob to disk using atomic write (write-to-temp + rename)
-        // to prevent TOCTOU race conditions with concurrent writers
+        // Optionally encrypt on disk (BBEN header); key still hashes plaintext.
+        let disk_bytes = if let Some(ref crypto) = self.blob_crypto {
+            crypto.seal(data)?
+        } else {
+            data.to_vec()
+        };
+
         let blob_path = self.blob_dir.join(&key);
         if !blob_path.exists() {
             let blob_dir = self.blob_dir.clone();
             let key_for_write = key.clone();
-            let data_for_write = data.to_vec();
+            let data_for_write = disk_bytes;
             task::spawn_blocking(move || -> anyhow::Result<()> {
                 std::fs::create_dir_all(&blob_dir).context("failed to create blob directory")?;
                 crate::privacy::restrict_dir(&blob_dir);
                 let target = blob_dir.join(&key_for_write);
-                // Use atomic write: write to temp file, then rename
                 let temp = target.with_extension("tmp");
                 std::fs::write(&temp, &data_for_write).context("failed to write blob temp file")?;
                 crate::privacy::restrict_file(&temp);
-                // rename is atomic on the same filesystem
                 std::fs::rename(&temp, &target).context("failed to rename blob temp file")?;
                 crate::privacy::restrict_file(&target);
                 Ok(())
@@ -1160,7 +1184,6 @@ impl TraceStore for SqliteStore {
             .await??;
         }
 
-        // Insert metadata into SQLite (no data column — data lives on disk)
         {
             let conn = self.lock();
             conn.execute(
@@ -1177,16 +1200,24 @@ impl TraceStore for SqliteStore {
     async fn load_blob(&self, reference: &BlobReference) -> anyhow::Result<Vec<u8>> {
         let blob_dir = self.blob_dir.clone();
         let key = reference.key.clone();
+        let crypto = self.blob_crypto.clone();
         task::spawn_blocking(move || -> anyhow::Result<Vec<u8>> {
             let path = blob_dir.join(&key);
             let data = std::fs::read(&path)
                 .with_context(|| format!("blob not found: {}", path.display()))?;
-            // Verify integrity: SHA-256 of the data must match the
-            // content-addressed key. A mismatch indicates corruption or
-            // tampering on disk.
-            let mut hasher = Sha256::new();
-            hasher.update(&data);
-            let computed = hex::encode(hasher.finalize());
+            // Decrypt if sealed; plaintext legacy blobs pass through.
+            let plain = if let Some(ref c) = crypto {
+                c.open(&data)?
+            } else if crate::crypto::is_encrypted_blob(&data) {
+                anyhow::bail!(
+                    "blob {} is encrypted but store has no key — set encrypt_blobs / BLACKBOX_STORE_KEY",
+                    key
+                );
+            } else {
+                data
+            };
+            // Integrity: SHA-256 of plaintext must match content key.
+            let computed = crate::crypto::content_key(&plain);
             if computed != key {
                 anyhow::bail!(
                     "blob integrity mismatch: expected key {} but computed SHA-256 {}",
@@ -1194,7 +1225,7 @@ impl TraceStore for SqliteStore {
                     computed
                 );
             }
-            Ok(data)
+            Ok(plain)
         })
         .await?
     }
@@ -1607,6 +1638,25 @@ mod tests {
         // Dedup: second store returns same key
         let reference2 = store.store_blob(data).await.unwrap();
         assert_eq!(reference.key, reference2.key);
+    }
+
+    #[tokio::test]
+    async fn encrypted_blob_roundtrip_and_disk_format() {
+        let crypto = crate::crypto::BlobCrypto::from_key_bytes([9u8; 32]);
+        let store = SqliteStore::open_memory()
+            .unwrap()
+            .with_blob_crypto(Some(crypto));
+        assert!(store.blob_encryption_enabled());
+        let data = b"sk-abcdefghijklmnopqrstuvwxyz012345 secret";
+        let reference = store.store_blob(data).await.unwrap();
+        // On-disk file must not be raw plaintext
+        let disk = std::fs::read(store.blob_dir().join(&reference.key)).unwrap();
+        assert!(crate::crypto::is_encrypted_blob(&disk));
+        assert!(!disk.windows(data.len()).any(|w| w == data));
+        let loaded = store.load_blob(&reference).await.unwrap();
+        assert_eq!(loaded, data);
+        // Content key is over plaintext
+        assert_eq!(reference.key, crate::crypto::content_key(data));
     }
 
     #[tokio::test]

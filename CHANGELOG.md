@@ -13,6 +13,8 @@ All notable changes to **blackbox** are documented here.
 - **RAM**: counters-only PTY recorder, capped end-of-run loads, incremental SSE, SQLite cache cap
 - **Privacy**: owner-only store modes; env allowlist default; env value scan; git/process argv redaction
 - **Export/sync/serve**: H-08 blob re-scan on portable; serve Bearer-only (no `?token=`); scrub env/diff blobs + auto-GC
+- **Native logs**: `native_log_scope=project` default (no home-dir ingest)
+- **Optional blob encryption**: `encrypt_blobs=true` + `.blackbox/store.key` (ChaCha20-Poly1305)
 
 ## [1.2.0] — 2026-07-12
 

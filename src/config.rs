@@ -139,6 +139,8 @@ pub struct CapturePolicy {
     pub process_subreaper: bool,
     pub env_capture: EnvCaptureMode,
     pub store_git_diffs: bool,
+    pub native_log_scope: NativeLogScope,
+    pub encrypt_blobs: bool,
 }
 
 impl Default for CapturePolicy {
@@ -152,6 +154,8 @@ impl Default for CapturePolicy {
             process_subreaper: true,
             env_capture: EnvCaptureMode::Allowlist,
             store_git_diffs: true,
+            native_log_scope: NativeLogScope::Project,
+            encrypt_blobs: false,
         }
     }
 }
@@ -164,6 +168,8 @@ impl CapturePolicy {
         self.process_subreaper = cfg.process_subreaper;
         self.env_capture = cfg.env_capture;
         self.store_git_diffs = cfg.store_git_diffs;
+        self.native_log_scope = cfg.native_log_scope;
+        self.encrypt_blobs = cfg.encrypt_blobs;
         self
     }
 }
@@ -370,6 +376,53 @@ pub struct CaptureConfig {
     /// Default true for debug fidelity; set false for tighter privacy/disk.
     #[serde(default = "default_true")]
     pub store_git_diffs: bool,
+    /// Native harness log scan scope: `project` (default), `home`, or `off`.
+    #[serde(default)]
+    pub native_log_scope: NativeLogScope,
+    /// Encrypt content-addressed blobs at rest (ChaCha20-Poly1305).
+    /// Key: `.blackbox/store.key` or `BLACKBOX_STORE_KEY` (64 hex).
+    #[serde(default)]
+    pub encrypt_blobs: bool,
+}
+
+/// Where to scan for harness native logs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeLogScope {
+    /// Only under the project tree (default — no home-dir copy into store).
+    #[default]
+    Project,
+    /// Project + `~/.claude` / `~/.codex` / … (broader session recovery).
+    Home,
+    /// Disable native log polling.
+    Off,
+}
+
+impl NativeLogScope {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Project => "project",
+            Self::Home => "home",
+            Self::Off => "off",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "project" | "local" | "cwd" => Some(Self::Project),
+            "home" | "all" | "full" => Some(Self::Home),
+            "off" | "none" | "disabled" | "false" | "0" => Some(Self::Off),
+            _ => None,
+        }
+    }
+
+    pub fn to_adapter_scope(self) -> crate::adapters::native_logs::NativeLogScope {
+        match self {
+            Self::Project => crate::adapters::native_logs::NativeLogScope::Project,
+            Self::Home => crate::adapters::native_logs::NativeLogScope::Home,
+            Self::Off => crate::adapters::native_logs::NativeLogScope::Off,
+        }
+    }
 }
 
 /// How much of the process environment is stored at run start.
@@ -510,6 +563,8 @@ impl Default for CaptureConfig {
             process_subreaper: true,
             env_capture: EnvCaptureMode::Allowlist,
             store_git_diffs: true,
+            native_log_scope: NativeLogScope::Project,
+            encrypt_blobs: false,
         }
     }
 }

@@ -196,6 +196,31 @@ curl -H "Authorization: Bearer my-secret-token" http://host:7788/api/status
 Sync/serve portable export uses the same H-08 blob re-scan as CLI `export`.
 `blackbox scrub` rewrites env/diff/transcript blobs and auto-GCs orphan keys.
 
+---
+
+## 7. At-rest blob encryption (optional)
+
+Opt-in ChaCha20-Poly1305 for content-addressed blobs (env dumps, PTY text, diffs):
+
+```toml
+# .blackbox/config.toml
+[capture]
+encrypt_blobs = true
+```
+
+Or: `BLACKBOX_ENCRYPT_BLOBS=1`. Key is created at `.blackbox/store.key` (mode `0600`)
+or taken from `BLACKBOX_STORE_KEY` (64 hex chars).
+
+- Content addressing still uses SHA-256 of **plaintext**
+- Legacy unencrypted blobs continue to load
+- **Losing the key makes encrypted blobs unreadable** — back up `store.key`
+- Protects other local UIDs / casual disk access; same-UID malware can still
+  read the key file next to the store
+
+Native log scan default is **project-only** (`native_log_scope = "project"`)
+so home-dir harness sessions (`~/.claude`, …) are not copied into the store
+unless you set `native_log_scope = "home"`.
+
 ### Network binding
 
 ```bash

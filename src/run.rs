@@ -9,7 +9,7 @@ use tokio::sync::mpsc;
 
 use crate::adapters::detect::detect_adapter;
 use crate::adapters::harness::HarnessAdapter;
-use crate::adapters::native_logs::{discover_log_roots, poll_native_logs};
+use crate::adapters::native_logs::{discover_log_roots_scoped, poll_native_logs};
 use crate::adapters::{LaunchContext, RunContext};
 use crate::capture::filesystem::FilesystemCapture;
 use crate::capture::git::GitCapture;
@@ -275,25 +275,41 @@ impl RunSupervisor {
         });
 
         // ── Native harness log side-channel ───────────────────────
+        // Default scope=project: do not copy ~/.claude etc. into the store.
         let (log_stop_tx, log_stop_rx) = tokio::sync::watch::channel(false);
+        let native_scope = self.policy.native_log_scope.to_adapter_scope();
         let native_roots = {
-            let ctx = RunContext {
-                run_id: run.id.clone(),
-                project_dir: run.cwd.clone(),
-                command: args.command.clone(),
-            };
-            let mut roots: Vec<std::path::PathBuf> = adapter
-                .locate_native_logs(&ctx)
-                .into_iter()
-                .map(std::path::PathBuf::from)
-                .collect();
-            // Also use discoverer (may add home dirs adapter missed)
-            for r in discover_log_roots(adapter_id, &run.cwd) {
-                if !roots.contains(&r) {
-                    roots.push(r);
+            if matches!(
+                native_scope,
+                crate::adapters::native_logs::NativeLogScope::Off
+            ) {
+                Vec::new()
+            } else {
+                let ctx = RunContext {
+                    run_id: run.id.clone(),
+                    project_dir: run.cwd.clone(),
+                    command: args.command.clone(),
+                };
+                let mut roots: Vec<std::path::PathBuf> = adapter
+                    .locate_native_logs(&ctx)
+                    .into_iter()
+                    .map(std::path::PathBuf::from)
+                    .collect();
+                // Adapter paths may include home; filter unless scope=home.
+                if !matches!(
+                    native_scope,
+                    crate::adapters::native_logs::NativeLogScope::Home
+                ) {
+                    let project = std::path::PathBuf::from(&run.cwd);
+                    roots.retain(|p| p.starts_with(&project));
                 }
+                for r in discover_log_roots_scoped(adapter_id, &run.cwd, native_scope) {
+                    if !roots.contains(&r) {
+                        roots.push(r);
+                    }
+                }
+                roots
             }
-            roots
         };
         let native_handle = {
             let adapter_logs = adapter.clone();

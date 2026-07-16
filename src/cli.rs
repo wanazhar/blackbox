@@ -793,7 +793,25 @@ fn open_store(cli: &Cli) -> anyhow::Result<SqliteStore> {
         project = %discovery.project_root.display(),
         "opening store"
     );
-    SqliteStore::open_with_blobs(&discovery.paths.db_path, &discovery.paths.blob_dir)
+    let encrypt = discovery
+        .config
+        .as_ref()
+        .map(|c| c.capture.encrypt_blobs)
+        .unwrap_or(false)
+        || std::env::var("BLACKBOX_ENCRYPT_BLOBS")
+            .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(false);
+    let crypto = if encrypt {
+        let key_path = crate::crypto::default_key_path(&discovery.paths.root);
+        Some(crate::crypto::BlobCrypto::load_or_create(&key_path)?)
+    } else {
+        None
+    };
+    SqliteStore::open_with_blobs_crypto(
+        &discovery.paths.db_path,
+        &discovery.paths.blob_dir,
+        crypto,
+    )
 }
 
 /// Discover project without opening the DB (doctor, enable, etc.).
@@ -4180,6 +4198,20 @@ async fn cmd_doctor(cli: &Cli, args: &DoctorArgs) -> anyhow::Result<()> {
     }
     if let Some(ref mode) = discovery.config.as_ref().map(|c| c.capture.product_mode()) {
         dd_notes.push(format!("product_mode={}", mode.as_str()));
+    }
+    if let Some(cfg) = discovery.config.as_ref() {
+        dd_notes.push(format!(
+            "native_log_scope={}",
+            cfg.capture.native_log_scope.as_str()
+        ));
+        if cfg.capture.encrypt_blobs {
+            dd_notes.push("blob encryption: on (store.key / BLACKBOX_STORE_KEY)".into());
+        } else {
+            dd_notes.push(
+                "blob encryption: off — set capture.encrypt_blobs=true for at-rest protection"
+                    .into(),
+            );
+        }
     }
     if running_count.unwrap_or(0) > 0 {
         dd_score = dd_score.saturating_sub(10);

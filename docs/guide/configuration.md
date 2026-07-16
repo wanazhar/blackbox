@@ -65,6 +65,10 @@ continuity = "always"
 # env_capture = "allowlist"
 # Store full git diffs as blobs (default true). false = preview+stats only.
 # store_git_diffs = true
+# Native log roots: "project" (default), "home" (also ~/.claude etc.), "off"
+# native_log_scope = "project"
+# Encrypt blobs at rest (ChaCha20-Poly1305); key in .blackbox/store.key
+# encrypt_blobs = false
 
 # Auto-resume (legacy 1.0 compat): true | false
 # When continuity ≠ off, this is overridden by continuity mode

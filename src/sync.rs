@@ -100,6 +100,7 @@ pub async fn sync_push(
 
         std::fs::write(&path, json.as_bytes())
             .with_context(|| format!("write {}", path.display()))?;
+        crate::privacy::restrict_file(&path);
         manifest.runs.insert(
             run.id.clone(),
             SyncRunEntry {
@@ -581,6 +582,7 @@ fn save_manifest(dir: &Path, man: &SyncManifest) -> anyhow::Result<()> {
     out.version = MANIFEST_VERSION;
     let text = serde_json::to_string_pretty(&out)?;
     std::fs::write(&path, text).with_context(|| format!("write {}", path.display()))?;
+    crate::privacy::restrict_file(&path);
     Ok(())
 }
 

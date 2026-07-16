@@ -5,6 +5,7 @@ pub mod cli;
 pub mod config;
 pub mod context;
 pub mod core;
+pub mod crypto;
 pub mod export;
 pub mod maybe_run;
 pub mod mcp;

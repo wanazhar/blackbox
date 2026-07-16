@@ -17,8 +17,55 @@ use crate::adapters::harness::HarnessAdapter;
 use crate::pipeline::EventWriter;
 use crate::redaction::scanner::SecretScanner;
 
+/// Where native harness logs may be read from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NativeLogScope {
+    /// Only under the project directory (default — privacy-safe).
+    #[default]
+    Project,
+    /// Project + home-directory harness dirs (broader session recovery).
+    Home,
+    /// Do not poll native logs.
+    Off,
+}
+
+impl NativeLogScope {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Project => "project",
+            Self::Home => "home",
+            Self::Off => "off",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "project" | "local" | "cwd" => Some(Self::Project),
+            "home" | "all" | "full" => Some(Self::Home),
+            "off" | "none" | "disabled" | "false" | "0" => Some(Self::Off),
+            _ => None,
+        }
+    }
+}
+
 /// Discover likely native log roots for a harness + project.
+///
+/// `scope` controls whether home-directory trees are included. Default
+/// project-only avoids copying secrets from `~/.claude` etc. into `.blackbox/`.
 pub fn discover_log_roots(adapter_id: &str, project_dir: &str) -> Vec<PathBuf> {
+    discover_log_roots_scoped(adapter_id, project_dir, NativeLogScope::Home)
+}
+
+/// Scoped discovery (prefer this for capture).
+pub fn discover_log_roots_scoped(
+    adapter_id: &str,
+    project_dir: &str,
+    scope: NativeLogScope,
+) -> Vec<PathBuf> {
+    if matches!(scope, NativeLogScope::Off) {
+        return Vec::new();
+    }
+    let include_home = matches!(scope, NativeLogScope::Home);
     let mut roots = Vec::new();
     let project = PathBuf::from(project_dir);
 
@@ -28,69 +75,81 @@ pub fn discover_log_roots(adapter_id: &str, project_dir: &str) -> Vec<PathBuf> {
             roots.push(project.join(".claude").join("projects"));
             roots.push(project.join(".claude").join("session-env"));
             roots.push(project.join(".claude"));
-            if let Some(home) = dirs_home() {
-                roots.push(home.join(".claude").join("projects"));
-                roots.push(home.join(".claude").join("logs"));
-                roots.push(home.join(".claude").join("session-env"));
-                roots.push(home.join(".claude"));
+            if include_home {
+                if let Some(home) = dirs_home() {
+                    roots.push(home.join(".claude").join("projects"));
+                    roots.push(home.join(".claude").join("logs"));
+                    roots.push(home.join(".claude").join("session-env"));
+                    roots.push(home.join(".claude"));
+                }
             }
         }
         "codex" => {
             roots.push(project.join(".codex").join("logs"));
             roots.push(project.join(".codex").join("sessions"));
             roots.push(project.join(".codex"));
-            if let Some(home) = dirs_home() {
-                roots.push(home.join(".codex").join("sessions"));
-                roots.push(home.join(".codex").join("logs"));
-                // Historical layout
-                roots.push(home.join(".codex").join("sessions").join("rollouts"));
-                roots.push(home.join(".codex"));
+            if include_home {
+                if let Some(home) = dirs_home() {
+                    roots.push(home.join(".codex").join("sessions"));
+                    roots.push(home.join(".codex").join("logs"));
+                    roots.push(home.join(".codex").join("sessions").join("rollouts"));
+                    roots.push(home.join(".codex"));
+                }
             }
         }
         "aider" => {
-            // Aider writes chat history at project root and under .aider/
             roots.push(project.clone());
             roots.push(project.join(".aider"));
-            if let Some(home) = dirs_home() {
-                roots.push(home.join(".aider"));
+            if include_home {
+                if let Some(home) = dirs_home() {
+                    roots.push(home.join(".aider"));
+                }
             }
         }
         "gemini" => {
             roots.push(project.join(".gemini"));
             roots.push(project.join(".gemini").join("tmp"));
-            if let Some(home) = dirs_home() {
-                roots.push(home.join(".gemini"));
-                roots.push(home.join(".config").join("gemini"));
+            if include_home {
+                if let Some(home) = dirs_home() {
+                    roots.push(home.join(".gemini"));
+                    roots.push(home.join(".config").join("gemini"));
+                }
             }
         }
         "cursor" => {
             roots.push(project.join(".cursor"));
             roots.push(project.join(".cursor").join("projects"));
-            if let Some(home) = dirs_home() {
-                roots.push(home.join(".cursor"));
-                roots.push(home.join(".cursor").join("projects"));
-                roots.push(home.join(".config").join("cursor"));
-                roots.push(
-                    home.join("Library")
-                        .join("Application Support")
-                        .join("Cursor"),
-                );
+            if include_home {
+                if let Some(home) = dirs_home() {
+                    roots.push(home.join(".cursor"));
+                    roots.push(home.join(".cursor").join("projects"));
+                    roots.push(home.join(".config").join("cursor"));
+                    roots.push(
+                        home.join("Library")
+                            .join("Application Support")
+                            .join("Cursor"),
+                    );
+                }
             }
         }
         "opencode" => {
             roots.push(project.join(".opencode"));
             roots.push(project.join(".opencode").join("logs"));
-            if let Some(home) = dirs_home() {
-                roots.push(home.join(".opencode"));
-                roots.push(home.join(".local").join("share").join("opencode"));
+            if include_home {
+                if let Some(home) = dirs_home() {
+                    roots.push(home.join(".opencode"));
+                    roots.push(home.join(".local").join("share").join("opencode"));
+                }
             }
         }
         "grok" => {
             roots.push(project.join(".grok"));
             roots.push(project.join(".grok").join("sessions"));
-            if let Some(home) = dirs_home() {
-                roots.push(home.join(".grok"));
-                roots.push(home.join(".config").join("grok"));
+            if include_home {
+                if let Some(home) = dirs_home() {
+                    roots.push(home.join(".grok"));
+                    roots.push(home.join(".config").join("grok"));
+                }
             }
         }
         _ => {
@@ -429,6 +488,25 @@ mod tests {
         for r in &roots {
             assert!(r.exists());
         }
+    }
+
+    #[test]
+    fn project_scope_excludes_home() {
+        let project = "/tmp";
+        let proj = discover_log_roots_scoped("claude", project, NativeLogScope::Project);
+        let home = dirs_home();
+        for r in &proj {
+            if let Some(ref h) = home {
+                assert!(
+                    !r.starts_with(h),
+                    "project scope must not include home path {r:?}"
+                );
+            }
+        }
+        assert!(matches!(
+            discover_log_roots_scoped("claude", project, NativeLogScope::Off).as_slice(),
+            []
+        ));
     }
 
     #[test]

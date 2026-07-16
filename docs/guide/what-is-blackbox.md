@@ -111,7 +111,10 @@ Normative ambient rules: [ambient-contract.md](../ambient-contract.md). Operator
 
 ## Related
 
+- Deeper model: [concepts.md](concepts.md)
+- Terms: [glossary.md](glossary.md)
 - Install: [install.md](install.md)
 - First project: [getting-started.md](getting-started.md)
+- Workflows: [recipes.md](recipes.md)
 - Architecture: [../internals/architecture.md](../internals/architecture.md)
 - Quality bar / versions: [../ROADMAP.md](../ROADMAP.md)

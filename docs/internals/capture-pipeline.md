@@ -1,9 +1,10 @@
 # Capture Pipeline
 
-> **Contributor / deep-dive.** Operator overview: [../guide/what-is-blackbox.md](../guide/what-is-blackbox.md).
+> **Contributor / deep-dive.** Operator overview: [../guide/what-is-blackbox.md](../guide/what-is-blackbox.md) · [../guide/concepts.md](../guide/concepts.md).
 
-> How blackbox observes harness activity through independent capture layers,
-> merges their event streams, and persists a consistent ordered trace.
+**Answers:** How PTY/git/fs/process layers start, how streams merge, where redaction and adapters run, and how `EventWriter` assigns sequence numbers.
+
+How blackbox observes harness activity through independent capture layers, merges their event streams, and persists a consistent ordered trace.
 
 ## 1. Overview
 

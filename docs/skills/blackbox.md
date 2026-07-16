@@ -110,5 +110,7 @@ Human write-up: [../guide/debug-a-failure.md](../guide/debug-a-failure.md).
 ## See also
 
 - [../guide/what-is-blackbox.md](../guide/what-is-blackbox.md) — mental model  
+- [../guide/concepts.md](../guide/concepts.md) — planes  
+- [../guide/recipes.md](../guide/recipes.md) — workflows  
 - [../guide/leave-it-on.md](../guide/leave-it-on.md) — ambient capture  
 - [../guide/security.md](../guide/security.md) — redaction and residual risk  

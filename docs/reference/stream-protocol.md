@@ -1,8 +1,14 @@
 # Stream protocol (NDJSON)
 
-**Normative harness wire format** (one JSON object per line on stdout/stderr). For re-exporting recorded events as JSONL, see [../guide/export-and-sync.md](../guide/export-and-sync.md). For live browser streams, see dashboard SSE in [../guide/everyday-use.md](../guide/everyday-use.md).
+**Answers:** How a custom harness can emit structured tool/session/usage events on stdout so blackbox adapters produce `TraceEvent`s instead of opaque terminal-only history.
 
-Blackbox supports a **newline-delimited JSON (NDJSON) stream protocol** for generic harnesses and custom adapters. Any process that emits structured JSON events to stdout/stderr can be parsed by blackbox's adapters, producing structured `TraceEvent` objects instead of raw terminal text.
+| Not this doc | See instead |
+|---|---|
+| Exporting recorded runs as JSONL | [../guide/export-and-sync.md](../guide/export-and-sync.md) |
+| Dashboard live SSE | [../guide/everyday-use.md](../guide/everyday-use.md) |
+| Portable archive schema | [portable-format.md](portable-format.md) |
+
+Blackbox supports a **one JSON object per line** protocol consumed by the `generic` / related adapters.
 
 ---
 

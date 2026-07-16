@@ -1,5 +1,8 @@
 # Publishing blackbox-recorder
 
+> **Maintainer checklist** for crates.io releases — not an operator guide.  
+> Users: [../README.md](../README.md). Docs quality before release: `python3 scripts/check_doc_links.py` and `cargo test --test docs_first_run`.
+
 The **Cargo package name** is `blackbox-recorder` (the name `blackbox` is taken on crates.io).  
 The **CLI binary** and **Rust library path** remain `blackbox` (`use blackbox::…`).
 
@@ -24,7 +27,9 @@ rm -rf .blackbox blackbox.db blackbox.db-wal blackbox.db-shm
 
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
+python3 scripts/check_doc_links.py
 cargo test --all-targets
+cargo test --test docs_first_run
 cargo publish --dry-run
 ```
 

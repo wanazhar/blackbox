@@ -1,8 +1,10 @@
 # Storage layer
 
-> **Contributor / deep-dive.** Store path resolution for operators: [../guide/configuration.md](../guide/configuration.md).
+> **Contributor / deep-dive.** Store paths for operators: [../guide/configuration.md](../guide/configuration.md). At-rest crypto: [../guide/security.md](../guide/security.md).
 
-Blackbox stores trace data in a **project-local directory** (`.blackbox/` by default) using a combination of SQLite for structured metadata and a content-addressed file store for large payloads. This document describes the layout, the `TraceStore` abstraction, the `SqliteStore` implementation, blob storage, search, and housekeeping.
+**Answers:** On-disk layout, `TraceStore` / `SqliteStore`, blob addressing, FTS5, retention/GC, and encryption hooks.
+
+Blackbox stores trace data in a **project-local directory** (`.blackbox/` by default) using SQLite for structured metadata and a content-addressed file store for large payloads.
 
 ---
 

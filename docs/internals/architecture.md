@@ -1,19 +1,31 @@
 # Blackbox Architecture
 
-> **Contributor / deep-dive documentation.** For install and day-to-day use, see [../guide/README.md](../guide/README.md).
+> **Contributor / deep-dive documentation.** Operators: [../guide/README.md](../guide/README.md). System model without module names: [../guide/concepts.md](../guide/concepts.md).
+
+**Answers:** How modules connect, where events are sequenced, how the store is shaped, and where continuity sits relative to capture.
 
 **Blackbox** is a Rust flight recorder and debugger for AI-agent runs. It launches agent commands (Claude, Codex, or generic), captures terminal output and structured events via PTY supervision, stores traces in SQLite + content-addressed blobs, and provides CLI, TUI, and a local web dashboard for inspection.
 
-- **Source:** <https://github.com/wanazhar/blackbox>
-- **Crate:** `blackbox-recorder` on crates.io (binary and library: `blackbox`)
-- **Version:** 1.2.0 (Agent Memory Bus / Continuity plane)
-- **Edition:** 2021, stable Rust
+| | |
+|---|---|
+| Source | <https://github.com/wanazhar/blackbox> |
+| crates.io | `blackbox-recorder` (binary/lib path: `blackbox`) |
+| Edition | 2021, stable Rust |
+
+### Map to other internals
+
+| Question | Doc |
+|---|---|
+| How do layers merge and redact? | [capture-pipeline.md](capture-pipeline.md) |
+| SQLite schema / blobs / FTS / GC? | [storage.md](storage.md) |
+| Sticky state, MEMORY, claims, inject? | [continuity-plane.md](continuity-plane.md) |
+| Repo conventions for PRs? | [../../AGENTS.md](../../AGENTS.md) |
 
 ---
 
 ## 1. High-Level Architecture
 
-Blackbox is organized as a layered event pipeline: **capture → sequence → persist → analyze → serve**. The system is built around a universal `TraceEvent` data model that all subsystems produce and consume.
+Blackbox is a layered event pipeline: **capture → sequence → persist → analyze → serve**. The universal data model is `TraceEvent`.
 
 
 ```

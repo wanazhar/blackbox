@@ -11,15 +11,18 @@ For the full map (agents, reference, internals), see the [docs index](../README.
 | Order | Guide | Answers |
 |---|---|---|
 | 1 | [What is blackbox?](what-is-blackbox.md) | Problem it solves, mental model, boundaries |
+| · | [Concepts](concepts.md) | How planes fit (capture / inspect / continuity) |
 | · | [Glossary](glossary.md) | Precise term definitions |
 | 2 | [Install](install.md) | Binary / cargo, PATH, `doctor` |
 | 3 | [Getting started](getting-started.md) | Enable → first run → inspect (end-to-end) |
-| 4 | [Everyday use](everyday-use.md) | List, show, timeline, TUI, dashboard, search |
+| 4 | [Recipes](recipes.md) | Copy-paste workflows for common jobs |
+| 5 | [Everyday use](everyday-use.md) | List, show, timeline, TUI, dashboard, search |
 
 ## Common jobs
 
 | Guide | Answers |
 |---|---|
+| [Recipes](recipes.md) | 15 end-to-end workflows (CI, eval, vault, claims, …) |
 | [Debug a failure](debug-a-failure.md) | Postmortem, anomalies, evidence → timeline, handoff |
 | [Leave it on](leave-it-on.md) | Ambient shell wrappers, `BLACKBOX_OFF`, wrap list, nest rules |
 | [Configuration](configuration.md) | Precedence, product modes, full knobs + env |

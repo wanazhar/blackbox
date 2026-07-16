@@ -172,6 +172,8 @@ If store path, permissions, or redaction look wrong: [troubleshooting.md](troubl
 
 | Job | Guide |
 |---|---|
+| More workflows (CI, vault, claims, …) | [recipes.md](recipes.md) |
+| How the planes fit | [concepts.md](concepts.md) |
 | Daily commands, TUI, dashboard | [everyday-use.md](everyday-use.md) |
 | Ambient “leave it on” | [leave-it-on.md](leave-it-on.md) |
 | Debug failures | [debug-a-failure.md](debug-a-failure.md) |

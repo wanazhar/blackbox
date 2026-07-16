@@ -1,12 +1,27 @@
 # JSON API reference
 
-**Schema reference for automation.** Humans debugging a single failure usually want [../guide/debug-a-failure.md](../guide/debug-a-failure.md) first; agents should also see [../skills/blackbox.md](../skills/blackbox.md).
+**Answers:** Shape of `--json` output (`blackbox.cli/v1`), which command produces which view, and the fields automation should parse.
 
-All blackbox CLI commands accept `--json` to produce a machine-readable envelope (`blackbox.cli/v1`). This document describes the envelope format and every view type.
+| You want… | Prefer |
+|---|---|
+| Human debug of one failure | [../guide/debug-a-failure.md](../guide/debug-a-failure.md) |
+| Agent session playbook | [../skills/blackbox.md](../skills/blackbox.md) |
+| MCP (no CLI envelope) | [mcp.md](mcp.md) |
 
 ---
 
-## 1. CLI envelope
+## Quick answers
+
+| Question | Answer |
+|---|---|
+| How do I get JSON? | Pass global `--json` (before or after subcommand per clap; usually `blackbox <cmd> --json`) |
+| Success vs error? | `ok: true` + `data` vs `ok: false` + `error` |
+| Schema id? | Always `"blackbox.cli/v1"` in `schema` |
+| MCP same envelope? | **No** — MCP returns raw tool payloads inside MCP content |
+
+---
+
+## 1. Envelope
 
 ### Success
 
@@ -15,7 +30,7 @@ All blackbox CLI commands accept `--json` to produce a machine-readable envelope
   "ok": true,
   "schema": "blackbox.cli/v1",
   "command": "show",
-  "data": { /* view-specific payload */ }
+  "data": { }
 }
 ```
 
@@ -33,17 +48,50 @@ All blackbox CLI commands accept `--json` to produce a machine-readable envelope
 }
 ```
 
-| Envelope field | Type | Description |
+| Field | Type | Description |
 |---|---|---|
-| `ok` | `bool` | Success or failure |
-| `schema` | `string` | Always `"blackbox.cli/v1"` |
-| `command` | `string` | The subcommand name |
-| `data` | `object` | Present on success — varies by command |
-| `error` | `object` | Present on failure — code + message |
+| `ok` | bool | Success / failure |
+| `schema` | string | `"blackbox.cli/v1"` |
+| `command` | string | Subcommand name |
+| `data` | object | Success payload (view) |
+| `error.code` | string | Stable-ish machine code when present |
+| `error.message` | string | Human-readable detail |
+
+Pipe-friendly:
+
+```bash
+blackbox runs --json | jq '.data'
+blackbox postmortem latest --json | jq '.data.headline, .data.next_action'
+```
 
 ---
 
-## 2. View types
+## 2. Command → view map
+
+| Command | Typical `data` view | Notes |
+|---|---|---|
+| `runs` | `RunsView` | List + filters |
+| `show` | `ShowView` | Run + events + optional summary |
+| `timeline` | `TimelineView` | Filtered events |
+| `inspect` | `InspectView` | One event + blob text |
+| `diff` | `DiffView` / trajectory fields | Pair of runs |
+| `analyze` | `AnalyzeView` | Pass results |
+| `search` | `SearchView` | FTS hits |
+| `status` | `StatusView` | Project status |
+| `handoff` | `HandoffView` | Status + memory + resume |
+| `memory show` | memory pack | See [memory-pack.md](memory-pack.md) |
+| `claim *` | claim views | acquire/status/release |
+| `doctor` | `DoctorView` | Health + tips |
+| `stats` | `StatsView` | Aggregates |
+| `postmortem` / `summary` | summary / postmortem | headline, evidence, anomalies |
+| `context` | context / resume pack | Token-bounded |
+| `run` (end) | run-done view | ids, ci/eval flags, artifact dir |
+
+Exact field sets evolve with the binary; treat missing optional fields as absent, not error. Source of truth: `src/views.rs`, `src/summary.rs`, `src/status.rs`.
+
+---
+
+## 3. Core view types
 
 ### RunsView
 
@@ -54,7 +102,7 @@ All blackbox CLI commands accept `--json` to produce a machine-readable envelope
       "id": "uuid-string",
       "short_id": "abc12345",
       "name": "fix-ci",
-      "status": "succeeded",
+      "status": "Succeeded",
       "exit_code": 0,
       "command": ["echo", "hello"],
       "cwd": "/home/user/project",
@@ -67,149 +115,127 @@ All blackbox CLI commands accept `--json` to produce a machine-readable envelope
 }
 ```
 
-Used by: `runs`, `search` (with run context).
+**When to parse:** dashboards, CI selectors, “pick latest failed.”
 
 ### ShowView
 
-Used by: `show <run-id>`. Returns full run details + event timeline + summary.
-
-| Field | Type | Description |
-|---|---|---|
-| `run` | `RunSummaryView` | Run metadata |
-| `events` | `TraceEventView[]` | Event timeline |
-| `summary` | `object \| null` | Optional run summary |
+| Field | Description |
+|---|---|
+| `run` | Run metadata |
+| `events` | Timeline (may be limited) |
+| `summary` | Optional rollup |
 
 ### TimelineView
 
-Used by: `timeline <run-id>`. Returns filtered event list.
-
-| Field | Type | Description |
-|---|---|---|
-| `run_id` | `string` | Run ID |
-| `events` | `TraceEventView[]` | Events in sequence order |
-| `truncated` | `bool` | Whether the list was truncated |
-| `filters` | `object` | Applied filters (source, kind, status) |
+| Field | Description |
+|---|---|
+| `run_id` | Run id |
+| `events` | Sequence-ordered events |
+| `truncated` | Hit a limit |
+| `filters` | kind/source/semantic flags applied |
 
 ### InspectView
 
-Used by: `inspect <event-id>`. Returns full event detail including blob content.
-
-| Field | Type | Description |
-|---|---|---|
-| `event` | `TraceEventView` | Event with full metadata |
-| `blob_content` | `string \| null` | Decoded blob content (if applicable) |
+| Field | Description |
+|---|---|
+| `event` | Full event + metadata |
+| `blob_content` | Decoded payload when available |
 
 ### DiffView
 
-Used by: `diff <run-a> <run-b>`.
-
-| Field | Type | Description |
-|---|---|---|
-| `run_a` | `RunSummaryView` | First run |
-| `run_b` | `RunSummaryView` | Second run |
-| `common_prefix_len` | `number` | Number of events before divergence |
-| `first_divergence` | ... | First differing event pair |
-| `only_in_a` | `TraceEventView[]` | Events unique to run A |
-| `only_in_b` | `TraceEventView[]` | Events unique to run B |
-| `trajectory` | `string \| null` | Human-readable trajectory report (when `--trajectory`) |
+| Field | Description |
+|---|---|
+| `run_a` / `run_b` | Endpoints |
+| `common_prefix_len` | Shared semantic prefix length |
+| divergence / only_in_* | Exclusive tails |
+| trajectory explanation | Human + structured hints |
 
 ### AnalyzeView
 
-Used by: `analyze <run-id>`.
+Derived errors, side-effect samples, correlations (pass-dependent).
 
-| Field | Type | Description |
-|---|---|---|
-| `run_id` | `string` | Run ID |
-| `errors` | `ErrorTop[]` | Detected errors |
-| `side_effects` | `SideEffectSample[]` | Side-effect classification |
-| `correlations` | `Correlation[]` | Causal event correlations |
+### StatusView / HandoffView
 
-### StatusView
+| Field | Description |
+|---|---|
+| `enabled` | Project capture on |
+| `store_path` | DB path |
+| `last_run` | Pointer |
+| `attention` | level + reason |
+| `project_memory` | Pack when available |
+| `next_commands` | Suggested CLI |
+| `resume_pack` | Handoff only — when attention / always |
 
-Used by: `status --json`.
+### DoctorView / StatsView
 
-| Field | Type | Description |
-|---|---|---|
-| `enabled` | `bool` | Whether project capture is enabled |
-| `store_path` | `string` | Path to the SQLite database |
-| `last_run` | `RunPointer \| null` | Most recent run |
-| `attention` | `AttentionView` | Attention level + needed + reason |
-| `project_memory` | `object \| null` | Memory pack (when enabled and available) |
-| `next_commands` | `string[]` | Suggested next CLI commands |
+Store path, schema, counts, byte sizes, warnings, daily-driver notes (doctor). Use for ops automation and install verification.
 
-### HandoffView
+### Postmortem / Summary
 
-Used by: `handoff --json`. Extends StatusView.
+Prefer these fields for agents:
 
-| Field | Type | Description |
-|---|---|---|
-| (all StatusView fields) | ... | ... |
-| `resume_pack` | `ContextPackView \| null` | Resume context when attention needed |
-
-### DoctorView
-
-Used by: `doctor --json`.
-
-| Field | Type | Description |
-|---|---|---|
-| `store_path` | `string` | Database path |
-| `schema_version` | `number` | SQLite schema version |
-| `run_count` | `number` | Total stored runs |
-| `db_bytes` | `number` | SQLite file size |
-| `blob_bytes` | `number` | Total blob storage size |
-| `blob_files` | `number` | Number of blob files |
-| `total_storage_bytes` | `number` | Sum of db + blobs |
-| `storage_warning` | `string \| null` | Warning if storage is large |
-
-### StatsView
-
-Used by: `stats --json`.
-
-| Field | Type | Description |
-|---|---|---|
-| `run_count` | `number` | Total runs |
-| `event_count` | `number` | Total events |
-| `blob_count` | `number` | Total blobs |
-| `db_bytes` | `number` | SQLite size |
-| `total_storage_bytes` | `number` | Total storage |
-| `storage_warning` | `string \| null` | Warning if applicable |
-
-### PostmortemView
-
-Used by: `postmortem <run-id> --json`.
-
-| Field | Type | Description |
-|---|---|---|
-| `run` | `RunSummaryView` | Run metadata |
-| `headline` | `string` | One-line summary |
-| `attention_reason` | `string` | Why attention is needed |
-| `failed_tools` | `FailedTool[]` | Failed tool calls |
-| `errors_top` | `ErrorTop[]` | Top errors |
-| `side_effects` | `SideEffectSample[]` | Side effects |
-| `summary` | `object \| null` | Run summary |
+| Field | Why |
+|---|---|
+| `headline` | One-line story |
+| `next_action` | What to do next |
+| `evidence` | `event_id` / `sequence` anchors |
+| `anomalies` | Structured markers |
+| `status` / `exit_code` | Outcome |
 
 ### SearchView
 
-Used by: `search <query> --json`.
+| Field | Description |
+|---|---|
+| `query` | Input |
+| `results` / hits | Ranked event/run matches |
+| `total` | Count when present |
 
-| Field | Type | Description |
-|---|---|---|
-| `query` | `string` | The search query |
-| `results` | `SearchResult[]` | Ranked matches |
-| `total` | `number` | Total matches found |
+### Memory / Claim
 
-### MemoryView
+- Memory: full [blackbox.memory/v1](memory-pack.md)
+- Claim: active pointer, path claims, conflicts
 
-Used by: `memory show --json`. Returns the full `blackbox.memory/v1` pack (see [memory-pack.md](memory-pack.md)).
+---
 
-### ClaimView
+## 4. TraceEvent (common shape)
 
-Used by: `claim status --json`.
+Events in timelines share a family of fields (names may serialize with serde defaults):
 
-| Field | Type | Description |
-|---|---|---|
-| `active` | `ClaimPointer \| null` | Active claim |
-| `holder` | `string \| null` | Current holder |
-| `acquired_at` | `string \| null` | When acquired |
-| `expires_at` | `string \| null` | When expires |
-| `conflicts` | `string[]` | Conflict messages |
+| Field | Meaning |
+|---|---|
+| `id` | Event UUID |
+| `run_id` | Parent run |
+| `sequence` | Monotonic index |
+| `kind` | e.g. `tool.call`, `terminal.output` |
+| `source` | Terminal / Tool / Filesystem / … |
+| `status` | Running / Success / Error / … |
+| `metadata` | JSON object (tool_name, path, preview, …) |
+| `side_effect` | None / LocalWrite / ExternalWrite / Destructive |
+| `output_blob` / input keys | Blob references |
+
+Do not assume every kind has every metadata key.
+
+---
+
+## 5. Automation patterns
+
+```bash
+# Fail CI if postmortem says the run failed
+blackbox postmortem latest --json --fail-on-failure
+
+# Select failed runs
+blackbox runs --status failed --json | jq -r '.data.runs[].id'
+
+# Session gate for agents
+attn=$(blackbox status --json | jq -r '.data.attention.level // .data.attention // empty')
+```
+
+**Idempotency:** JSON schemas are additive when possible; pin blackbox version in CI if you depend on new fields.
+
+---
+
+## 6. Related
+
+- [cli.md](cli.md) — flags producing these views  
+- [memory-pack.md](memory-pack.md) — pack schema  
+- [stream-protocol.md](stream-protocol.md) — harness NDJSON (different layer)  

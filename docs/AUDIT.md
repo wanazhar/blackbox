@@ -1,10 +1,14 @@
 # Blackbox Recorder — Comprehensive Codebase Audit
 
-**Date:** 2026-07-12
-**Last Updated:** 2026-07-12 (re-verified; residual fixes applied)
-**Scope:** Full `src/` tree — 50+ Rust source files, ~4,500 LOC
-**Method:** 19 parallel deep-audit agents across all subsystems + cross-cutting concerns
-**Baseline:** 75 unit tests + 5 integration tests, all passing
+> **Historical audit snapshot (2026-07-12), not product documentation.**  
+> Current operator docs: [README.md](README.md) · [guide/README.md](guide/README.md).  
+> Current quality bar: [ROADMAP.md](ROADMAP.md). Security model: [guide/security.md](guide/security.md).
+
+**Date:** 2026-07-12  
+**Last Updated:** 2026-07-12 (re-verified; residual fixes applied)  
+**Scope:** Full `src/` tree at that time  
+**Method:** multi-agent audit  
+**Baseline then:** unit + integration tests green  
 
 ---
 

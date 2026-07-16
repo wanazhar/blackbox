@@ -1,8 +1,10 @@
 # Continuity plane
 
-> **Contributor / deep-dive.** Operator concepts: [../guide/what-is-blackbox.md](../guide/what-is-blackbox.md). Schema: [../reference/memory-pack.md](../reference/memory-pack.md).
+> **Contributor / deep-dive.** Operator concepts: [../guide/concepts.md](../guide/concepts.md). Schema: [../reference/memory-pack.md](../reference/memory-pack.md). Recipes: [../guide/recipes.md](../guide/recipes.md#6-agent-session-start-human-or-llm).
 
-The **continuity plane** is the 1.2 feature that transforms blackbox from a passive flight recorder into an active project memory path. In an enabled project with continuity on, supervised launches **materialize and inject** a bounded project memory pack — files, environment variables, and (where possible) prompt preamble — so cooperative agents cannot honestly start cold.
+**Answers:** Sticky state, attention, claims, memory pack build/inject, and gates — and how they intentionally **do not** apply to ambient capture.
+
+The **continuity plane** turns blackbox from a passive flight recorder into an active project memory path. With continuity on, supervised **explicit** launches can **materialize and inject** a bounded project memory pack (files, env, optional preamble) so cooperative agents need not start cold.
 
 > **Honesty:** blackbox delivers memory on supervised paths; it does not force a model to *read* it without vendor cooperation or optional `require_ack` on explicit `blackbox run`.
 

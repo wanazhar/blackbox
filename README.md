@@ -70,7 +70,9 @@ Full walkthrough: [Getting started](docs/guide/getting-started.md).
 | Question | Doc |
 |---|---|
 | What is this, technically? | [What is blackbox?](docs/guide/what-is-blackbox.md) |
+| How do capture / memory / inspect fit? | [Concepts](docs/guide/concepts.md) |
 | What do these terms mean? | [Glossary](docs/guide/glossary.md) |
+| Copy-paste workflows | [Recipes](docs/guide/recipes.md) |
 | Day-to-day CLI / TUI / dashboard | [Everyday use](docs/guide/everyday-use.md) |
 | Debug a failed agent run | [Debug a failure](docs/guide/debug-a-failure.md) |
 | Ambient shell wrappers | [Leave it on](docs/guide/leave-it-on.md) |

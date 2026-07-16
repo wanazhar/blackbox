@@ -1,33 +1,40 @@
 # Portable format reference
 
-**Wire format for import/export archives.** Operator workflow: [../guide/export-and-sync.md](../guide/export-and-sync.md). Sealed packs and passphrase sealing are covered there and in [../guide/security.md](../guide/security.md).
+**Answers:** Schema for import/export archives (`blackbox.portable/v1|v2`), blob embedding rules, redaction defaults, and how sealed envelopes wrap portable JSON.
 
+Operator workflow: [../guide/export-and-sync.md](../guide/export-and-sync.md). Threat model: [../guide/security.md](../guide/security.md).
 
-Blackbox can export traces to a portable JSON archive and import them back. This is useful for sharing traces between projects, machines, or debugging offline.
+---
+
+## Quick answers
+
+| Question | Answer |
+|---|---|
+| Default redaction? | **On** — pass `--no-redact` only for private forensics |
+| Re-importable format? | `--format portable` |
+| Current schema? | Prefer **v2** (`blackbox.portable/v2`) |
+| Sealed share? | Portable JSON inside `blackbox.export.sealed/v1` envelope |
+| Whole store vault? | `backup` / `restore` (different format family) |
 
 ---
 
 ## 1. Export
 
 ```bash
-# Export a run as portable JSON (redacted by default)
 blackbox export <run-id> --format portable -o trace.json
-
-# Full raw trace (no redaction)
-blackbox export <run-id> --format portable -o trace.json --no-redact
-
-# Export with blobs as inline base64
 blackbox export <run-id> --format portable -o trace.json --inline-blobs
+blackbox export <run-id> --format portable -o trace.json --no-redact   # dangerous
+blackbox export <run-id> --format portable --passphrase '…' -o sealed.bbx.json
 ```
 
-### Export format
+### Logical archive shape (v2)
 
 ```json
 {
   "schema": "blackbox.portable/v2",
   "exported_at": "2026-07-12T12:00:00Z",
   "source": "blackbox-recorder/1.2.0",
-  "runs": [ /* Run objects */ ],
+  "runs": [ ],
   "blobs": {
     "<sha256-key>": { "size": 1234, "compressed": false, "data": "<base64-or-null>" }
   }
@@ -38,11 +45,13 @@ blackbox export <run-id> --format portable -o trace.json --inline-blobs
 
 | Feature | v1 | v2 |
 |---|---|---|
-| Schema | `blackbox.portable/v1` | `blackbox.portable/v2` |
-| Blobs | Inline base64 | Optional inline; blobs can be side-loaded |
-| Deduplication | None | Shared blobs referenced by key |
-| Metadata | Minimal | Richer metadata, adapter info |
-| Redaction | Default | Default (same behavior) |
+| Schema string | `blackbox.portable/v1` | `blackbox.portable/v2` |
+| Blobs | Often inline base64 | Optional inline; key-referenced |
+| Dedup | Weak | Shared blob keys |
+| Metadata | Minimal | Richer (adapter, …) |
+| Redaction | Default on | Default on |
+
+Import accepts both generations where possible.
 
 ---
 
@@ -50,34 +59,56 @@ blackbox export <run-id> --format portable -o trace.json --inline-blobs
 
 ```bash
 blackbox import trace.json
+blackbox import sealed.bbx.json --passphrase '…'
+blackbox import trace.json --keep-ids
 ```
 
-Import reconstructs the store:
-1. Creates runs, events, checkpoints
-2. Stores blobs from the archive
-3. Renames blob keys when the archive's expected key differs from content hash
-4. Preserves run IDs and sequence numbers
+Import reconstructs:
+
+1. Runs, events, checkpoints  
+2. Blobs via store APIs  
+3. Key fixups when archive key ≠ content hash (migration paths)  
+4. Sequence numbers preserved for timeline fidelity  
 
 ---
 
 ## 3. Blob handling
 
-During export:
-- Large blobs are stored in the archive (inline as base64 or side-car)
-- Blob `key` references are preserved in event records
-- With `--inline-blobs`: all blobs included in the archive JSON
-- Without `--inline-blobs`: blobs skipped (only references exported)
+| Mode | Behavior |
+|---|---|
+| Without `--inline-blobs` | Events keep keys; blob bytes may be omitted (lighter file) |
+| With `--inline-blobs` | Bytes embedded (base64) under `blobs` |
+| On import | Re-store blobs; `move_blob` for key mismatches |
 
-During import:
-- Blobs are re-stored via `TraceStore::store_blob()`
-- `move_blob()` handles key mismatches (used during v1→v2 migration)
+Large traces: prefer sync backends or vault backup over huge single JSON files.
 
 ---
 
 ## 4. Redaction
 
-Export is **redacted by default**:
-- Terminal output is scanned for secrets before writing to the archive
-- Environment variables and argv are redacted
-- Structural identifiers (run IDs, blob keys, UUIDs) survive
-- Pass `--no-redact` for a full unredacted copy (private offline analysis only)
+- Terminal, env, argv scanned before archive write  
+- Structural ids (run UUID, blob SHA, event ids) survive  
+- Portable export re-scans blobs (share path must not casually revive raw secrets)  
+- `--no-redact` disables protection for that export only  
+
+---
+
+## 5. Sealed envelope
+
+When `--passphrase` or `--encrypt` is used, the portable **plaintext** JSON is encrypted and wrapped:
+
+| Field (conceptual) | Role |
+|---|---|
+| `format` | `blackbox.export.sealed/v1` |
+| `ciphertext_b64` | ChaCha20-Poly1305 payload |
+| salt / kdf params | Present for passphrase (PBKDF2) packs |
+
+Open with matching passphrase or store key. Wrong key fails closed.
+
+---
+
+## 6. Related
+
+- [cli.md](cli.md) — export/import/backup flags  
+- [stream-protocol.md](stream-protocol.md) — harness NDJSON (not this archive)  
+- Recipe: [../guide/recipes.md](../guide/recipes.md#9-share-a-redacted-failure-with-a-colleague)  

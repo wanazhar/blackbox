@@ -18,6 +18,9 @@ All notable changes to **blackbox** are documented here.
 - CI: `python3 scripts/check_doc_links.py` — relative files **and** GitHub-style heading anchors
 - Golden first-run contract: `tests/docs_first_run.rs` (run → list → postmortem → artifact files)
 - MCP reference: **when to use / when not** per tool + job index
+- Further revamp: [concepts](docs/guide/concepts.md), [recipes](docs/guide/recipes.md) cookbook;
+  rewritten json-api / memory-pack / portable-format; readable ROADMAP; internals **Answers:** banners;
+  historical AUDIT labeled; PUBLISH preflight includes doc link + first-run tests
 
 ### Daily-driver trust (post-1.2)
 - **Observe-only default** for ambient capture; product mode `recorder` | `continuity`

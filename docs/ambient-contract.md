@@ -1,6 +1,14 @@
 # Ambient capture contract (1.1)
 
-**Normative** behavior for project-scoped ambient recording. Operator explanation: [guide/leave-it-on.md](guide/leave-it-on.md). Historical design: [plan/adoption-1.1.md](plan/adoption-1.1.md).
+**Normative** behavior for project-scoped ambient recording (A1 quality bar).
+
+| Reader | Start here |
+|---|---|
+| Operator (how/why/opt-out) | [guide/leave-it-on.md](guide/leave-it-on.md) |
+| Recipes | [guide/recipes.md](guide/recipes.md#2-leave-agent-clis-instrumented-ambient) |
+| Historical design | [plan/adoption-1.1.md](plan/adoption-1.1.md) |
+
+This page is the **decision table** implementers and tests must match.
 
 ## Decision order (`blackbox maybe-run`)
 

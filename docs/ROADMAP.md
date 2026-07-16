@@ -1,70 +1,108 @@
-# Blackbox quality bar & roadmap
+# Roadmap and quality bar
 
-## Quality bar (what "best" means)
+**Answers:** What “good” means for blackbox, what each major version promised, and what remains intentionally out of scope.
 
-This tool is worth running on a machine that holds secrets when **all** of the following hold:
+This is **product direction**, not a how-to. Operators: [guide/README.md](guide/README.md). Design archives: [plan/](plan/) (historical).
 
-1. **Secrets never at rest by default** -- argv, env, terminal, and tool payloads are redacted before SQLite/blob write. Raw capture requires an explicit `--insecure-raw` flag.
-2. **Timeline is true** -- one sequencer owns sequence numbers; order matches capture order.
-3. **Payloads as blobs** -- large terminal/tool content lives in content-addressed blobs; metadata holds keys + small previews only.
-4. **Checkpoints are honest** -- end-of-run git/fs state is the *after* state, not a copy of *before*.
-5. **Crashes recover** -- opening the store marks abandoned `Running` runs as `Failed`.
-6. **Store is project-local** -- `.blackbox/blackbox.db` + `.blackbox/blobs/`, overridable via `BLACKBOX_DB`.
-7. **Semantic signal is first-class** -- harness adapters parse tool calls; analysis is wired into the CLI.
-8. **Export / sync are safe by default** -- redacted unless `--no-redact` is passed.
-9. **Docs match the binary** -- README + AGENTS.md describe real behavior.
-10. **Agent-native inspect** -- global `--json` envelope; resume packs; MCP; handoff.
+---
 
-## Current product
+## Quality bar (in plain terms)
 
-| Version | Story |
-|---|---|
-| **1.0.0** | Capability daily-driver: enable -> capture -> fail -> handoff / MCP / auto-resume |
-| **1.1.0** | Adoption bar + folded post-1.0 backlog (adapters, CI/eval, pricing, sandbox restore, shell soak, Windows) |
-| **1.2.0** | **Agent Memory Bus / Continuity plane** -- default launch delivers project memory; sticky v2 + claims + M6 attention |
+Blackbox is worth leaving on a machine that holds secrets only if **all** of the following hold:
 
-### Adoption bar (1.1 -- leave it on)
-
-| # | Criterion | Target |
+| # | Bar | Operator meaning |
 |---|---|---|
-| **A1** | Ambient shell contract | Install/uninstall/OFF/nest/wrap tested; wrappers never hard-fail if binary missing |
-| **A2** | Redaction regression gate | Structural IDs (SHA, blob keys, UUIDs) never scar; secrets still die; CI-blocking suite |
-| **A3** | Resume-pack quality | Actionable headline + next action; budget held; failures beat raw transcript |
-| **A4** | Cost visibility | doctor/stats report DB + blob sizes + retention; soft warnings |
-| **A5** | Docs match adoption reality | README/ROADMAP/CHANGELOG describe 1.1 bar honestly |
-| **A6** | Capture overhead smoke | Soft wall-time budget for supervising `true` |
-| **A7** | Broader adapters | First-class aider/gemini/cursor/opencode/grok (not only wrap+generic) |
+| 1 | **Redact before write** | Secrets are scrubbed before SQLite/blobs unless you pass danger flags |
+| 2 | **True timeline** | One sequencer; order matches capture order |
+| 3 | **Payloads as blobs** | Large content is content-addressed; events stay small |
+| 4 | **Honest checkpoints** | End-of-run git/fs state is *after*, not a copy of *before* |
+| 5 | **Crash recovery** | Abandoned `Running` rows become `Failed` on next open |
+| 6 | **Project-local store** | `.blackbox/` by default; overridable |
+| 7 | **Semantic signal** | Adapters + analysis, not only raw text |
+| 8 | **Safe share defaults** | Export/sync redact unless `--no-redact` |
+| 9 | **Docs match binary** | README/guides/tests describe real behavior |
+| 10 | **Agent-native inspect** | `--json`, handoff, MCP, resume packs |
 
-Design: [`docs/plan/adoption-1.1.md`](plan/adoption-1.1.md).
+If a change weakens a bar, it needs an explicit docs + test story.
 
-### Memory bus bar (1.2 -- M1-M7)
+---
 
-| # | Criterion | Target |
+## Versions (shipped story)
+
+| Version | Story | Operator takeaway |
 |---|---|---|
-| **M1** | Materialize + inject on launch paths | `continuity=always` injects; `attention` clean skips launch inject; end-of-run always refreshes MEMORY when != off |
-| **M2a** | Pack structural quality | CI suite `tests/memory_pack_quality.rs` |
-| **M3** | Side effects surface | `side_effects_top`, `destructive_paths`, `secret_redaction_events` |
-| **M4** | Multi-agent claim MVP | One project claim under `state.lock`; exclusive acquire |
-| **M5** | Sessions disposable | Pack from store+sticky; degraded sticky-only if store fails |
-| **M6** | Silent failure discipline | `apply_run_outcome`; unrelated success does not clear failure |
-| **M7** | Trust settled | Redaction on MEMORY paths; doctor memory plane fields |
+| **1.0** | Capability daily-driver | Capture, inspect, export, MCP, resume basics |
+| **1.1** | Adoption (“leave it on”) | Ambient contract, redaction gates, adapters, CI/eval, cost visibility |
+| **1.2** | Continuity / project memory | MEMORY pack, attention, claims, inject on explicit run |
 
-Design: [`docs/plan/agent-memory-bus-1.2.md`](plan/agent-memory-bus-1.2.md). **A1-A7 remain permanent.**
+### 1.1 adoption bar (permanent)
 
-## Backlog (post-1.2)
+| Id | Criterion | How we keep it honest |
+|---|---|---|
+| A1 | Ambient shell contract | `tests/ambient_contract.rs` · [ambient-contract.md](ambient-contract.md) |
+| A2 | Redaction regression | `tests/redaction_gate.rs` (+ adversarial) |
+| A3 | Resume-pack quality | postmortem/handoff tests · memory quality |
+| A4 | Cost visibility | `doctor` / `stats` · [guide/overhead.md](guide/overhead.md) |
+| A5 | Docs match reality | link checker · first-run golden · this tree |
+| A6 | Capture overhead smoke | `tests/overhead_smoke.rs` |
+| A7 | Broader adapters | aider/gemini/cursor/opencode/grok detection |
+
+### 1.2 memory bar (permanent)
+
+| Id | Criterion | How we keep it honest |
+|---|---|---|
+| M1 | Materialize + inject on launch paths | continuity modes · observe-only split |
+| M2a | Pack structural quality | `tests/memory_pack_quality.rs` |
+| M3 | Side effects surface | pack fields + analysis |
+| M4 | Claims MVP | project + path-scoped claims |
+| M5 | Sessions disposable | degraded sticky-only pack |
+| M6 | Silent failure discipline | success does not clear unresolved failure |
+| M7 | Trust on MEMORY paths | redaction + doctor fields |
+
+Historical design prose: [plan/adoption-1.1.md](plan/adoption-1.1.md), [plan/agent-memory-bus-1.2.md](plan/agent-memory-bus-1.2.md).
+
+---
+
+## Post-1.2 themes (already partly landed)
+
+Work continues in-tree beyond the original 1.2 checklist, including:
+
+- Anomaly markers + failure-story TUI / dashboard badges
+- Eval harness (`--eval`) and richer CI artifacts
+- Sealed export packs, blob encryption, offline `backup`/`restore`
+- Docs revamp for human comprehension (this directory)
+- Path-scoped claims (operator-usable; was backlog)
+
+See [CHANGELOG.md](../CHANGELOG.md) for what actually shipped.
+
+---
+
+## Backlog (direction, not commitments)
 
 | Priority | Theme | Notes |
 |---|---|---|
-| Low | Path-scoped claims | Extend project-wide claim to subdirectory scope |
-| Low | Auto TODO/FIXME open_items | Scan for TODO/FIXME markers to auto-populate open_items |
-| Low | Sandbox 3-way merge / conflict UX | Best-effort git apply already shipped; improve UX on conflict |
-| Low | Full Windows interactive TUI parity | Soft/hard kill + PowerShell install shipped; PTY edge cases remain |
-| Low | Per-harness session file format docs | Poller heuristics shipped; document vendor layouts as they stabilize |
+| Med | Docs depth / fixtures | Golden CLI outputs, more recipe coverage |
+| Low | Auto open_items from TODO/FIXME | Explicit memory remains source of truth |
+| Low | Sandbox conflict UX | Best-effort git apply exists |
+| Low | Windows interactive TUI parity | Kill + PowerShell install shipped; PTY edges remain |
+| Low | Per-harness session format notes | Pollers exist; vendor layouts stabilize slowly |
+| Low | Live SQLCipher | **Not** planned as default; vault path is sealed backup + blob encrypt |
+
+---
 
 ## Non-goals
 
-- Full multi-tenant hosted SaaS / remote multi-user ACLs
-- Replacing the harness's own session UI
+- Multi-tenant hosted SaaS / remote multi-user ACLs
+- Replacing the harness’s own UI
 - Perfect Windows parity as a release blocker
 - Guaranteeing every interactive TUI agent emits machine-readable tool events
-- Inventing `estimated_cost_usd` when cost estimation is off or model unknown
+- Inventing `estimated_cost_usd` when estimation is off or model unknown
+- Deterministic full LLM re-execution as “replay”
+
+---
+
+## Related
+
+- [CHANGELOG.md](../CHANGELOG.md)  
+- [guide/concepts.md](guide/concepts.md)  
+- [WRITING.md](WRITING.md)  

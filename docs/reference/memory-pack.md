@@ -1,162 +1,160 @@
 # Memory pack reference (blackbox.memory/v1)
 
-**Schema and field semantics** for `blackbox.memory/v1`. Conceptual overview: [../guide/what-is-blackbox.md](../guide/what-is-blackbox.md). Continuity implementation: [../internals/continuity-plane.md](../internals/continuity-plane.md).
+**Answers:** What is in the project memory pack, which fields survive budget shrink, how attention levels work, and where files are written.
 
-The Project Memory Pack is a bounded snapshot of project-level context delivered on supervised launches when continuity is enabled. It is rebuilt after every run (when continuity ≠ off) and written to `.blackbox/MEMORY.md` + `.blackbox/MEMORY.json`.
+| Role | Doc |
+|---|---|
+| Concept | [../guide/concepts.md](../guide/concepts.md) · [../guide/what-is-blackbox.md](../guide/what-is-blackbox.md) |
+| Operator use | `memory show` / `handoff` · [../guide/recipes.md](../guide/recipes.md#6-agent-session-start-human-or-llm) |
+| Implementation | [../internals/continuity-plane.md](../internals/continuity-plane.md) |
 
 ---
 
-## 1. Schema (`blackbox.memory/v1`)
+## Quick answers
 
-### Top-level fields
+| Question | Answer |
+|---|---|
+| Files on disk? | `.blackbox/MEMORY.md`, `MEMORY.json` (+ `RESUME.*` copies) |
+| Schema id? | `"blackbox.memory/v1"` |
+| When rebuilt? | End of run when continuity ≠ `off` |
+| When injected? | Explicit `blackbox run` with continuity on and not observe-only |
+| Ambient inject? | **Never** |
+| Untrusted? | **Yes** — prior context for agents, not system policy |
 
-| Field | Type | Description |
-|---|---|---|
-| `schema` | `string` | Always `"blackbox.memory/v1"` |
-| `purpose` | `string` | `"project-memory"` \| `"for-resume"` \| `"handoff"` |
-| `degraded` | `bool` | `true` if built from sticky state only (store unavailable) |
-| `project_root` | `string` | Absolute path to project root |
-| `store_db` | `string` | Path to the SQLite database |
-| `generated_at` | `RFC3339` | When this pack was built |
-| `continuity_mode` | `string` | `"always"` \| `"attention"` \| `"off"` |
-| `headline` | `string` | **Never dropped under budget.** One-line project state summary |
-| `next_action` | `string` | **Never dropped.** What the next agent should do |
-| `attention_reason` | `string` | Why attention is needed (failure, dirty WIP, claim conflict) |
-| `attention_level` | `string` | `"none"` \| `"info"` \| `"continue"` \| `"blocked"` |
-| `approx_tokens` | `number` | Estimated token count of the pack |
-| `truncated` | `bool` | `true` if budget shrink dropped fields |
-| `build_ms` | `number` | Wall-clock time to build in milliseconds |
+---
 
-### IntentView
+## 1. Top-level fields
 
 | Field | Type | Description |
 |---|---|---|
-| `goal` | `string \| null` | Current project goal (set via `memory set --goal`) |
-| `plan_summary` | `string \| null` | Plan summary (explicit only) |
-| `open_items` | `string[]` | Open TODO items (explicit only in MVP), capped at 8 |
-| `do_not_retry` | `string[]` | Fingerprints of last 3 failed runs, capped at 5 |
+| `schema` | string | `"blackbox.memory/v1"` |
+| `purpose` | string | `"project-memory"` \| `"for-resume"` \| `"handoff"` |
+| `degraded` | bool | Built from sticky only (store open failed or hard timeout) |
+| `project_root` | string | Absolute project root |
+| `store_db` | string | SQLite path |
+| `generated_at` | RFC3339 | Build time |
+| `continuity_mode` | string | `always` \| `attention` \| `off` |
+| `headline` | string | **Never dropped under budget** |
+| `next_action` | string | **Never dropped** |
+| `attention_reason` | string | Why attention is set |
+| `attention_level` | string | See §3 |
+| `approx_tokens` | number | Estimated size |
+| `truncated` | bool | Budget shrink removed lower-priority fields |
+| `build_ms` | number | Wall time to build |
 
-### ClaimsSummaryView
+### Nested views
 
-| Field | Type | Description |
-|---|---|---|
-| `active` | `ClaimPointer \| null` | Current project claim holder |
-| `conflicts` | `string[]` | Conflict strings when another agent holds the claim |
+**IntentView** — `goal`, `plan_summary`, `open_items` (cap 8), `do_not_retry` fingerprints.
 
-### RunPointer
+**ClaimsSummaryView** — `active` claim pointer, `conflicts[]`.
 
-| Field | Type | Description |
-|---|---|---|
-| `id` | `string` | Full run UUID |
-| `short_id` | `string` | First 8 characters of run ID |
-| `status` | `string` | `"succeeded"` \| `"failed"` \| `"cancelled"` |
-| `exit_code` | `number \| null` | Process exit code |
-| `name` | `string \| null` | Human-readable run name |
-| `command_preview` | `string` | Truncated command string |
-| `ended_at` | `RFC3339 \| null` | When the run finished |
-| `adapter` | `string \| null` | Detected harness adapter |
+**RunPointer** — `id`, `short_id`, `status`, `exit_code`, `name`, `command_preview`, `ended_at`, `adapter`.
 
-### GitMemoryView
+**GitMemoryView** — `dirty` (`.blackbox/` filtered), `branch`, `head`, `summary`, porcelain hash.
 
-| Field | Type | Description |
-|---|---|---|
-| `dirty` | `bool` | Whether git porcelain is non-empty (excluding `.blackbox/` paths) |
-| `branch` | `string \| null` | Current git branch |
-| `head` | `string \| null` | Current commit hash |
-| `summary` | `string \| null` | Short description of changes |
-| `porcelain_hash` | `string \| null` | Short hash of porcelain text (cache debug) |
+**SideEffectSample** — `kind`, `path`, `detail`, `count`.
 
-### SideEffectSample
+### Additional capped fields
 
-| Field | Type | Description |
-|---|---|---|
-| `kind` | `string` | Effect classification (`destructive`, `local-write`, `external-write`) |
-| `path` | `string \| null` | File path (if applicable) |
-| `detail` | `string \| null` | Description |
-| `count` | `number` | How many times this effect occurred |
-
-### Additional fields
-
-| Field | Type | Cap |
-|---|---|---|
-| `files_touched` | `string[]` | `"kind:path"` — cap 40 |
-| `destructive_paths` | `string[]` | Paths from destructive operations — cap 15 |
-| `side_effects_top` | `SideEffectSample[]` | Ranked samples — cap 12 |
-| `secret_redaction_events` | `number` | Aggregate count (never values) |
-| `failed_tools` | `FailedTool[]` | From focus run |
-| `errors_top` | `ErrorTop[]` | From focus run |
-| `summary` | `SummaryView \| null` | Run summary if built |
-| `last_tools` | `string[]` | Last 25 tool names |
-| `transcript_tail` | `string \| null` | Focus run transcript — lowest priority |
-| `resume_command` | `string[] \| null` | Resume command for focus |
-| `last_run` | `RunPointer \| null` | Most recent run |
-| `predecessor_run` | `RunPointer \| null` | Focus predecessor |
-| `focus_run_id` | `string \| null` | Focus run ID |
+| Field | Cap / notes |
+|---|---|
+| `files_touched` | `"kind:path"` — cap ~40 |
+| `destructive_paths` | cap ~15 |
+| `side_effects_top` | cap ~12 |
+| `secret_redaction_events` | **count only** — never secret values |
+| `failed_tools` / `errors_top` | From focus run |
+| `summary` | Nested run summary when built |
+| `last_tools` | Last ~25 tool names |
+| `transcript_tail` | Lowest priority; often dropped |
+| `resume_command` | Optional argv for resume |
+| `last_run` / `predecessor_run` / `focus_run_id` | Pointers |
 
 ---
 
 ## 2. Budget shrink order
 
-Items are dropped in **reverse** priority to stay under `max_tokens` (default 4000):
+Default budget ~4000 tokens (`resume_max_tokens` / `memory_max_tokens`). Drop **lowest** priority first:
 
-| Priority | Item | Action if over budget |
+| Priority | Item | Over budget |
 |---|---|---|
-| 1 (highest) | `headline`, `next_action`, `attention_reason`, `attention_level` | Never dropped |
+| 1 (keep) | headline, next_action, attention_* | Never dropped |
 | 2 | Active claim + conflicts | Never dropped |
-| 3 | `intent` | Never dropped (already capped) |
-| 4 | `failed_tools` + `errors_top` | Never dropped |
-| 5 | `files_touched` + `destructive_paths` + git dirty | Never dropped |
-| 6 | `side_effects_top` + `secret_redaction_events` | Truncated |
-| 7 | `predecessor_run` pointer | Dropped |
-| 8 | `last_tools` | Truncated |
-| 9 (lowest) | `transcript_tail` | Dropped first; skipped entirely when `attention_level=none` |
+| 3 | intent | Capped already |
+| 4 | failed_tools + errors_top | Kept |
+| 5 | files_touched, destructive_paths, git dirty | Kept |
+| 6 | side_effects_top, secret_redaction_events | Truncated |
+| 7 | predecessor_run | Dropped |
+| 8 | last_tools | Truncated |
+| 9 (drop first) | transcript_tail | Dropped; skipped when attention is `none` |
+
+If `truncated=true`, trust headline/next/attention first.
 
 ---
 
-## 3. `attention_level` values
+## 3. `attention_level`
 
 | Level | Meaning | Example |
 |---|---|---|
-| `none` | Clean — no attention needed | Successful clean build, no open items |
-| `info` | Informational | Success with dirty tree or files modified |
-| `continue` | Active WIP | Unresolved failure, dirty tree + open items |
-| `blocked` | Gate blocked | `require_ack` outstanding |
+| `none` | Clean | Green run, no sticky failure |
+| `info` | Heads-up | Dirty tree after success |
+| `continue` | Follow up | Unresolved failure, open WIP |
+| `blocked` | Stop | `require_ack` outstanding |
+
+Unrelated success does not clear unresolved failure — `blackbox resolve`.
 
 ---
 
-## 4. Build process
+## 4. Build process (accurate sketch)
 
-1. Load sticky state from `.blackbox/state.json`
-2. Open store; if fail → build degraded pack from sticky only
-3. Load last ≤3 runs (≤2000 events each via `get_events_limited`)
-4. Run `live_git_status(project_root)` with 500ms timeout
-5. Run `SideEffectClassifier` on events
-6. Build focus run summary
-7. Rebuild transcript tail for focus run
-8. Apply budget shrink if over `max_tokens`
-9. Write `MEMORY.md`, `MEMORY.json`, `RESUME.md`, `RESUME.json`
-10. Update sticky `memory_updated_at`
+1. Load sticky state (`.blackbox/state.json`)
+2. Open store; on failure → **degraded** sticky-only pack
+3. Load last ≤3 runs (event caps via limited reads)
+4. Live `git status --porcelain` (~500ms timeout)
+5. Side-effect classification on events
+6. Focus-run summary + optional transcript tail
+7. Budget shrink
+8. Atomic write MEMORY/RESUME md+json
+9. Update sticky `memory_updated_at`
 
-**Hard degrade:** If total build exceeds **2 seconds**, return degraded sticky-only pack.
-
----
-
-## 5. Secret handling
-
-- No secret values in the pack — `secret_redaction_events` is an aggregate count only
-- M2a test suite (`tests/memory_pack_quality.rs`) verifies no planted secrets leak
-- Structural IDs (run IDs, blob keys, UUIDs) survive redaction
+**Hard degrade:** total build \> ~2s → sticky-only pack (`degraded=true`).
 
 ---
 
-## 6. File outputs
+## 5. Secrets
 
-| File | Format | Purpose |
-|---|---|---|
-| `MEMORY.md` | Markdown | Human-readable pack |
-| `MEMORY.json` | JSON | Structured machine-readable pack |
-| `RESUME.md` | Markdown | Identical copy (1.0 compat) |
-| `RESUME.json` | JSON | Identical copy (1.0 compat) |
+- No secret **values** in the pack by design
+- `secret_redaction_events` is an aggregate counter
+- Gate: `tests/memory_pack_quality.rs`
+- Structural ids (run UUID, blob hashes) survive
 
-All written atomically (write to temp, rename) to prevent partial reads.
+---
 
+## 6. Files
+
+| File | Role |
+|---|---|
+| `MEMORY.md` | Human-readable |
+| `MEMORY.json` | Structured (may be sealed when store key present) |
+| `RESUME.md` / `RESUME.json` | Compat copies |
+
+Writes are atomic (temp + rename) to avoid half-read packs.
+
+---
+
+## 7. Inject surface (what the child may see)
+
+On eligible explicit runs, blackbox may set e.g.:
+
+- `BLACKBOX_MEMORY_FILE` / `BLACKBOX_MEMORY_SCHEMA`
+- `BLACKBOX_RESUME_*` hints
+- Optional prompt preamble with an untrusted-memory marker
+
+Harness cooperation required for preamble paths. Ambient never injects.
+
+---
+
+## Related
+
+- [json-api.md](json-api.md) — CLI envelope wrapping memory show/handoff  
+- [mcp.md](mcp.md) — `blackbox_memory`, `blackbox_handoff`  
+- [../guide/configuration.md](../guide/configuration.md) — continuity knobs  

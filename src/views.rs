@@ -213,6 +213,12 @@ pub struct StatsView {
     pub total_events: usize,
     pub total_tool_calls: usize,
     pub total_errors: usize,
+    /// Average events per sampled run (WS6).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avg_events_per_run: Option<f64>,
+    /// Average blob bytes per run when run_count > 0 (WS6).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avg_blob_bytes_per_run: Option<f64>,
     pub top_kinds: Vec<(String, usize)>,
     pub blob_files: usize,
     pub blob_bytes: u64,

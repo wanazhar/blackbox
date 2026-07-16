@@ -13,6 +13,13 @@ use tokio::sync::mpsc;
 /// Tracks the supervised process lifecycle, records basic process metadata,
 /// and on Linux discovers child processes via /proc polling for lossless
 /// process-tree capture (exact argv, cwd, executable, best-effort resources).
+///
+/// # Limitations (short-lived processes)
+///
+/// Polling is best-effort (~250 ms interval). Processes that spawn and exit
+/// between polls may be missed. Exact argv is read from `/proc/<pid>/cmdline`
+/// when the process is still alive; exit codes are not always available without
+/// waitpid on the process group. Non-Linux platforms get basic PID tracking only.
 #[derive(Debug)]
 pub struct ProcessCapture {
     event_tx: Option<mpsc::Sender<TraceEvent>>,

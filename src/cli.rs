@@ -698,7 +698,9 @@ pub struct ForkArgs {
     #[arg(long)]
     pub name: Option<String>,
 
-    /// After forking, launch the harness resume command under blackbox
+    /// After forking, launch the harness-native resume command under blackbox
+    /// when a session id was captured. This is native harness resume (not a
+    /// reconstructed transcript replay). Without a session id, --launch fails.
     #[arg(long)]
     pub launch: bool,
 }
@@ -1694,6 +1696,22 @@ async fn cmd_show(cli: &Cli, args: &ShowArgs) -> anyhow::Result<()> {
         ) {
             hints.push(format!("blackbox postmortem {}", short_id(&run.id)));
         }
+        let capture_coverage = events
+            .iter()
+            .find(|e| e.kind == "capture.coverage")
+            .and_then(|e| e.metadata.get("coverage").cloned());
+        let process_tree = {
+            let roots = crate::core::process_tree::rebuild_from_events(&events);
+            if roots.is_empty() {
+                None
+            } else {
+                Some(views::ProcessTreeShowView {
+                    root_count: roots.len(),
+                    node_count: roots.iter().map(|r| r.count_nodes()).sum(),
+                    ascii: crate::core::process_tree::ProcessNode::format_forest(&roots),
+                })
+            }
+        };
         let view = views::ShowView {
             run: run.clone(),
             event_count: events.len(),
@@ -1709,6 +1727,8 @@ async fn cmd_show(cli: &Cli, args: &ShowArgs) -> anyhow::Result<()> {
             hints,
             tool_transcript: if args.tools { tool_tx.clone() } else { None },
             terminal_transcript: terminal_tx.clone(),
+            capture_coverage,
+            process_tree,
         };
         return output::emit_ok("show", &view);
     }
@@ -1727,6 +1747,34 @@ async fn cmd_show(cli: &Cli, args: &ShowArgs) -> anyhow::Result<()> {
     }
     println!("  Events:   {}", events.len());
     println!("  Checkpts: {}", checkpoints.len());
+    if let Some(cov) = events
+        .iter()
+        .find(|e| e.kind == "capture.coverage")
+        .and_then(|e| e.metadata.get("coverage"))
+    {
+        let score = cov
+            .get("quality_score")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let surfaces = cov
+            .get("surfaces")
+            .and_then(|v| v.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0);
+        println!("  Capture:  quality={score}% · {surfaces} surfaces");
+    }
+    let tree_roots = crate::core::process_tree::rebuild_from_events(&events);
+    if !tree_roots.is_empty() {
+        let nodes: usize = tree_roots.iter().map(|r| r.count_nodes()).sum();
+        println!("  Process:  {nodes} node(s) in tree");
+        let ascii = crate::core::process_tree::ProcessNode::format_forest(&tree_roots);
+        for line in ascii.lines().take(12) {
+            println!("    {line}");
+        }
+        if ascii.lines().count() > 12 {
+            println!("    … (truncated; use --json for full tree)");
+        }
+    }
 
     if !tools.is_empty() {
         println!();
@@ -2485,20 +2533,27 @@ async fn cmd_fork(cli: &Cli, args: &ForkArgs) -> anyhow::Result<()> {
     println!("Fork finished: {}", outcome);
 
     let resume = crate::resume::resume_command(&run, &events, &checkpoints);
+    println!("Forked continuation guarantee:");
     if let Some(ref cmd) = resume {
-        println!("Resume command: {}", crate::resume::format_command(cmd));
+        println!("  mode:    native harness resume (session-based)");
+        println!("  command: {}", crate::resume::format_command(cmd));
+        println!("  note:    not reconstructed-context or deterministic LLM replay");
     } else {
-        println!("No harness session found — resume command unavailable.");
-        println!("  Tip: record with `claude -p …` so session ids are captured.");
+        println!("  mode:    fork record only (no native session to resume)");
+        println!("  command: (unavailable — no harness session id captured)");
+        println!("  tip:     record with `claude -p …` so session ids are captured");
+        println!("  note:    not reconstructed-context or deterministic LLM replay");
     }
 
     if args.launch {
         let cmd = resume.ok_or_else(|| {
-            anyhow::anyhow!("--launch requires a known harness session (none found)")
+            anyhow::anyhow!(
+                "--launch requires a known harness session (native resume); none found"
+            )
         })?;
         println!();
         println!(
-            "Launching under blackbox: {}",
+            "Launching native harness resume under blackbox: {}",
             crate::resume::format_command(&cmd)
         );
         // Drop store before nested run reopens it

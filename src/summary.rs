@@ -56,6 +56,7 @@ pub struct RetryWasteView {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct FailureFixChainView {
+    pub error_event_id: String,
     pub error_message: String,
     pub files_changed: Vec<String>,
     pub retry_occurred: bool,
@@ -153,6 +154,7 @@ pub async fn build_summary(
         .into_iter()
         .take(10)
         .map(|chain| FailureFixChainView {
+            error_event_id: chain.error_event_id,
             error_message: chain.error_message,
             files_changed: chain.files_changed,
             retry_occurred: chain.retry_occurred,

@@ -46,6 +46,12 @@ wrap = ["claude", "codex", "aider", "cursor", "cursor-agent", "gemini", "opencod
 # New projects default "always"; migrated 1.1 projects default "attention"
 continuity = "always"
 
+# Hard observe-only / recorder mode (daily-driver trust).
+# When true: no prompt mutation, no MEMORY/RESUME inject, no adapter
+# prepare_launch flags, no auto parent-run linking. Continuity is forced off.
+# Prefer: blackbox enable --observe-only
+# observe_only = false
+
 # Auto-resume (legacy 1.0 compat): true | false
 # When continuity ≠ off, this is overridden by continuity mode
 auto_resume = true
@@ -71,6 +77,35 @@ gate_mode = "off"
 # Claim policy on conflict: "warn" | "block_record"
 policy = "warn"
 ```
+
+---
+
+## 2b. Observe-only vs continuity (two products)
+
+Blackbox can run as a **neutral recorder** or as a **continuity / memory bus**.
+Do not conflate them.
+
+| Mode | How to enable | Mutates launch? | Injects MEMORY/RESUME? | Use when |
+|---|---|---|---|---|
+| **Observe-only** (recorder) | `blackbox enable --observe-only` or `blackbox run --observe-only -- …` | No | No | Evaluating harness/model behavior; ambient flight recorder |
+| **Continuity always** | `blackbox enable --continuity always` (or new-project default) | May prepare adapter launch / inject env | Yes (when configured) | Daily agent work with project memory |
+| **Continuity attention** | `continuity = "attention"` | Only when sticky attention needs it | When attention is set | Less aggressive memory inject |
+| **Continuity off** | `continuity = "off"` | No continuity inject | No | Recording without memory plane |
+
+CLI override: `blackbox run --observe-only -- <cmd>` forces recorder semantics for
+that run even if project continuity is enabled.
+
+Replay modes are separate again (see `blackbox replay --help`):
+
+| Mode | Command | Executes? |
+|---|---|---|
+| Timeline playback | `blackbox replay <run>` | No |
+| Recorded tool playback | `blackbox replay --mock-tools` | No (mocks) |
+| Sandbox re-execution | `blackbox replay --sandbox` | Yes, isolated; lossy/shell blocked |
+| Live re-execution | `blackbox replay --live` | Yes, dangerous |
+| Forked continuation | `blackbox fork <run> --launch` | Native harness resume when session known |
+
+None of these are deterministic LLM replay.
 
 ---
 

@@ -14,6 +14,10 @@ pub struct StatusView {
     pub project_root: String,
     pub store_db: String,
     pub enabled: bool,
+    /// Hard observe-only mode (no launch mutation / continuity inject).
+    pub observe_only: bool,
+    /// Continuity plane mode: always | attention | off.
+    pub continuity_mode: String,
     pub wrap: Vec<String>,
     pub shell_integration: ShellIntegrationView,
     pub retention: RetentionStatusView,
@@ -267,10 +271,19 @@ pub async fn build_status(
         }
     }
 
+    let observe_only = cfg.capture.observe_only;
+    let continuity_mode = if observe_only {
+        "off".to_string()
+    } else {
+        cfg.capture.continuity_from_config().as_str().to_string()
+    };
+
     Ok(StatusView {
         project_root: discovery.project_root.display().to_string(),
         store_db: discovery.paths.db_path.display().to_string(),
         enabled,
+        observe_only,
+        continuity_mode,
         wrap: cfg.capture.wrap,
         shell_integration: ShellIntegrationView {
             detected_shell: shell.as_str().into(),
@@ -301,6 +314,11 @@ pub fn format_status_text(v: &StatusView) -> String {
         "  enabled: {}   store: {}\n",
         v.enabled, v.store_db
     ));
+    if v.observe_only {
+        out.push_str("  mode: observe-only (no continuity, no prompt mutation)\n");
+    } else {
+        out.push_str(&format!("  mode: continuity={}\n", v.continuity_mode));
+    }
     out.push_str(&format!("  wrap: {}\n", v.wrap.join(", ")));
     if v.shell_integration.installed {
         out.push_str(&format!(

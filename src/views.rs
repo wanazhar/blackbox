@@ -69,6 +69,19 @@ pub struct ShowView {
     pub tool_transcript: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub terminal_transcript: Option<String>,
+    /// Capture coverage when a `capture.coverage` event exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_coverage: Option<serde_json::Value>,
+    /// Reconstructed process tree forest (ASCII + node counts) when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_tree: Option<ProcessTreeShowView>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProcessTreeShowView {
+    pub root_count: usize,
+    pub node_count: usize,
+    pub ascii: String,
 }
 
 #[derive(Debug, Serialize)]

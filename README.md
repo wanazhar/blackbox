@@ -85,9 +85,8 @@ Full walkthrough: [Getting started](docs/guide/getting-started.md).
 | Redaction & threat model | [Security](docs/guide/security.md) |
 | Export / sync / backup | [Export and sync](docs/guide/export-and-sync.md) |
 | Something broken | [Troubleshooting](docs/guide/troubleshooting.md) |
-| **Full docs map** | **[docs/README.md](docs/README.md)** |
-| Local docs site (optional) | `pip install -r requirements-docs.txt && mkdocs serve` |
-| Published docs (when Pages on) | https://wanazhar.github.io/blackbox/ |
+| **Full docs map** | **[docs/README.md](docs/README.md)** (in-repo; no GitHub Pages) |
+| Local browse (optional) | `pip install -r requirements-docs.txt && bash scripts/prepare_docs_site.sh && mkdocs serve` |
 
 ### Reference & agents
 

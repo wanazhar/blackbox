@@ -160,7 +160,7 @@ Operator-facing notes for shipped harnesses: [docs/guide/adapters.md](docs/guide
 | `tests/setup_fail.rs` | 1.3 Phase 1: `setup` + `fail` integration |
 | `src/score.rs` + `tests/ci_eval.rs` | 1.3 Phase 3: `blackbox.score/v1` score.json |
 | `tests/fixtures/docs/` | Static golden samples for docs contracts |
-| `.github/workflows/docs.yml` | MkDocs build + GitHub Pages deploy |
+| `.github/workflows/ci.yml` | test + clippy + doc link check (docs stay in-repo; no Pages) |
 | `tests/security.rs` | Security invariants |
 | `tests/test_critical.rs` | Critical path smoke tests |
 

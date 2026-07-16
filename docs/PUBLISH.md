@@ -30,10 +30,8 @@ cargo clippy --all-targets -- -D warnings
 python3 scripts/check_doc_links.py
 cargo test --all-targets
 cargo test --test docs_first_run
-# optional docs site / Pages:
-#   pip install -r requirements-docs.txt
-#   bash scripts/prepare_docs_site.sh && mkdocs build --strict -d site
-#   GitHub: Settings → Pages → Source: GitHub Actions (workflow docs.yml)
+# Docs live in-repo under docs/ (no GitHub Pages deploy).
+# Optional local preview only: pip install -r requirements-docs.txt && mkdocs serve
 cargo publish --dry-run
 ```
 

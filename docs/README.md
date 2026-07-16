@@ -29,16 +29,19 @@ Blackbox docs are split by **who is reading** and **what question they have**. T
 
 Guide map: [guide/README.md](guide/README.md).
 
-### Optional docs site (MkDocs)
+### How docs are published
+
+**Source of truth is this repository** — read guides under [`docs/guide/`](guide/), reference under [`docs/reference/`](reference/), and the map in this file. There is **no GitHub Pages site** for blackbox (Pages is reserved for other uses).
+
+Link check (also run in CI): `python3 scripts/check_doc_links.py`.
+
+Optional local Material site (never deployed):
 
 ```bash
-pip install -r requirements-docs.txt   # or: python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements-docs.txt
 bash scripts/prepare_docs_site.sh      # copies AGENTS.md + CHANGELOG.md into docs/
-mkdocs serve                           # http://127.0.0.1:8000
-mkdocs build --strict -d site          # static output (gitignored)
+mkdocs serve                           # http://127.0.0.1:8000 only on your machine
 ```
-
-CI: `.github/workflows/docs.yml` builds on every docs PR and deploys to **GitHub Pages** on `master`/`main` (enable Pages → Source: GitHub Actions once). Published URL (when enabled): `https://wanazhar.github.io/blackbox/`.
 
 ---
 

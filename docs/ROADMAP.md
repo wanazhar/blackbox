@@ -78,7 +78,7 @@ Full plan: [plan/trust-explain-1.3.md](plan/trust-explain-1.3.md).
 
 #### Already counted toward 1.3 (landed on master, unreleased)
 
-Trust/vault, serve Bearer-only, postmortem/anomalies/TUI jump/dashboard badges, `--eval` artifacts, capture quality + daily-driver score, path claims, human docs revamp + MkDocs/Pages pipeline.
+Trust/vault, serve Bearer-only, postmortem/anomalies/TUI jump/dashboard badges, `--eval` artifacts, capture quality + daily-driver score, path claims, human docs revamp (in-repo; no GitHub Pages).
 
 #### 1.3 implementation phases
 

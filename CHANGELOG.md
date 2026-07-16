@@ -4,6 +4,10 @@ All notable changes to **blackbox** are documented here.
 
 ## [Unreleased]
 
+### Docs
+- Dropped GitHub Pages deploy (`.github/workflows/docs.yml`); docs are in-repo under `docs/` only.
+  Optional local MkDocs preview remains; no `*.github.io` site for this project.
+
 ## [1.3.0] — 2026-07-16
 
 **Trust & explain** — when a run fails (or you return tomorrow), get a story and a jump target fast, as a human and as an agent. Ambient stays leave-on safe; trust is a packaged mode; eval has a stable score contract.

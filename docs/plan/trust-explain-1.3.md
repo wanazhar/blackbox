@@ -94,7 +94,7 @@ Leave the **1.3.0** tag only when **all** hold:
 | **T5** | **Hardened project profile** | ✅ `setup --harden` / `enable --harden`: encrypt_blobs, external key + HARDEN.txt, retention, native_log_scope=project, env allowlist; security guide |
 | **T6** | **Adapter honesty** | ✅ Drought → coverage notes + `capture.warning` (`adapter_drought`) + doctor note; unit tests in `coverage.rs` |
 | **T7** | **Ambient acknowledgment** | ✅ `capture.ambient_notice` default **false**; one stderr line on ambient record when on; A1 quiet (passthrough/OFF unchanged) |
-| **T8** | **Release gate** | ✅ 1.3.0 — tests/clippy/doc links; CHANGELOG; `cargo publish` (Pages optional if Actions minutes allow) |
+| **T8** | **Release gate** | ✅ 1.3.0 — tests/clippy/doc links; CHANGELOG; `cargo publish` (no GitHub Pages; docs in-repo) |
 
 A1–A7 and M1–M7 remain permanent.
 

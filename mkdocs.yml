@@ -1,14 +1,11 @@
-# Optional static docs site (Material for MkDocs).
-# Install: pip install mkdocs-material
-# Serve:   mkdocs serve
-# Build:   mkdocs build -d site
-#
-# Source of truth remains GitHub markdown; this file only organizes navigation.
+# Optional local static docs site (Material for MkDocs) — not deployed.
+# Source of truth: markdown under docs/ and the GitHub repo tree.
+# Install: pip install -r requirements-docs.txt
+# Serve:   bash scripts/prepare_docs_site.sh && mkdocs serve
+# Build:   mkdocs build -d site   # local only; site/ is gitignored
 
 site_name: blackbox docs
 site_description: Flight recorder, debugger, and project memory for AI-agent runs
-# GitHub Pages (project site). Override locally if needed.
-site_url: https://wanazhar.github.io/blackbox/
 repo_url: https://github.com/wanazhar/blackbox
 repo_name: wanazhar/blackbox
 edit_uri: edit/master/docs/

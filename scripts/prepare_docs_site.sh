@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Copy repo-root docs that live outside docs/ so MkDocs can resolve links.
-# Used by .github/workflows/docs.yml and local `mkdocs serve`.
+# Used for optional local `mkdocs serve` only (no GitHub Pages deploy).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cp -f "$ROOT/AGENTS.md" "$ROOT/docs/AGENTS.md"

@@ -118,4 +118,4 @@ Design-doc IDs (A1, M6, …) belong in roadmap/plan docs, not in operator guides
 - [ ] Getting-started contract still green: `cargo test --test docs_first_run`
 - [ ] Envelope / examples jq paths: `cargo test --test docs_cli_envelope`
 - [ ] New harness/wrap claims match [guide/adapters.md](guide/adapters.md) detection table
-- [ ] Docs site still builds: `bash scripts/prepare_docs_site.sh && mkdocs build --strict` (or docs.yml CI)
+- [ ] Doc links pass: `python3 scripts/check_doc_links.py` (CI runs this; no GitHub Pages deploy)

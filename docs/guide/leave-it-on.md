@@ -105,6 +105,8 @@ Only **basenames** matter (`/usr/local/bin/claude` → `claude`). Custom agent b
 - Ambient recording still redacts by default; same security model as explicit run.
 - Store remains project-local under the discovered project root—not “whatever cwd the shell felt like” without discovery rules. If discovery fails → passthrough.
 - Multi-user machines: `.blackbox/` is mode-hardened; other UIDs should not read it by default. Same-UID and disk theft are separate threats ([security.md](security.md)).
+- Prefer `blackbox setup --harden` / `enable --harden` when the machine is multi-user or you want encrypt_blobs + external key without hand-editing TOML ([security.md — harden](security.md#hardened-project-profile-harden)).
+- Ambient is **quiet by default**. Opt in to a one-line stderr notice after a recorded ambient run with `capture.ambient_notice = true` (never printed on passthrough / `BLACKBOX_OFF`).
 
 ---
 
@@ -115,6 +117,8 @@ blackbox doctor
 # enable project, ensure wrap list, run a wrapped harness, then:
 blackbox runs
 blackbox show latest
+# If a long claude/codex run shows 0 tool.call, doctor may note adapter drought
+# → check stream-json / native logs (doctor-and-capture.md)
 ```
 
 Automated gate: `tests/ambient_contract.rs` (A1).

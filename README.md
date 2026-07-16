@@ -46,7 +46,8 @@ Details: [Install](docs/guide/install.md).
 
 ```bash
 cd ~/my-project
-blackbox enable --memory-bus --install-shell   # or: blackbox enable
+blackbox setup --memory-bus --install-shell   # enable + sample + doctor
+# blackbox setup --harden                     # optional encrypt_blobs + external key
 
 blackbox run -- echo hello world
 blackbox runs
@@ -57,7 +58,7 @@ blackbox timeline latest --semantic
 Failed run?
 
 ```bash
-blackbox postmortem latest
+blackbox fail                 # one-shot focus + postmortem + anomalies + next
 blackbox show latest --tui    # e = failure story, Enter/g = jump to seq
 ```
 
@@ -118,7 +119,7 @@ Full walkthrough: [Getting started](docs/guide/getting-started.md).
 | Record | `blackbox run -- <cmd>` · `--ci` · `--eval` · `--observe-only` |
 | Ambient policy | `blackbox maybe-run` (shell wrappers) |
 | Inspect | `runs` · `show` · `timeline` · `inspect` · `tui` · `serve` |
-| Explain failure | `postmortem` · `analyze` · `diff` |
+| Explain failure | `fail` · `postmortem` · `analyze` · `diff` |
 | Continuity | `status` · `handoff` · `memory` · `claim` · `resolve` · `context` |
 | Share | `export` · `import` · `sync` · `backup` / `restore` |
 | Hygiene | `doctor` · `stats` · `scrub` · `gc` · `purge` / `rm` |

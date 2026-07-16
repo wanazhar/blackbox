@@ -33,11 +33,13 @@ blackbox run -- <cmd> [args…]
 blackbox run --name label --tag wip -- <cmd>
 blackbox run --ci --artifact-dir ./out -- <cmd>     # exit = child; write artifacts
 blackbox run --eval --artifact-dir ./out -- <cmd>   # observe-only + tags eval,ci
+# ./out → run.json postmortem.json anomalies.json summary.txt score.json
 blackbox run --observe-only -- <cmd>                # no launch mutation
 ```
 
 Ambient (after `--install-shell`): just run `claude` / `codex` / …  
-Off: `BLACKBOX_OFF=1` · nest-safe under active run.
+Off: `BLACKBOX_OFF=1` · nest-safe under active run.  
+Optional: `capture.ambient_notice = true` → one stderr line after ambient record.
 
 ---
 

@@ -43,7 +43,7 @@ MCP equivalents: `blackbox_handoff`, `blackbox_memory`, `blackbox_status` — ca
    - `none` → normal work, still respect claims and open items
 2. Read `project_memory` (goal, open items, recent runs, side-effect rollups)
 3. If `claims` show an active holder that is not you → **do not clobber**; `claim status` / coordinate / acquire
-4. Prefer `postmortem latest --json` when the last run failed
+4. Prefer `blackbox fail --json` (or MCP `blackbox_fail`) when attention is non-none or the last run failed; `postmortem` when you already have a run id
 
 ---
 

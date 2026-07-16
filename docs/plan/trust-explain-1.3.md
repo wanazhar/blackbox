@@ -4,7 +4,7 @@
 |---|---|
 | **Document** | Product + technical plan for 1.3 |
 | **Date** | 2026-07-16 |
-| **Status** | **In progress** — Phases 1–3 done (T1–T4); **do not cut release yet** |
+| **Status** | **In progress** — Phases 1–4 done (T1–T7); Phase 5 docs polish; **do not cut release (T8) yet** |
 | **Baseline** | 1.2.0 + large unreleased master train (trust, debug, docs) |
 | **Target tag** | **1.3.0** (when exit criteria below pass) |
 | **North star** | Leave ambient on safely; when something fails, get a **story and a jump target** in one breath; agents can load that story without shell-scraping |
@@ -296,14 +296,14 @@ Parallelism: T3 and T4 can proceed beside T1/T2 after Phase 1 API shapes stabili
 
 ---
 
-## Open decisions (resolve during Phase 1)
+## Open decisions (resolved)
 
-1. **Command names:** `fail` vs `why` vs `last-failure`; `setup` vs `init`  
-2. **Ambient notice default:** on vs off  
-3. **`eval-report` CLI** in 1.3 vs jq-only  
-4. **`blackbox_fail` MCP** vs composing existing tools  
-
-Recommend: **`fail` / `setup`**, ambient notice **default off**, **score.json required**, eval-report **jq/docs unless cheap**, MCP **timeline+anomalies required**, `blackbox_fail` optional alias.
+| Decision | Choice |
+|---|---|
+| Command names | **`fail`** / **`setup`** |
+| Ambient notice default | **off** (`capture.ambient_notice = false`) |
+| Eval report CLI | **jq/docs** in 1.3; `score.json` is the contract |
+| MCP fail | **`blackbox_fail`** shipped (plus timeline + anomalies) |
 
 ---
 

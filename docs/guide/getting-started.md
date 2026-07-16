@@ -141,8 +141,9 @@ Day-to-day patterns: [everyday-use.md](everyday-use.md).
 ## 4. When something fails
 
 ```bash
-blackbox postmortem latest
-blackbox handoff --json
+blackbox fail                 # one-shot: focus + postmortem + anomalies + next
+blackbox fail --json
+blackbox handoff --json       # sticky attention / memory for the next agent
 ```
 
 Step-by-step: [debug-a-failure.md](debug-a-failure.md).

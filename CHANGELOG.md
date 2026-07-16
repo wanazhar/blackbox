@@ -33,6 +33,10 @@ All notable changes to **blackbox** are documented here.
 - **Ambient notice**: `capture.ambient_notice` (default false) prints one stderr line after
   ambient record when enabled; A1 remains quiet by default
 
+### 1.3 Phase 5 — docs spine (in tree, unreleased)
+- Landing paths lead with `setup` / `fail`; harden + ambient_notice + drought documented
+  (security, configuration, doctor-and-capture, leave-it-on, skill, cheatsheet)
+
 ### Docs
 - **Human-track revamp:** `docs/README.md` index by question; `docs/WRITING.md` style guide
   (competent technical audience — no dumbing down)

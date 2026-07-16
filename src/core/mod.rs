@@ -9,5 +9,5 @@ pub use blob::BlobReference;
 pub use checkpoint::Checkpoint;
 pub use command::{CaptureMethod, CommandFidelity, CommandMetadata};
 pub use event::{Confidence, EventSource, EventStatus, SideEffect, TraceEvent};
-pub use process_tree::ProcessNode;
+pub use process_tree::{rebuild_from_events, ProcessNode};
 pub use run::{Run, RunHandle, RunStatus};

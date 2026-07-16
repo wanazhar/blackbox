@@ -131,9 +131,43 @@ pub fn timeline_lines(events: &[TraceEvent], hide_bookkeeping: bool) -> Vec<Pane
         .collect()
 }
 
-/// Process / process-tree related events.
+/// Process / process-tree related events, preferring an ASCII tree when possible.
 pub fn process_lines(events: &[TraceEvent]) -> Vec<PanelLine> {
     let mut lines = Vec::new();
+
+    // Prefer reconstructed tree (exact argv preserved in display quoting).
+    let roots = crate::core::process_tree::rebuild_from_events(events);
+    if !roots.is_empty() {
+        let forest = crate::core::process_tree::ProcessNode::format_forest(&roots);
+        lines.push(PanelLine {
+            text: format!(
+                "Process tree ({} node{})",
+                roots.iter().map(|r| r.count_nodes()).sum::<usize>(),
+                if roots.iter().map(|r| r.count_nodes()).sum::<usize>() == 1 {
+                    ""
+                } else {
+                    "s"
+                }
+            ),
+            event_id: None,
+        });
+        for line in forest.lines() {
+            lines.push(PanelLine {
+                text: line.to_string(),
+                event_id: None,
+            });
+        }
+        lines.push(PanelLine {
+            text: "─".repeat(40),
+            event_id: None,
+        });
+        lines.push(PanelLine {
+            text: "Events:".into(),
+            event_id: None,
+        });
+    }
+
+    let mut event_lines = 0usize;
     for ev in events {
         let is_process = ev.source == EventSource::Process || ev.kind.starts_with("process.");
         if !is_process {
@@ -163,14 +197,101 @@ pub fn process_lines(events: &[TraceEvent]) -> Vec<PanelLine> {
             ),
             event_id: Some(ev.id.clone()),
         });
+        event_lines += 1;
     }
-    if lines.is_empty() {
+    if event_lines == 0 && roots.is_empty() {
         lines.push(PanelLine {
             text: "(no process-tree events — Linux /proc capture or process layer inactive)"
                 .into(),
             event_id: None,
         });
     }
+    lines
+}
+
+/// Trajectory diff lines for comparing two runs in the TUI.
+pub fn trajectory_diff_lines(
+    diff: &crate::trajectory::TrajectoryDiffView,
+) -> Vec<PanelLine> {
+    let mut lines = Vec::new();
+    lines.push(PanelLine {
+        text: format!(
+            "Trajectory: {} vs {}  (common prefix {})",
+            &diff.run_a[..8.min(diff.run_a.len())],
+            &diff.run_b[..8.min(diff.run_b.len())],
+            diff.common_prefix_len
+        ),
+        event_id: None,
+    });
+    if let Some(ref div) = diff.first_divergence {
+        lines.push(PanelLine {
+            text: format!("First divergence at index {}", div.index),
+            event_id: None,
+        });
+        if let Some(ref a) = div.a {
+            lines.push(PanelLine {
+                text: format!("  A: seq={} {}", a.sequence, a.label),
+                event_id: None,
+            });
+        }
+        if let Some(ref b) = div.b {
+            lines.push(PanelLine {
+                text: format!("  B: seq={} {}", b.sequence, b.label),
+                event_id: None,
+            });
+        }
+    } else {
+        lines.push(PanelLine {
+            text: "No divergence — trajectories share full semantic prefix".into(),
+            event_id: None,
+        });
+    }
+    if !diff.prefix.is_empty() {
+        lines.push(PanelLine {
+            text: format!("Shared prefix ({} steps):", diff.prefix.len()),
+            event_id: None,
+        });
+        for step in diff.prefix.iter().take(20) {
+            lines.push(PanelLine {
+                text: format!("  = seq={} {}", step.sequence, step.label),
+                event_id: None,
+            });
+        }
+        if diff.prefix.len() > 20 {
+            lines.push(PanelLine {
+                text: format!("  … {} more", diff.prefix.len() - 20),
+                event_id: None,
+            });
+        }
+    }
+    if !diff.only_a.is_empty() {
+        lines.push(PanelLine {
+            text: format!("Only in A ({}):", diff.only_a.len()),
+            event_id: None,
+        });
+        for step in diff.only_a.iter().take(15) {
+            lines.push(PanelLine {
+                text: format!("  - seq={} {}", step.sequence, step.label),
+                event_id: None,
+            });
+        }
+    }
+    if !diff.only_b.is_empty() {
+        lines.push(PanelLine {
+            text: format!("Only in B ({}):", diff.only_b.len()),
+            event_id: None,
+        });
+        for step in diff.only_b.iter().take(15) {
+            lines.push(PanelLine {
+                text: format!("  + seq={} {}", step.sequence, step.label),
+                event_id: None,
+            });
+        }
+    }
+    lines.push(PanelLine {
+        text: "CLI: blackbox diff <a> <b> --trajectory".into(),
+        event_id: None,
+    });
     lines
 }
 
@@ -426,7 +547,7 @@ pub fn help_lines() -> Vec<PanelLine> {
         "p            Postmortem narrative",
         "h            Handoff / resume hints",
         "r            Replay guarantees (preflight)",
-        "d            Diff hint (CLI: blackbox diff)",
+        "d            Diff vs previous run (trajectory LCP)",
         "/            Filter timeline (toggle bookkeeping)",
         "?            This help",
         "q / Esc      quit",
@@ -552,13 +673,20 @@ mod tests {
         );
         e.metadata
             .insert("pid".into(), serde_json::json!(42));
+        e.metadata
+            .insert("ppid".into(), serde_json::json!(0));
         e.metadata.insert(
             "argv".into(),
             serde_json::json!(["grep", "hello world", "f.txt"]),
         );
         let lines = process_lines(&[e]);
-        assert!(lines[0].text.contains("grep"));
-        assert!(lines[0].text.contains("hello world"));
+        let joined = lines
+            .iter()
+            .map(|l| l.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(joined.contains("grep"), "{joined}");
+        assert!(joined.contains("hello world"), "{joined}");
     }
 
     #[test]

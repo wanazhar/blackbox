@@ -3,10 +3,13 @@
 //! Captures exact argv, parent-child relationships, lifecycle, and
 //! best-effort resource stats for every process observed during a run.
 
+use std::collections::{HashMap, HashSet};
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::core::command::{CaptureMethod, CommandMetadata};
+use crate::core::event::{EventSource, TraceEvent};
 
 /// Best-effort resource sample for a process.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -190,6 +193,204 @@ impl ProcessNode {
         lines.join("\n")
     }
 
+    /// Format a forest of process trees (multiple roots).
+    pub fn format_forest(roots: &[ProcessNode]) -> String {
+        if roots.is_empty() {
+            return String::new();
+        }
+        if roots.len() == 1 {
+            return roots[0].format_tree();
+        }
+        roots
+            .iter()
+            .map(|r| r.format_tree())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
+/// Rebuild process tree(s) from recorded process events.
+///
+/// Accepts `process.discovered`, `process.exec`, `process.spawned`, and
+/// `process.descendant.spawned` (plus legacy kinds) that carry `pid`/`ppid`/`argv`.
+pub fn rebuild_from_events(events: &[TraceEvent]) -> Vec<ProcessNode> {
+    #[derive(Clone)]
+    struct Info {
+        ppid: u32,
+        command: Vec<String>,
+        executable: Option<String>,
+        cwd: Option<String>,
+    }
+
+    let mut by_pid: HashMap<u32, Info> = HashMap::new();
+
+    for ev in events {
+        let is_process = ev.source == EventSource::Process || ev.kind.starts_with("process.");
+        if !is_process {
+            continue;
+        }
+        // Prefer spawn/exec/discover; skip pure exits/resources/observers for structure.
+        let useful = matches!(
+            ev.kind.as_str(),
+            "process.discovered"
+                | "process.exec"
+                | "process.spawned"
+                | "process.descendant.spawned"
+                | "process.command"
+        ) || (ev.kind.starts_with("process.")
+            && !ev.kind.contains("exit")
+            && !ev.kind.contains("observer")
+            && !ev.kind.contains("resource")
+            && !ev.kind.contains("snapshot"));
+        if !useful {
+            continue;
+        }
+
+        let pid = match ev.metadata.get("pid").and_then(|v| v.as_u64()) {
+            Some(p) => p as u32,
+            None => continue,
+        };
+        let ppid = ev
+            .metadata
+            .get("ppid")
+            .and_then(|v| v.as_u64())
+            .map(|p| p as u32)
+            .unwrap_or(0);
+
+        let command = if let Some(arr) = ev.metadata.get("argv").and_then(|v| v.as_array()) {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        } else if let Some(arr) = ev.metadata.get("command").and_then(|v| v.as_array()) {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        } else if let Some(s) = ev.metadata.get("command").and_then(|v| v.as_str()) {
+            // Prefer nested command_meta if present.
+            if let Some(meta) = ev.metadata.get("command_meta") {
+                if let Some(argv) = meta.get("argv").and_then(|v| v.as_array()) {
+                    argv.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                } else {
+                    vec![s.to_string()]
+                }
+            } else {
+                vec![s.to_string()]
+            }
+        } else if let Some(meta) = ev.metadata.get("command_meta") {
+            meta.get("argv")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
+        let executable = ev
+            .metadata
+            .get("executable")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let cwd = ev
+            .metadata
+            .get("cwd")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+
+        // Later events refine argv if we only had an empty discovery first.
+        by_pid
+            .entry(pid)
+            .and_modify(|info| {
+                if info.command.is_empty() && !command.is_empty() {
+                    info.command = command.clone();
+                }
+                if info.executable.is_none() {
+                    info.executable = executable.clone();
+                }
+                if info.cwd.is_none() {
+                    info.cwd = cwd.clone();
+                }
+                // Prefer non-zero ppid if we learn it.
+                if info.ppid == 0 && ppid != 0 {
+                    info.ppid = ppid;
+                }
+            })
+            .or_insert(Info {
+                ppid,
+                command,
+                executable,
+                cwd,
+            });
+    }
+
+    if by_pid.is_empty() {
+        return Vec::new();
+    }
+
+    let pids: HashSet<u32> = by_pid.keys().copied().collect();
+
+    // Children map: ppid -> child pids (only if parent is in set).
+    let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
+    let mut roots: Vec<u32> = Vec::new();
+    for (&pid, info) in &by_pid {
+        if info.ppid != 0 && pids.contains(&info.ppid) && info.ppid != pid {
+            children.entry(info.ppid).or_default().push(pid);
+        } else {
+            roots.push(pid);
+        }
+    }
+    roots.sort_unstable();
+    for kids in children.values_mut() {
+        kids.sort_unstable();
+    }
+
+    fn build_node(
+        pid: u32,
+        by_pid: &HashMap<u32, Info>,
+        children: &HashMap<u32, Vec<u32>>,
+        visiting: &mut HashSet<u32>,
+    ) -> ProcessNode {
+        if !visiting.insert(pid) {
+            // Cycle guard
+            return ProcessNode::new(pid, 0, vec!["[cycle]".into()]);
+        }
+        let info = by_pid.get(&pid);
+        let (ppid, command, executable, cwd) = match info {
+            Some(i) => (i.ppid, i.command.clone(), i.executable.clone(), i.cwd.clone()),
+            None => (0, vec![format!("[{pid}]")], None, None),
+        };
+        let mut node = ProcessNode::with_meta(
+            pid,
+            ppid,
+            command,
+            executable,
+            cwd,
+            CaptureMethod::ProcPoller,
+        );
+        if let Some(kids) = children.get(&pid) {
+            for &child_pid in kids {
+                node.children
+                    .push(build_node(child_pid, by_pid, children, visiting));
+            }
+        }
+        visiting.remove(&pid);
+        node
+    }
+
+    let mut visiting = HashSet::new();
+    roots
+        .into_iter()
+        .map(|pid| build_node(pid, &by_pid, &children, &mut visiting))
+        .collect()
+}
+
+impl ProcessNode {
+
     fn format_tree_inner(&self, prefix: &str, is_root: bool, is_last: bool, lines: &mut Vec<String>) {
         let connector = if is_root {
             ""
@@ -328,5 +529,40 @@ mod tests {
             .push(ProcessNode::new(3, 2, vec!["c".into()]));
         root.children.push(mid);
         assert_eq!(root.depth(), 3);
+    }
+
+    fn proc_ev(kind: &str, pid: u32, ppid: u32, argv: &[&str]) -> TraceEvent {
+        let mut ev = TraceEvent::new("run", EventSource::Process, kind);
+        ev.metadata.insert("pid".into(), serde_json::json!(pid));
+        ev.metadata.insert("ppid".into(), serde_json::json!(ppid));
+        ev.metadata
+            .insert("argv".into(), serde_json::json!(argv.to_vec()));
+        ev
+    }
+
+    #[test]
+    fn rebuild_from_events_builds_tree() {
+        let events = vec![
+            proc_ev("process.discovered", 100, 0, &["bash"]),
+            proc_ev("process.exec", 101, 100, &["rg", "Session", "src/"]),
+            proc_ev("process.exec", 102, 100, &["git", "diff"]),
+            proc_ev("process.exec", 103, 101, &["node", "test-runner.js"]),
+        ];
+        let roots = rebuild_from_events(&events);
+        assert_eq!(roots.len(), 1);
+        assert_eq!(roots[0].invocation.pid, 100);
+        assert_eq!(roots[0].count_nodes(), 4);
+        let text = ProcessNode::format_forest(&roots);
+        assert!(text.contains("bash"));
+        assert!(text.contains("rg") || text.contains("Session"));
+        assert!(text.contains("node") || text.contains("test-runner"));
+    }
+
+    #[test]
+    fn rebuild_empty_without_process_events() {
+        let mut ev = TraceEvent::new("run", EventSource::Terminal, "terminal.output");
+        ev.metadata
+            .insert("preview".into(), serde_json::json!("hi"));
+        assert!(rebuild_from_events(&[ev]).is_empty());
     }
 }

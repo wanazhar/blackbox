@@ -1,4 +1,5 @@
 pub mod event;
+pub mod panels;
 pub mod runs;
 pub mod timeline_v;
 pub mod tui;

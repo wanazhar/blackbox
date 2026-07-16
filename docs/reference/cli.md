@@ -293,6 +293,28 @@ Show detailed view of a single run.
 
 ```bash
 blackbox show <run-id> [--json] [--tui] [--transcript] [--tools] [--store <path>]
+
+With `--tui`, the daily-driver screen shows a **run header** (status, adapter,
+duration, capture quality, files, failures, side-effect risk, observe-only vs
+record mode) plus a content panel switched by keys:
+
+| Key | Panel |
+|---|---|
+| `t` | Timeline |
+| `o` | Processes |
+| `f` | Files |
+| `e` | Failures |
+| `x` | Side effects |
+| `c` | Capture quality |
+| `p` | Postmortem |
+| `h` | Handoff / resume |
+| `r` | Replay preflight (guarantees) |
+| `d` | Diff CLI hint |
+| `/` | Toggle bookkeeping on timeline |
+| `?` | Help |
+| `q` | Quit |
+
+Equivalent CLI/JSON surfaces remain available without the TUI.
 ```
 
 | Arg | Description |

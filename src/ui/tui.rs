@@ -1,3 +1,6 @@
+//! Daily-driver TUI — one screen for postmortem, processes, files, failures,
+//! side effects, capture quality, handoff, and replay guarantees.
+
 use std::io;
 use std::time::Duration;
 
@@ -11,114 +14,378 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
 use ratatui::Terminal;
 
 use crate::core::event::TraceEvent;
+use crate::core::run::Run;
 use crate::storage::sqlite::SqliteStore;
 use crate::storage::TraceStore;
-use crate::ui::event::EventView;
-use crate::ui::runs::RunsView;
-use crate::ui::timeline_v::TimelineView;
+use crate::ui::panels::{
+    build_header, coverage_lines, failure_lines, file_change_lines, help_lines, process_lines,
+    replay_preflight_lines, side_effect_lines, timeline_lines, PanelLine, RunHeader,
+};
 
-/// Which panel currently has focus.
+/// Which pane has keyboard focus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Focus {
     Runs,
+    Content,
+}
+
+/// Content panel mode (daily-driver workflow).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ContentMode {
     Timeline,
-    EventDetail,
+    Processes,
+    Files,
+    Failures,
+    SideEffects,
+    CaptureQuality,
+    Postmortem,
+    Handoff,
+    Replay,
+    Help,
+}
+
+impl ContentMode {
+    fn title(self) -> &'static str {
+        match self {
+            Self::Timeline => "Timeline",
+            Self::Processes => "Processes",
+            Self::Files => "Files",
+            Self::Failures => "Failures",
+            Self::SideEffects => "Side effects",
+            Self::CaptureQuality => "Capture quality",
+            Self::Postmortem => "Postmortem",
+            Self::Handoff => "Handoff",
+            Self::Replay => "Replay preflight",
+            Self::Help => "Help",
+        }
+    }
+
+    fn key_hint(self) -> &'static str {
+        match self {
+            Self::Timeline => "t",
+            Self::Processes => "o",
+            Self::Files => "f",
+            Self::Failures => "e",
+            Self::SideEffects => "x",
+            Self::CaptureQuality => "c",
+            Self::Postmortem => "p",
+            Self::Handoff => "h",
+            Self::Replay => "r",
+            Self::Help => "?",
+        }
+    }
 }
 
 /// The main TUI application.
-pub struct App {
+struct App {
     focus: Focus,
-    runs: RunsView,
-    _timeline: TimelineView,
-    _event_detail: EventView,
-    events: Vec<TraceEvent>,
+    mode: ContentMode,
+    runs: Vec<Run>,
     selected_run_idx: usize,
-    selected_event_idx: usize,
-    run_ids: Vec<String>,
+    events: Vec<TraceEvent>,
+    content_lines: Vec<PanelLine>,
+    content_idx: usize,
+    scroll: u16,
+    hide_bookkeeping: bool,
+    header: RunHeader,
+    status: String,
+    postmortem_text: String,
+    handoff_text: String,
     store: SqliteStore,
 }
 
 impl App {
     async fn load(store: SqliteStore, preferred_run_id: Option<&str>) -> anyhow::Result<Self> {
         let runs = store.list_runs().await?;
-        let run_ids: Vec<String> = runs.iter().map(|r| r.id.clone()).collect();
-
-        // Resolve preferred run: exact id, prefix match, "latest", or first
         let selected_run_idx = if let Some(pref) = preferred_run_id {
             if pref == "latest" {
-                0 // list_runs is most-recent-first
+                0
             } else {
-                run_ids
-                    .iter()
-                    .position(|id| id == pref || id.starts_with(pref))
+                runs.iter()
+                    .position(|r| r.id == pref || r.id.starts_with(pref))
                     .unwrap_or(0)
             }
         } else {
             0
         };
 
-        // Load events for the selected run (if any)
-        let events = if let Some(run_id) = run_ids.get(selected_run_idx) {
-            store.get_events(run_id).await?
-        } else {
-            Vec::new()
+        let mut app = Self {
+            focus: Focus::Runs,
+            mode: ContentMode::Timeline,
+            runs,
+            selected_run_idx,
+            events: Vec::new(),
+            content_lines: Vec::new(),
+            content_idx: 0,
+            scroll: 0,
+            hide_bookkeeping: true,
+            header: RunHeader::default(),
+            status: "Tab focus · ? help · q quit".into(),
+            postmortem_text: String::new(),
+            handoff_text: String::new(),
+            store,
+        };
+        app.reload_selected_run().await;
+        Ok(app)
+    }
+
+    async fn reload_selected_run(&mut self) {
+        let Some(run) = self.runs.get(self.selected_run_idx).cloned() else {
+            self.events.clear();
+            self.header = RunHeader::default();
+            self.content_lines.clear();
+            self.postmortem_text.clear();
+            self.handoff_text.clear();
+            return;
         };
 
-        let mut event_detail = EventView::new();
-        if let Some(ev) = events.first() {
-            event_detail.set_event(ev.clone());
+        match self.store.get_events(&run.id).await {
+            Ok(events) => self.events = events,
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to load events");
+                self.events = Vec::new();
+                self.status = format!("error loading events: {e}");
+            }
         }
 
-        Ok(Self {
-            focus: Focus::Runs,
-            runs: RunsView::new(runs),
-            _timeline: TimelineView::new(events.clone()),
-            _event_detail: event_detail,
-            events,
-            selected_run_idx,
-            selected_event_idx: 0,
-            run_ids,
-            store,
-        })
+        self.header = build_header(&run, &self.events);
+        self.content_idx = 0;
+        self.scroll = 0;
+
+        // Build postmortem / handoff text from summary module.
+        match crate::summary::build_summary(
+            &self.store,
+            &run,
+            crate::summary::SummaryOptions::default(),
+        )
+        .await
+        {
+            Ok(summary) => {
+                self.postmortem_text = crate::summary::format_summary_text(&summary);
+                let mut handoff = String::new();
+                handoff.push_str(&format!(
+                    "Run: {} ({:?})\n",
+                    summary.short_id, summary.status
+                ));
+                if !summary.narrative.is_empty() {
+                    handoff.push_str("\nNarrative (truncated):\n");
+                    for line in summary.narrative.lines().take(12) {
+                        handoff.push_str(line);
+                        handoff.push('\n');
+                    }
+                }
+                if let Some(ref cmd) = summary.resume.command {
+                    handoff.push_str(&format!("\nResume: {}\n", cmd.join(" ")));
+                } else {
+                    handoff.push_str("\nResume: (not available)\n");
+                }
+                handoff.push_str("\nCLI:\n");
+                handoff.push_str("  blackbox handoff\n");
+                handoff.push_str(&format!(
+                    "  blackbox context {} --for-resume\n",
+                    summary.short_id
+                ));
+                handoff.push_str(&format!("  blackbox postmortem {}\n", summary.short_id));
+                if !summary.failure_fix_chains.is_empty() {
+                    handoff.push_str(&format!(
+                        "\nFailure-fix chains: {}\n",
+                        summary.failure_fix_chains.len()
+                    ));
+                }
+                self.handoff_text = handoff;
+            }
+            Err(e) => {
+                self.postmortem_text = format!("(postmortem unavailable: {e})");
+                self.handoff_text = format!("(handoff unavailable: {e})");
+            }
+        }
+
+        self.rebuild_content_lines();
+        self.status = format!(
+            "loaded {} · {} events · mode={}",
+            self.header.short_id,
+            self.events.len(),
+            self.header.mode
+        );
+    }
+
+    fn rebuild_content_lines(&mut self) {
+        self.content_lines = match self.mode {
+            ContentMode::Timeline => timeline_lines(&self.events, self.hide_bookkeeping),
+            ContentMode::Processes => process_lines(&self.events),
+            ContentMode::Files => {
+                let mut lines = file_change_lines(&self.events);
+                if lines.is_empty() {
+                    lines.push(PanelLine {
+                        text: "(no filesystem changes observed)".into(),
+                        event_id: None,
+                    });
+                }
+                lines
+            }
+            ContentMode::Failures => {
+                let mut lines = failure_lines(&self.events);
+                if lines.is_empty() {
+                    lines.push(PanelLine {
+                        text: "(no failures or warnings detected)".into(),
+                        event_id: None,
+                    });
+                }
+                lines
+            }
+            ContentMode::SideEffects => side_effect_lines(&self.events),
+            ContentMode::CaptureQuality => coverage_lines(&self.events),
+            ContentMode::Postmortem => self
+                .postmortem_text
+                .lines()
+                .map(|l| PanelLine {
+                    text: l.to_string(),
+                    event_id: None,
+                })
+                .collect(),
+            ContentMode::Handoff => self
+                .handoff_text
+                .lines()
+                .map(|l| PanelLine {
+                    text: l.to_string(),
+                    event_id: None,
+                })
+                .collect(),
+            ContentMode::Replay => replay_preflight_lines(&self.events),
+            ContentMode::Help => help_lines(),
+        };
+        if self.content_idx >= self.content_lines.len() {
+            self.content_idx = self.content_lines.len().saturating_sub(1);
+        }
+    }
+
+    fn set_mode(&mut self, mode: ContentMode) {
+        self.mode = mode;
+        self.focus = Focus::Content;
+        self.content_idx = 0;
+        self.scroll = 0;
+        self.rebuild_content_lines();
+        self.status = format!("{} panel ({})", mode.title(), mode.key_hint());
     }
 
     async fn handle_key(&mut self, key: KeyEvent) -> bool {
+        // Global keys (work regardless of focus).
         match key.code {
-            // Quit
             KeyCode::Char('q') | KeyCode::Esc => return false,
-
-            // Tab to cycle focus
+            KeyCode::Char('?') => {
+                self.set_mode(ContentMode::Help);
+                return true;
+            }
+            KeyCode::Char('t') => {
+                self.set_mode(ContentMode::Timeline);
+                return true;
+            }
+            KeyCode::Char('o') => {
+                self.set_mode(ContentMode::Processes);
+                return true;
+            }
+            KeyCode::Char('f') => {
+                self.set_mode(ContentMode::Files);
+                return true;
+            }
+            KeyCode::Char('e') => {
+                self.set_mode(ContentMode::Failures);
+                return true;
+            }
+            KeyCode::Char('x') => {
+                self.set_mode(ContentMode::SideEffects);
+                return true;
+            }
+            KeyCode::Char('c') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.set_mode(ContentMode::CaptureQuality);
+                return true;
+            }
+            KeyCode::Char('p') => {
+                self.set_mode(ContentMode::Postmortem);
+                return true;
+            }
+            KeyCode::Char('h') => {
+                self.set_mode(ContentMode::Handoff);
+                return true;
+            }
+            KeyCode::Char('r') => {
+                self.set_mode(ContentMode::Replay);
+                return true;
+            }
+            KeyCode::Char('d') => {
+                self.status = if let Some(run) = self.runs.get(self.selected_run_idx) {
+                    let short = run.id.chars().take(8).collect::<String>();
+                    format!("diff: blackbox diff previous {short} --trajectory")
+                } else {
+                    "diff: blackbox diff previous latest --trajectory".into()
+                };
+                return true;
+            }
+            KeyCode::Char('/') => {
+                self.hide_bookkeeping = !self.hide_bookkeeping;
+                if self.mode == ContentMode::Timeline {
+                    self.rebuild_content_lines();
+                }
+                self.status = if self.hide_bookkeeping {
+                    "timeline: bookkeeping hidden".into()
+                } else {
+                    "timeline: showing all events".into()
+                };
+                return true;
+            }
             KeyCode::Tab => {
                 self.focus = match self.focus {
-                    Focus::Runs => Focus::Timeline,
-                    Focus::Timeline => Focus::EventDetail,
-                    Focus::EventDetail => Focus::Runs,
+                    Focus::Runs => Focus::Content,
+                    Focus::Content => Focus::Runs,
                 };
+                return true;
             }
+            _ => {}
+        }
 
-            // Navigation within panels
+        match key.code {
             KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
             KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
-
-            // Enter to select from runs list
-            KeyCode::Enter if self.focus == Focus::Runs => {
-                self.select_run().await;
+            KeyCode::PageUp => self.move_selection(-10),
+            KeyCode::PageDown => self.move_selection(10),
+            KeyCode::Home => {
+                match self.focus {
+                    Focus::Runs => self.selected_run_idx = 0,
+                    Focus::Content => {
+                        self.content_idx = 0;
+                        self.scroll = 0;
+                    }
+                }
             }
-
-            // Enter to select event from timeline
-            KeyCode::Enter if self.focus == Focus::Timeline => {
-                self.select_event();
-            }
-
-            // Home/End
-            KeyCode::Home => self.move_to_top(),
-            KeyCode::End => self.move_to_bottom(),
-
+            KeyCode::End => match self.focus {
+                Focus::Runs if !self.runs.is_empty() => {
+                    self.selected_run_idx = self.runs.len() - 1;
+                }
+                Focus::Content if !self.content_lines.is_empty() => {
+                    self.content_idx = self.content_lines.len() - 1;
+                }
+                _ => {}
+            },
+            KeyCode::Enter => match self.focus {
+                Focus::Runs => {
+                    self.reload_selected_run().await;
+                    self.focus = Focus::Content;
+                }
+                Focus::Content => {
+                    if let Some(line) = self.content_lines.get(self.content_idx) {
+                        if let Some(ref id) = line.event_id {
+                            self.status = format!("event {} — use blackbox inspect {id}", &id[..8.min(id.len())]);
+                        } else {
+                            self.status = line.text.chars().take(80).collect();
+                        }
+                    }
+                }
+            },
             _ => {}
         }
         true
@@ -127,120 +394,107 @@ impl App {
     fn move_selection(&mut self, delta: i32) {
         match self.focus {
             Focus::Runs => {
-                let max = self.run_ids.len();
-                if max == 0 {
+                if self.runs.is_empty() {
                     return;
                 }
                 let new = (self.selected_run_idx as i32 + delta).max(0) as usize;
-                self.selected_run_idx = new.min(max - 1);
+                self.selected_run_idx = new.min(self.runs.len() - 1);
             }
-            Focus::Timeline => {
-                let max = self.events.len();
-                if max == 0 {
+            Focus::Content => {
+                if self.content_lines.is_empty() {
                     return;
                 }
-                let new = (self.selected_event_idx as i32 + delta).max(0) as usize;
-                self.selected_event_idx = new.min(max - 1);
-            }
-            Focus::EventDetail => {}
-        }
-    }
-
-    fn move_to_top(&mut self) {
-        match self.focus {
-            Focus::Runs if !self.run_ids.is_empty() => {
-                self.selected_run_idx = 0;
-            }
-            Focus::Timeline if !self.events.is_empty() => {
-                self.selected_event_idx = 0;
-            }
-            _ => {}
-        }
-    }
-
-    fn move_to_bottom(&mut self) {
-        match self.focus {
-            Focus::Runs if !self.run_ids.is_empty() => {
-                self.selected_run_idx = self.run_ids.len() - 1;
-            }
-            Focus::Timeline if !self.events.is_empty() => {
-                self.selected_event_idx = self.events.len() - 1;
-            }
-            _ => {}
-        }
-    }
-
-    async fn select_run(&mut self) {
-        if let Some(run_id) = self.run_ids.get(self.selected_run_idx) {
-            let run_id = run_id.clone();
-            match self.store.get_events(&run_id).await {
-                Ok(events) => {
-                    self.events = events;
-                    self.selected_event_idx = 0;
-                    self._timeline = TimelineView::new(self.events.clone());
-                    self._event_detail = EventView::new();
-                }
-                Err(e) => {
-                    // M-30: Log DB error so silent failures are diagnosable.
-                    tracing::warn!(run_id = %run_id, error = %e, "failed to load events for run");
-                    self.events = Vec::new();
-                    self.selected_event_idx = 0;
-                    self._timeline = TimelineView::new(Vec::new());
-                    self._event_detail = EventView::new();
+                let new = (self.content_idx as i32 + delta).max(0) as usize;
+                self.content_idx = new.min(self.content_lines.len() - 1);
+                // Keep selection roughly in view.
+                if self.content_idx < self.scroll as usize {
+                    self.scroll = self.content_idx as u16;
                 }
             }
-        }
-    }
-
-    fn select_event(&mut self) {
-        if let Some(ev) = self.events.get(self.selected_event_idx) {
-            self._event_detail.set_event(ev.clone());
         }
     }
 }
 
 fn render_layout(frame: &mut Frame, app: &App) {
-    let chunks = Layout::default()
+    let root = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Percentage(50), // Runs + Timeline
-            Constraint::Percentage(50), // Event detail
+            Constraint::Length(4), // header
+            Constraint::Min(5),    // body
+            Constraint::Length(1), // status
+            Constraint::Length(1), // keymap
         ])
         .split(frame.area());
 
-    let top_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(40), // Runs list
-            Constraint::Percentage(60), // Timeline
-        ])
-        .split(chunks[0]);
+    render_header(frame, root[0], app);
+    render_body(frame, root[1], app);
+    render_status(frame, root[2], app);
+    render_keymap(frame, root[3], app);
+}
 
-    // Runs panel (highlighted if focused)
-    let runs_style = if app.focus == Focus::Runs {
+fn render_header(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {
+    let h = &app.header;
+    let line1 = Line::from(vec![
+        Span::styled(
+            format!("{} ", h.name),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(format!("[{}]  ", h.short_id)),
+        Span::styled(
+            format!("{}  ", h.status),
+            match h.status.as_str() {
+                "Succeeded" => Style::default().fg(Color::Green),
+                "Failed" | "Cancelled" => Style::default().fg(Color::Red),
+                "Running" => Style::default().fg(Color::Yellow),
+                _ => Style::default(),
+            },
+        ),
+        Span::raw(format!(
+            "adapter={}  dur={}  mode={}",
+            h.adapter, h.duration, h.mode
+        )),
+    ]);
+    let line2 = Line::from(vec![
+        Span::raw(format!(
+            "capture={}  files={}  failures={}  side-effects={}",
+            h.capture_quality, h.files_changed, h.failure_count, h.side_effect_risk
+        )),
+    ]);
+    let para = Paragraph::new(vec![line1, line2]).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("Blackbox · daily driver"),
+    );
+    frame.render_widget(para, area);
+}
+
+fn render_body(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(32), Constraint::Percentage(68)])
+        .split(area);
+
+    // Runs list
+    let runs_border = if app.focus == Focus::Runs {
         Style::default().fg(Color::Yellow)
     } else {
         Style::default()
     };
-    let runs_block = Block::default()
-        .borders(Borders::ALL)
-        .title("Runs")
-        .style(runs_style);
-    // Render runs content
     let runs_items: Vec<Line> = app
-        .runs
         .runs
         .iter()
         .enumerate()
         .map(|(i, run)| {
             let name = run.name.as_deref().unwrap_or("(unnamed)");
             let status = match &run.status {
-                crate::core::run::RunStatus::Succeeded => "\u{2713}",
-                crate::core::run::RunStatus::Failed => "\u{2717}",
-                crate::core::run::RunStatus::Running => "\u{25CF}",
+                crate::core::run::RunStatus::Succeeded => "✓",
+                crate::core::run::RunStatus::Failed => "✗",
+                crate::core::run::RunStatus::Running => "●",
                 _ => "?",
             };
-            let style = if i == app.selected_run_idx && app.focus == Focus::Runs {
+            let style = if i == app.selected_run_idx {
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD)
@@ -258,91 +512,84 @@ fn render_layout(frame: &mut Frame, app: &App) {
             ))
         })
         .collect();
-    let runs_para = Paragraph::new(runs_items).block(runs_block);
-    frame.render_widget(runs_para, top_chunks[0]);
+    let runs_para = Paragraph::new(runs_items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Runs")
+                .border_style(runs_border),
+        )
+        .wrap(Wrap { trim: true });
+    frame.render_widget(runs_para, cols[0]);
 
-    // Timeline panel
-    let timeline_style = if app.focus == Focus::Timeline {
+    // Content panel
+    let content_border = if app.focus == Focus::Content {
         Style::default().fg(Color::Yellow)
     } else {
         Style::default()
     };
-    let timeline_block = Block::default()
-        .borders(Borders::ALL)
-        .title("Timeline")
-        .style(timeline_style);
-    let timeline_items: Vec<Line> = app
-        .events
+    let title = format!(
+        "{}  [{}]  ({}/{})",
+        app.mode.title(),
+        app.mode.key_hint(),
+        if app.content_lines.is_empty() {
+            0
+        } else {
+            app.content_idx + 1
+        },
+        app.content_lines.len()
+    );
+    let visible: Vec<Line> = app
+        .content_lines
         .iter()
         .enumerate()
-        .map(|(i, ev)| {
-            let offset = ev.started_at.format("%H:%M:%S").to_string();
-            let style = if i == app.selected_event_idx && app.focus == Focus::Timeline {
+        .map(|(i, line)| {
+            let style = if i == app.content_idx && app.focus == Focus::Content {
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
             };
-            Line::from(vec![Span::styled(
-                format!("{}  {}  {:?}", offset, ev.kind, ev.status),
-                style,
-            )])
+            Line::from(Span::styled(line.text.clone(), style))
         })
         .collect();
-    let timeline_para = Paragraph::new(timeline_items).block(timeline_block);
-    frame.render_widget(timeline_para, top_chunks[1]);
+    let content_para = Paragraph::new(visible)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(title)
+                .border_style(content_border),
+        )
+        .scroll((app.scroll, 0))
+        .wrap(Wrap { trim: false });
+    frame.render_widget(content_para, cols[1]);
+}
 
-    // Event detail panel
-    let detail_style = if app.focus == Focus::EventDetail {
-        Style::default().fg(Color::Yellow)
-    } else {
-        Style::default()
+fn render_status(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {
+    let para = Paragraph::new(Span::styled(
+        app.status.chars().take(area.width as usize).collect::<String>(),
+        Style::default().fg(Color::DarkGray),
+    ));
+    frame.render_widget(para, area);
+}
+
+fn render_keymap(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {
+    let focus = match app.focus {
+        Focus::Runs => "runs",
+        Focus::Content => "content",
     };
-    let detail_block = Block::default()
-        .borders(Borders::ALL)
-        .title("Event Details")
-        .style(detail_style);
-    let detail_text = match app.events.get(app.selected_event_idx) {
-        Some(ev) => {
-            let preview = ev
-                .metadata
-                .get("preview")
-                .and_then(|v| v.as_str())
-                .or_else(|| ev.metadata.get("tool_name").and_then(|v| v.as_str()))
-                .unwrap_or("");
-            // M-29: Truncate long metadata previews to avoid rendering huge text blocks.
-            const MAX_PREVIEW: usize = 200;
-            let preview = if preview.len() > MAX_PREVIEW {
-                let mut end = MAX_PREVIEW;
-                while !preview.is_char_boundary(end) {
-                    end -= 1;
-                }
-                &preview[..end]
-            } else {
-                preview
-            };
-            let blob = ev.output_blob.as_deref().unwrap_or("—");
-            format!(
-                "ID:     {}\nKind:   {}\nSource: {:?}\nStatus: {:?}\nStart:  {}\nBlob:   {}\n\n{}",
-                ev.id,
-                ev.kind,
-                ev.source,
-                ev.status,
-                ev.started_at.format("%H:%M:%S.%3f"),
-                blob,
-                preview,
-            )
-        }
-        None => "Select an event to inspect".to_string(),
-    };
-    let detail_para = Paragraph::new(detail_text).block(detail_block);
-    frame.render_widget(detail_para, chunks[1]);
+    let text = format!(
+        " focus={focus} │ t timeline  o proc  f files  e fail  x side  c cover  p post  h handoff  r replay  d diff  / filter  ? help  q quit "
+    );
+    let para = Paragraph::new(Span::styled(
+        text.chars().take(area.width as usize).collect::<String>(),
+        Style::default().bg(Color::DarkGray).fg(Color::White),
+    ));
+    frame.render_widget(para, area);
 }
 
 /// Run the TUI event loop, opening the default store path.
-///
-/// `run_id` may be a full UUID, a prefix, `"latest"`, or `None`.
 pub async fn run_tui(run_id: Option<&str>) -> anyhow::Result<()> {
     let paths = crate::config::BlackboxPaths::resolve(None, None)?;
     paths.ensure_dirs()?;
@@ -384,7 +631,6 @@ pub async fn run_tui_with_store(store: SqliteStore, run_id: Option<&str>) -> any
     }
     .await;
 
-    // M-31: Always restore terminal state; log errors for diagnostics.
     if let Err(e) = disable_raw_mode() {
         tracing::warn!(error = %e, "failed to disable raw mode during cleanup");
     }

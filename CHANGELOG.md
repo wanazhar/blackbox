@@ -10,6 +10,9 @@ All notable changes to **blackbox** are documented here.
 - **Process-tree enrich**: dense poll, optional redacted environ, Linux child-subreaper exit codes
 - **Capture coverage / lag / doctor daily-driver score**
 - **Published local overhead numbers** (Linux aarch64 debug): see `docs/guide/overhead.md`
+- **RAM**: counters-only PTY recorder, capped end-of-run loads, incremental SSE, SQLite cache cap
+- **Privacy**: owner-only store modes; env allowlist default; env value scan; git/process argv redaction
+- **Export/sync/serve**: H-08 blob re-scan on portable; serve Bearer-only (no `?token=`); scrub env/diff blobs + auto-GC
 
 ## [1.2.0] — 2026-07-12
 

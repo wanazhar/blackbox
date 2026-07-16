@@ -137,6 +137,8 @@ pub struct CapturePolicy {
     pub process_dense_poll: bool,
     pub process_environ: bool,
     pub process_subreaper: bool,
+    pub env_capture: EnvCaptureMode,
+    pub store_git_diffs: bool,
 }
 
 impl Default for CapturePolicy {
@@ -148,16 +150,20 @@ impl Default for CapturePolicy {
             process_dense_poll: false,
             process_environ: false,
             process_subreaper: true,
+            env_capture: EnvCaptureMode::Allowlist,
+            store_git_diffs: true,
         }
     }
 }
 
 impl CapturePolicy {
-    /// Overlay process enrich fields from project CaptureConfig.
+    /// Overlay process / privacy capture fields from project CaptureConfig.
     pub fn with_process_from_config(mut self, cfg: &CaptureConfig) -> Self {
         self.process_dense_poll = cfg.process_dense_poll;
         self.process_environ = cfg.process_environ;
         self.process_subreaper = cfg.process_subreaper;
+        self.env_capture = cfg.env_capture;
+        self.store_git_diffs = cfg.store_git_diffs;
         self
     }
 }
@@ -357,6 +363,105 @@ pub struct CaptureConfig {
     /// Default true; set false to disable waitpid reaping.
     #[serde(default = "default_true")]
     pub process_subreaper: bool,
+    /// Environment capture mode: `allowlist` (default, low residual secrets) or `full`.
+    #[serde(default)]
+    pub env_capture: EnvCaptureMode,
+    /// When false, store only redacted git diff preview + stats (no full diff blob).
+    /// Default true for debug fidelity; set false for tighter privacy/disk.
+    #[serde(default = "default_true")]
+    pub store_git_diffs: bool,
+}
+
+/// How much of the process environment is stored at run start.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum EnvCaptureMode {
+    /// Only common non-secret keys (PATH, HOME, TERM, CI, …) + BLACKBOX_*.
+    #[default]
+    Allowlist,
+    /// Full environment after name+value redaction.
+    Full,
+}
+
+impl EnvCaptureMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Allowlist => "allowlist",
+            Self::Full => "full",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "allowlist" | "allow" | "minimal" | "safe" => Some(Self::Allowlist),
+            "full" | "all" | "complete" => Some(Self::Full),
+            _ => None,
+        }
+    }
+}
+
+/// Keys retained under [`EnvCaptureMode::Allowlist`] (exact match, case-sensitive
+/// for typical Unix names; also any key starting with `BLACKBOX_`).
+pub fn env_allowlist_keep(name: &str) -> bool {
+    if name.starts_with("BLACKBOX_") {
+        return true;
+    }
+    matches!(
+        name,
+        "PATH"
+            | "HOME"
+            | "USER"
+            | "USERNAME"
+            | "LOGNAME"
+            | "SHELL"
+            | "TERM"
+            | "TERM_PROGRAM"
+            | "COLORTERM"
+            | "LANG"
+            | "LC_ALL"
+            | "LC_CTYPE"
+            | "PWD"
+            | "OLDPWD"
+            | "TMPDIR"
+            | "TMP"
+            | "TEMP"
+            | "EDITOR"
+            | "VISUAL"
+            | "HOSTNAME"
+            | "HOST"
+            | "CI"
+            | "GITHUB_ACTIONS"
+            | "GITHUB_WORKFLOW"
+            | "GITHUB_REPOSITORY"
+            | "GITHUB_REF"
+            | "GITHUB_SHA"
+            | "RUNNER_OS"
+            | "RUNNER_ARCH"
+            | "XDG_RUNTIME_DIR"
+            | "XDG_CONFIG_HOME"
+            | "XDG_DATA_HOME"
+            | "XDG_CACHE_HOME"
+            | "XDG_SESSION_TYPE"
+            | "DISPLAY"
+            | "WAYLAND_DISPLAY"
+            | "SSH_CONNECTION"
+            | "SSH_CLIENT"
+            | "SSH_TTY"
+            | "RUST_LOG"
+            | "RUST_BACKTRACE"
+            | "CARGO_HOME"
+            | "RUSTUP_HOME"
+            | "GOPATH"
+            | "GOROOT"
+            | "NODE_ENV"
+            | "PYTHONPATH"
+            | "VIRTUAL_ENV"
+            | "CONDA_DEFAULT_ENV"
+            | "TZ"
+            | "COLUMNS"
+            | "LINES"
+    ) || name.starts_with("LC_")
+        || name.starts_with("XDG_")
 }
 
 fn default_wrap() -> Vec<String> {
@@ -403,6 +508,8 @@ impl Default for CaptureConfig {
             process_dense_poll: false,
             process_environ: false,
             process_subreaper: true,
+            env_capture: EnvCaptureMode::Allowlist,
+            store_git_diffs: true,
         }
     }
 }

@@ -77,9 +77,73 @@ pub async fn scrub_store(
                 }
             }
         }
+
+        // Checkpoints: rewrite environment/diff/transcript blob refs
+        for mut cp in store.get_checkpoints(&run.id).await? {
+            report.checkpoints_scanned += 1;
+            let mut dirty = false;
+            for slot in [
+                &mut cp.git_diff_blob,
+                &mut cp.filesystem_manifest_blob,
+                &mut cp.environment_blob,
+                &mut cp.transcript_blob,
+            ] {
+                if let Some(new_key) =
+                    scrub_blob_key(store.as_ref(), &scanner, slot.as_deref(), dry_run, &mut report)
+                        .await?
+                {
+                    *slot = Some(new_key);
+                    dirty = true;
+                }
+            }
+            if dirty && !dry_run {
+                if let Err(e) = store.update_checkpoint(&cp).await {
+                    tracing::warn!(error = %e, checkpoint = %cp.id, "scrub: checkpoint update failed");
+                }
+            }
+        }
     }
 
     Ok(report)
+}
+
+/// If `key` is a content-addressed blob containing secrets, rewrite and return new key.
+async fn scrub_blob_key(
+    store: &dyn TraceStore,
+    scanner: &SecretScanner,
+    key: Option<&str>,
+    dry_run: bool,
+    report: &mut ScrubReport,
+) -> anyhow::Result<Option<String>> {
+    let Some(key) = key else {
+        return Ok(None);
+    };
+    if key.len() != 64 || !key.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Ok(None);
+    }
+    let Some(bref) = BlobReference::try_new(key.to_string(), 0) else {
+        return Ok(None);
+    };
+    match store.load_blob(&bref).await {
+        Ok(data) => {
+            if let Ok(text) = std::str::from_utf8(&data) {
+                let redacted = scanner.redact(text);
+                if redacted.as_bytes() != data.as_slice() {
+                    report.blobs_rewritten += 1;
+                    if dry_run {
+                        return Ok(Some(key.to_string())); // signal dirty without write
+                    }
+                    let new_ref = store.store_blob(redacted.as_bytes()).await?;
+                    return Ok(Some(new_ref.key));
+                }
+            }
+            Ok(None)
+        }
+        Err(e) => {
+            tracing::debug!(error = %e, blob = %key, "scrub: blob missing, skipping");
+            Ok(None)
+        }
+    }
 }
 
 async fn scrub_event(
@@ -115,29 +179,37 @@ async fn scrub_event(
             "error" => &mut event.error_blob,
             _ => unreachable!(),
         };
-        if let Some(key) = key_slot.clone() {
-            if let Some(bref) = BlobReference::try_new(key.clone(), 0) {
-                match store.load_blob(&bref).await {
-                    Ok(data) => {
-                        // Prefer UTF-8 redaction; binary left alone unless it looks like text
-                        if let Ok(text) = std::str::from_utf8(&data) {
-                            let redacted = scanner.redact(text);
-                            if redacted.as_bytes() != data.as_slice() {
-                                dirty = true;
-                                report.blobs_rewritten += 1;
-                                if !dry_run {
-                                    let new_ref = store.store_blob(redacted.as_bytes()).await?;
-                                    *key_slot = Some(new_ref.key);
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        tracing::debug!(error = %e, blob = %key, "scrub: blob missing, skipping");
-                    }
-                }
-            } else {
-                tracing::debug!(blob = %key, "scrub: invalid blob key, skipping");
+        if let Some(new_key) =
+            scrub_blob_key(store, scanner, key_slot.as_deref(), dry_run, report).await?
+        {
+            dirty = true;
+            if !dry_run {
+                *key_slot = Some(new_key);
+            }
+        }
+    }
+
+    // Metadata-referenced blobs (environment_blob, diff_blob_key, etc.)
+    let meta_keys: Vec<String> = event.metadata.keys().cloned().collect();
+    for mk in meta_keys {
+        let looks_blobish = mk.contains("blob")
+            || mk.ends_with("_key")
+            || mk == "environment_blob"
+            || mk.contains("diff");
+        if !looks_blobish {
+            continue;
+        }
+        let Some(val) = event.metadata.get(&mk).and_then(|v| v.as_str()) else {
+            continue;
+        };
+        if let Some(new_key) =
+            scrub_blob_key(store, scanner, Some(val), dry_run, report).await?
+        {
+            dirty = true;
+            if !dry_run {
+                event
+                    .metadata
+                    .insert(mk, serde_json::Value::String(new_key));
             }
         }
     }

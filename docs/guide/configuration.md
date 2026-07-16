@@ -60,6 +60,12 @@ continuity = "always"
 # Linux child subreaper for best-effort descendant exit codes (default true)
 # process_subreaper = true
 
+# Environment capture: "allowlist" (default — PATH/HOME/CI/BLACKBOX_* only)
+# or "full" (all vars after name+value redaction)
+# env_capture = "allowlist"
+# Store full git diffs as blobs (default true). false = preview+stats only.
+# store_git_diffs = true
+
 # Auto-resume (legacy 1.0 compat): true | false
 # When continuity ≠ off, this is overridden by continuity mode
 auto_resume = true

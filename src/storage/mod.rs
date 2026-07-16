@@ -92,6 +92,13 @@ pub trait TraceStore: Send + Sync + 'static {
     /// Insert a checkpoint.
     async fn insert_checkpoint(&self, cp: &Checkpoint) -> anyhow::Result<()>;
 
+    /// Update an existing checkpoint (same id). Default: re-insert is not used.
+    async fn update_checkpoint(&self, cp: &Checkpoint) -> anyhow::Result<()> {
+        // Default: delete not available — backends SHOULD override with SQL UPDATE.
+        let _ = cp;
+        anyhow::bail!("update_checkpoint not supported by this store")
+    }
+
     /// Load checkpoints for a run.
     async fn get_checkpoints(&self, run_id: &str) -> anyhow::Result<Vec<Checkpoint>>;
 

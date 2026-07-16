@@ -28,7 +28,8 @@ use object_store::{ObjectStore, PutPayload};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::export::portable::{export_portable, import_portable};
+use crate::export::export_portable_secure;
+use crate::export::portable::import_portable;
 use crate::storage::TraceStore;
 
 const MANIFEST_VERSION: u32 = 1;
@@ -74,7 +75,7 @@ pub async fn sync_push(
 
     for run in local {
         let events = store.get_events(&run.id).await?;
-        let json = match export_portable(store, &run, &events, redact).await {
+        let json = match export_portable_secure(store, &run, &events, redact).await {
             Ok(j) => j,
             Err(e) => {
                 report
@@ -184,7 +185,7 @@ pub async fn sync_push_http(
             continue;
         }
         let events = store.get_events(&run.id).await?;
-        let json = match export_portable(store, &run, &events, redact).await {
+        let json = match export_portable_secure(store, &run, &events, redact).await {
             Ok(j) => j,
             Err(e) => {
                 report
@@ -361,7 +362,7 @@ pub async fn sync_push_s3(
 
     for run in local {
         let events = store.get_events(&run.id).await?;
-        let json = match export_portable(store, &run, &events, redact).await {
+        let json = match export_portable_secure(store, &run, &events, redact).await {
             Ok(j) => j,
             Err(e) => {
                 report
@@ -612,7 +613,7 @@ pub async fn manifest_from_store(store: &dyn TraceStore) -> anyhow::Result<SyncM
     };
     for run in runs {
         let events = store.get_events(&run.id).await?;
-        let json = match export_portable(store, &run, &events, true).await {
+        let json = match export_portable_secure(store, &run, &events, true).await {
             Ok(j) => j,
             Err(e) => {
                 tracing::warn!(run_id = %run.id, error = %e, "manifest: export failed, skipping sha256");

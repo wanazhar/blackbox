@@ -1258,7 +1258,7 @@ async fn write_ci_artifacts(
     // Optional portable export for offline eval scoring
     if let Ok(events) = store.get_events(&run.id).await {
         if let Ok(archive) =
-            crate::export::portable::export_portable(store, run, &events, true).await
+            crate::export::export_portable_secure(store, run, &events, true).await
         {
             let _ = std::fs::write(dir.join("portable.json"), archive);
         }
@@ -2825,11 +2825,21 @@ async fn cmd_scrub(cli: &Cli, args: &ScrubArgs) -> anyhow::Result<()> {
         );
     }
 
+    // Auto-GC when scrub rewrote blobs (old secret content-addressed keys become orphans).
+    let rewrote = report.blobs_rewritten > 0;
+    if rewrote && !args.gc && !args.dry_run {
+        let (files, meta) = gc_unreferenced_blobs(store.as_ref(), &blob_dir, false).await?;
+        println!(
+            "auto-gc after scrub: {} orphan file(s), {} metadata row(s)",
+            files, meta
+        );
+    }
+
     if report.runs_updated + report.events_updated + report.blobs_rewritten == 0 && !args.gc {
         println!("No secrets found (or already clean).");
     } else if args.dry_run {
         println!("Re-run without --dry-run to apply.");
-    } else if !args.gc {
+    } else if !args.gc && !rewrote {
         println!("Done. Use `blackbox scrub --gc` to delete unreferenced blobs.");
     } else {
         println!("Done.");

@@ -185,6 +185,13 @@ impl RunSupervisor {
         // ── Capture and redact environment variables (single map; value+name scan) ──
         let env_redactor = EnvironmentRedactor::new(redact_cfg.clone());
         let mut env_vars: HashMap<String, String> = std::env::vars().collect();
+        // Privacy: default allowlist drops high-risk secrets not caught by name scan.
+        if matches!(
+            self.policy.env_capture,
+            crate::config::EnvCaptureMode::Allowlist
+        ) {
+            env_vars.retain(|k, _| crate::config::env_allowlist_keep(k));
+        }
         let redactions = if self.policy.redact {
             let recs = env_redactor.scan_env(&env_vars);
             env_redactor.redact_env_in_place(&mut env_vars);
@@ -221,6 +228,10 @@ impl RunSupervisor {
             "var_count".to_string(),
             serde_json::json!(env_var_count),
         );
+        env_event.metadata.insert(
+            "env_capture".to_string(),
+            serde_json::json!(self.policy.env_capture.as_str()),
+        );
         if !redactions.is_empty() {
             env_event.metadata.insert(
                 "redactions".to_string(),
@@ -231,7 +242,9 @@ impl RunSupervisor {
 
         // ── Start Capture Layers ──────────────────────────────────
         let mut pty_capture = PtyCapture::new();
-        let mut git_capture = GitCapture::new().with_store(self.store.clone());
+        let mut git_capture = GitCapture::new()
+            .with_store(self.store.clone())
+            .with_store_full_diffs(self.policy.store_git_diffs);
         let mut fs_capture = FilesystemCapture::new();
         let process_opts = crate::capture::process::ProcessEnrichOpts::resolve(
             self.policy.process_dense_poll,

@@ -185,11 +185,16 @@ blackbox serve --token my-secret-token
 BLACKBOX_SERVE_TOKEN=my-secret-token blackbox serve
 ```
 
-Prefer the Authorization header (query `?token=` is deprecated and may leak into logs):
+**Authorization header only** — query `?token=` is no longer accepted (tokens in
+URLs leak into browser history, proxies, and Referer). The dashboard migrates a
+one-time `?token=` into `sessionStorage` and uses `fetch` + Bearer for SSE.
 
 ```bash
 curl -H "Authorization: Bearer my-secret-token" http://host:7788/api/status
 ```
+
+Sync/serve portable export uses the same H-08 blob re-scan as CLI `export`.
+`blackbox scrub` rewrites env/diff/transcript blobs and auto-GCs orphan keys.
 
 ### Network binding
 

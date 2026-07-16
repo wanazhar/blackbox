@@ -59,6 +59,8 @@ pub struct GitCapture {
     cwd: Option<String>,
     /// Optional store for persisting diffs as content-addressed blobs
     store: Option<Arc<dyn TraceStore>>,
+    /// When false, only redacted preview + stats are stored (no full diff blob).
+    store_full_diffs: bool,
     /// Channel kept open so `stop()` can emit the after-run snapshot
     event_tx: Option<mpsc::Sender<TraceEvent>>,
     /// Run id captured at start
@@ -86,6 +88,7 @@ impl GitCapture {
         Self {
             cwd: None,
             store: None,
+            store_full_diffs: true,
             event_tx: None,
             run_id: None,
             active_cwd: None,
@@ -99,6 +102,12 @@ impl GitCapture {
     /// Attach a trace store so diffs are persisted as blobs.
     pub fn with_store(mut self, store: Arc<dyn TraceStore>) -> Self {
         self.store = Some(store);
+        self
+    }
+
+    /// When false, skip full diff blob storage (preview + stats only).
+    pub fn with_store_full_diffs(mut self, store_full: bool) -> Self {
+        self.store_full_diffs = store_full;
         self
     }
 
@@ -251,23 +260,46 @@ impl GitCapture {
         );
 
         let mut blob_key = None;
-        if let Some(ref store) = self.store {
-            match store.store_blob(safe_diff.as_bytes()).await {
-                Ok(reference) => {
-                    ev.metadata.insert(
-                        "diff_blob_key".to_string(),
-                        serde_json::json!(reference.key),
-                    );
-                    ev.metadata.insert(
-                        "diff_blob_size".to_string(),
-                        serde_json::json!(reference.size),
-                    );
-                    blob_key = Some(reference.key);
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "failed to store git diff blob");
+        if self.store_full_diffs {
+            if let Some(ref store) = self.store {
+                match store.store_blob(safe_diff.as_bytes()).await {
+                    Ok(reference) => {
+                        ev.metadata.insert(
+                            "diff_blob_key".to_string(),
+                            serde_json::json!(reference.key),
+                        );
+                        ev.metadata.insert(
+                            "diff_blob_size".to_string(),
+                            serde_json::json!(reference.size),
+                        );
+                        blob_key = Some(reference.key);
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "failed to store git diff blob");
+                    }
                 }
             }
+        } else {
+            ev.metadata.insert(
+                "diff_blob_skipped".to_string(),
+                serde_json::json!(true),
+            );
+            // Line/stat summary without full content
+            let lines = safe_diff.lines().count();
+            let added = safe_diff
+                .lines()
+                .filter(|l| l.starts_with('+') && !l.starts_with("+++"))
+                .count();
+            let removed = safe_diff
+                .lines()
+                .filter(|l| l.starts_with('-') && !l.starts_with("---"))
+                .count();
+            ev.metadata
+                .insert("diff_lines".to_string(), serde_json::json!(lines));
+            ev.metadata
+                .insert("diff_added".to_string(), serde_json::json!(added));
+            ev.metadata
+                .insert("diff_removed".to_string(), serde_json::json!(removed));
         }
 
         if tx.send(ev).await.is_err() {

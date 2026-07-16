@@ -6,8 +6,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::export::html::export_html;
-use crate::export::portable::{export_portable, import_portable};
+use crate::export::{export_html_secure, export_portable_secure};
+use crate::export::portable::import_portable;
 use crate::search::search_store;
 use crate::storage::sqlite::SqliteStore;
 use crate::storage::TraceStore;
@@ -100,7 +100,7 @@ pub async fn serve(store: Arc<SqliteStore>, opts: ServeOptions) -> anyhow::Resul
         );
     }
     if opts.token.is_some() {
-        println!("  auth:    Bearer token required (Authorization header or ?token=)");
+        println!("  auth:    Authorization: Bearer <token> (query ?token= removed)");
     }
     println!("  live:    http://{}/watch", opts.addr);
     println!("  status:  http://{}/status", opts.addr);
@@ -117,7 +117,7 @@ pub async fn serve(store: Arc<SqliteStore>, opts: ServeOptions) -> anyhow::Resul
 
 async fn auth_middleware(State(state): State<AppState>, request: Request, next: Next) -> Response {
     let mut response = if let Some(expected) = &state.token {
-        if token_ok(expected, request.headers(), request.uri().query()) {
+        if token_ok(expected, request.headers()) {
             next.run(request).await
         } else {
             (
@@ -153,33 +153,17 @@ async fn timeout_middleware(
     }
 }
 
-/// Authenticate a request via `Authorization: Bearer` header or `?token=`
-/// query parameter.
+/// Authenticate via `Authorization: Bearer` only.
 ///
-/// # Security note (L-28)
-/// The query-string path (`?token=…`) is **deprecated** and kept only for
-/// backward-compatible programmatic clients. Tokens in URLs are logged by
-/// proxies, browsers, and CDN edge caches. Prefer the `Authorization`
-/// header in production use.
-fn token_ok(expected: &str, headers: &HeaderMap, query: Option<&str>) -> bool {
+/// Query `?token=` is **removed** — tokens in URLs leak into browser history,
+/// proxy logs, and Referer. Dashboard JS uses `fetch` + Authorization for SSE.
+fn token_ok(expected: &str, headers: &HeaderMap) -> bool {
     if let Some(auth) = headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
     {
-        // Constant-time comparison to avoid timing side-channels.
         let provided = auth.strip_prefix("Bearer ").unwrap_or(auth);
-        if constant_time_eq(provided.as_bytes(), expected.as_bytes()) {
-            return true;
-        }
-    }
-    if let Some(q) = query {
-        for pair in q.split('&') {
-            if let Some(v) = pair.strip_prefix("token=") {
-                if constant_time_eq(v.as_bytes(), expected.as_bytes()) {
-                    return true;
-                }
-            }
-        }
+        return constant_time_eq(provided.as_bytes(), expected.as_bytes());
     }
     false
 }
@@ -267,12 +251,55 @@ function upsert(run) {{
   if (tags) {{ const span = document.createElement('span'); span.className = 'tags'; span.textContent = tags; td4.appendChild(span); }}
 }}
 const qs = new URLSearchParams(location.search);
-const token = qs.get('token');
-const url = '/api/runs/stream' + (token ? ('?token=' + encodeURIComponent(token)) : '');
-const es = new EventSource(url);
-es.addEventListener('run', (e) => {{ try {{ upsert(JSON.parse(e.data)); }} catch(_){{}} }});
-es.addEventListener('open', () => {{ streamEl.textContent = 'live list: connected'; }});
-es.onerror = () => {{ streamEl.textContent = 'live list: reconnecting…'; }};
+// Token via sessionStorage after ?token= once (migrated off query auth).
+const urlTok = qs.get('token');
+if (urlTok) {{
+  try {{ sessionStorage.setItem('bb_token', urlTok); }} catch(_){{}}
+  const u = new URL(location.href); u.searchParams.delete('token');
+  history.replaceState(null, '', u.pathname + u.search + u.hash);
+}}
+function bbToken() {{ try {{ return sessionStorage.getItem('bb_token') || ''; }} catch(_) {{ return ''; }} }}
+async function openSse(path, handlers) {{
+  const headers = {{}};
+  const t = bbToken();
+  if (t) headers['Authorization'] = 'Bearer ' + t;
+  streamEl.textContent = 'live list: connecting…';
+  try {{
+    const res = await fetch(path, {{ headers }});
+    if (!res.ok) {{ streamEl.textContent = 'live list: ' + res.status; return; }}
+    streamEl.textContent = 'live list: connected';
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    let evName = 'message';
+    let dataLines = [];
+    while (true) {{
+      const {{ value, done }} = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, {{ stream: true }});
+      const parts = buf.split('\\n');
+      buf = parts.pop() || '';
+      for (const line of parts) {{
+        if (line.startsWith('event:')) {{ evName = line.slice(6).trim(); }}
+        else if (line.startsWith('data:')) {{ dataLines.push(line.slice(5).trimStart()); }}
+        else if (line === '') {{
+          if (dataLines.length) {{
+            const data = dataLines.join('\\n');
+            const h = handlers[evName] || handlers.message;
+            if (h) try {{ h(data); }} catch(_){{}}
+          }}
+          evName = 'message'; dataLines = [];
+        }}
+      }}
+    }}
+  }} catch (e) {{
+    streamEl.textContent = 'live list: reconnecting…';
+    setTimeout(() => openSse(path, handlers), 1500);
+  }}
+}}
+openSse('/api/runs/stream', {{
+  run: (data) => {{ try {{ upsert(JSON.parse(data)); }} catch(_){{}} }},
+}});
 </script>
 <style>.flash {{ animation: flash 1.2s ease; }} @keyframes flash {{ from {{ background: color-mix(in srgb, var(--accent) 35%, transparent); }} to {{ background: transparent; }} }}</style>"#,
             n = runs.len(),
@@ -440,21 +467,61 @@ function add(ev) {{
   tr.scrollIntoView({{block:'nearest'}});
 }}
 const qs = new URLSearchParams(location.search);
-const token = qs.get('token');
-const url = `/api/runs/${{encodeURIComponent(runId)}}/events/stream` + (token ? `?token=${{encodeURIComponent(token)}}` : '');
-const es = new EventSource(url);
-es.addEventListener('event', (e) => {{
-  try {{ add(JSON.parse(e.data)); }} catch (_) {{}}
-}});
-es.addEventListener('status', (e) => {{
+const urlTok = qs.get('token');
+if (urlTok) {{
+  try {{ sessionStorage.setItem('bb_token', urlTok); }} catch(_){{}}
+  const u = new URL(location.href); u.searchParams.delete('token');
+  history.replaceState(null, '', u.pathname + u.search + u.hash);
+}}
+function bbToken() {{ try {{ return sessionStorage.getItem('bb_token') || ''; }} catch(_) {{ return ''; }} }}
+async function openSse(path, handlers) {{
+  const headers = {{}};
+  const t = bbToken();
+  if (t) headers['Authorization'] = 'Bearer ' + t;
+  streamEl.textContent = 'stream: connecting…';
   try {{
-    const s = JSON.parse(e.data);
-    statusEl.textContent = s.status || statusEl.textContent;
-    if (s.exit_code != null) statusEl.textContent += ' exit=' + s.exit_code;
-  }} catch (_) {{}}
+    const res = await fetch(path, {{ headers }});
+    if (!res.ok) {{ streamEl.textContent = 'stream: ' + res.status; return; }}
+    streamEl.textContent = 'stream: live';
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    let evName = 'message';
+    let dataLines = [];
+    while (true) {{
+      const {{ value, done }} = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, {{ stream: true }});
+      const parts = buf.split('\\n');
+      buf = parts.pop() || '';
+      for (const line of parts) {{
+        if (line.startsWith('event:')) {{ evName = line.slice(6).trim(); }}
+        else if (line.startsWith('data:')) {{ dataLines.push(line.slice(5).trimStart()); }}
+        else if (line === '') {{
+          if (dataLines.length) {{
+            const data = dataLines.join('\\n');
+            const h = handlers[evName] || handlers.message;
+            if (h) try {{ h(data); }} catch(_){{}}
+          }}
+          evName = 'message'; dataLines = [];
+        }}
+      }}
+    }}
+  }} catch (e) {{
+    streamEl.textContent = 'stream: reconnecting…';
+    setTimeout(() => openSse(path, handlers), 1500);
+  }}
+}}
+openSse(`/api/runs/${{encodeURIComponent(runId)}}/events/stream`, {{
+  event: (data) => {{ try {{ add(JSON.parse(data)); }} catch (_) {{}} }},
+  status: (data) => {{
+    try {{
+      const s = JSON.parse(data);
+      statusEl.textContent = s.status || statusEl.textContent;
+      if (s.exit_code != null) statusEl.textContent += ' exit=' + s.exit_code;
+    }} catch (_) {{}}
+  }},
 }});
-es.addEventListener('open', () => {{ streamEl.textContent = 'connected'; }});
-es.onerror = () => {{ streamEl.textContent = 'reconnecting…'; }};
 document.getElementById('clear').onclick = () => {{ tl.textContent=''; n=0; countEl.textContent='0'; }};
 </script>"#,
         id = urlencoding(&run_id),
@@ -595,8 +662,8 @@ async fn run_export_html(
     let Some(run) = state.store.get_run(&run_id).await? else {
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
-    let events = state.store.get_events(&run_id).await?;
-    let html = export_html(&run, &events, true)?;
+    let events = state.store.get_events_limited(&run_id, 8_000).await?.0;
+    let html = export_html_secure(&run, &events, true)?;
     Ok(Html(html).into_response())
 }
 
@@ -914,8 +981,8 @@ async fn api_sync_get_run(
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
     let events = state.store.get_events(&run_id).await?;
-    // Full portable with blobs for offline-complete pull
-    let json = export_portable(state.store.as_ref(), &run, &events, true).await?;
+    // Full portable with blobs + H-08 blob body re-scan (same as CLI export)
+    let json = export_portable_secure(state.store.as_ref(), &run, &events, true).await?;
     Ok(([(header::CONTENT_TYPE, "application/json")], json).into_response())
 }
 

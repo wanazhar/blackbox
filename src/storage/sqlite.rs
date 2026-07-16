@@ -1081,6 +1081,38 @@ impl TraceStore for SqliteStore {
         Ok(())
     }
 
+    async fn update_checkpoint(&self, cp: &Checkpoint) -> anyhow::Result<()> {
+        let cp = cp.clone();
+        {
+            let conn = self.lock();
+            let n = conn
+                .execute(
+                    "UPDATE checkpoints SET run_id=?2, event_id=?3, git_commit=?4, git_diff_blob=?5,
+                     filesystem_manifest_blob=?6, cwd=?7, environment_blob=?8, transcript_blob=?9,
+                     harness_session_id=?10, created_at=?11 WHERE id=?1",
+                    params![
+                        cp.id,
+                        cp.run_id,
+                        cp.event_id,
+                        cp.git_commit,
+                        cp.git_diff_blob,
+                        cp.filesystem_manifest_blob,
+                        cp.cwd,
+                        cp.environment_blob,
+                        cp.transcript_blob,
+                        cp.harness_session_id,
+                        cp.created_at.to_rfc3339(),
+                    ],
+                )
+                .context("failed to update checkpoint")?;
+            if n == 0 {
+                anyhow::bail!("checkpoint not found: {}", cp.id);
+            }
+        }
+        tokio::task::yield_now().await;
+        Ok(())
+    }
+
     async fn get_checkpoints(&self, run_id: &str) -> anyhow::Result<Vec<Checkpoint>> {
         let run_id = run_id.to_string();
         let result = {

@@ -664,19 +664,23 @@ pub struct ReplayArgs {
     /// Run ID, unique prefix, or "latest"
     pub run_id: String,
 
-    /// Mock tool calls with recorded outputs (filesystem unchanged)
+    /// Recorded tool playback: mock tool results from the trace (no execution, filesystem unchanged).
+    /// Guarantee: no child processes; no filesystem or external changes.
     #[arg(long)]
     pub mock_tools: bool,
 
-    /// Run in a sandbox (temporary workspace, side effects blocked)
+    /// Sandbox re-execution: re-run allowed local commands in a temp workspace.
+    /// Guarantee: external/destructive events blocked; lossy argv reconstruction blocked;
+    /// shell interpreters blocked unless --live. Not deterministic LLM replay.
     #[arg(long)]
     pub sandbox: bool,
 
-    /// Run live against the current environment (dangerous)
+    /// Live re-execution against the current environment (dangerous).
+    /// Guarantee: may change files, network, and external systems. Requires explicit opt-in.
     #[arg(long)]
     pub live: bool,
 
-    /// Event ID (or prefix) to start replay from
+    /// Event ID (or prefix) to start playback / re-execution from
     #[arg(long)]
     pub from: Option<String>,
 }
@@ -1512,6 +1516,16 @@ async fn cmd_stats(cli: &Cli, args: &StatsArgs) -> anyhow::Result<()> {
     let db_bytes = std::fs::metadata(store.db_path()).ok().map(|m| m.len());
     let total_storage_bytes = db_bytes.map(|d| d.saturating_add(blob_bytes));
     let storage_warning = storage_soft_warning(total_storage_bytes, blob_bytes);
+    let avg_events_per_run = if sample.is_empty() {
+        None
+    } else {
+        Some(total_events as f64 / sample.len() as f64)
+    };
+    let avg_blob_bytes_per_run = if runs.is_empty() {
+        None
+    } else {
+        Some(blob_bytes as f64 / runs.len() as f64)
+    };
 
     if cli.json {
         let view = views::StatsView {
@@ -1525,6 +1539,8 @@ async fn cmd_stats(cli: &Cli, args: &StatsArgs) -> anyhow::Result<()> {
             total_events,
             total_tool_calls: total_tools,
             total_errors,
+            avg_events_per_run,
+            avg_blob_bytes_per_run,
             top_kinds: top_kinds.clone(),
             blob_files,
             blob_bytes,
@@ -1548,6 +1564,14 @@ async fn cmd_stats(cli: &Cli, args: &StatsArgs) -> anyhow::Result<()> {
     }
     if let Some(ref w) = storage_warning {
         println!("warn:  {w}");
+    }
+    if let Some(avg) = avg_events_per_run {
+        println!(
+            "Avg:   {:.1} events/run (sample {}) · {:.0} blob bytes/run",
+            avg,
+            sample.len(),
+            avg_blob_bytes_per_run.unwrap_or(0.0)
+        );
     }
     println!();
     println!("Runs: {} ({} tagged)", runs.len(), tagged);
@@ -2285,6 +2309,7 @@ async fn cmd_replay(cli: &Cli, args: &ReplayArgs) -> anyhow::Result<()> {
         );
     }
 
+    use crate::core::command::CommandMetadata;
     use crate::replay::mock::MockReplay;
     use crate::replay::sandbox::SandboxReplay;
     use crate::replay::timeline::TimelineReplay;
@@ -2304,6 +2329,82 @@ async fn cmd_replay(cli: &Cli, args: &ReplayArgs) -> anyhow::Result<()> {
     } else {
         None
     };
+
+    // Preflight: honest guarantees before any execution.
+    let mode_name = if args.live {
+        "Live re-execution"
+    } else if args.sandbox {
+        "Sandbox re-execution"
+    } else if args.mock_tools {
+        "Recorded tool playback"
+    } else {
+        "Timeline playback"
+    };
+    let mut executable_cmds = 0usize;
+    let mut lossy_cmds = 0usize;
+    let mut shell_cmds = 0usize;
+    for ev in &events {
+        if let Some(meta) = CommandMetadata::from_event(ev) {
+            if meta.fidelity.is_safe_for_sandbox() {
+                executable_cmds += 1;
+            } else if !meta.argv.is_empty() || meta.shell_source.is_some() {
+                lossy_cmds += 1;
+            }
+            if meta
+                .argv
+                .first()
+                .map(|a| {
+                    let base = std::path::Path::new(a)
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or(a);
+                    matches!(base, "sh" | "bash" | "dash" | "zsh" | "fish" | "ksh")
+                })
+                .unwrap_or(false)
+            {
+                shell_cmds += 1;
+            }
+        }
+    }
+    if !cli.json {
+        println!("═══ Replay preflight ═══");
+        println!("mode:       {mode_name}");
+        println!("run:        {}", crate::util::short_id(&run.id));
+        println!("events:     {}", events.len());
+        match mode_name {
+            "Timeline playback" => {
+                println!("executes:   no — prints the recorded timeline only");
+                println!("filesystem: unchanged");
+                println!("external:   unchanged");
+                println!("note:       not deterministic LLM replay");
+            }
+            "Recorded tool playback" => {
+                println!("executes:   no — mocks tool outputs from the trace");
+                println!("filesystem: unchanged");
+                println!("external:   unchanged");
+                println!("note:       not deterministic LLM replay");
+            }
+            "Sandbox re-execution" => {
+                println!("executes:   yes — allowed local commands only (temp workspace)");
+                println!("filesystem: isolated workspace (seeded/best-effort git restore)");
+                println!("external:   blocked by default");
+                println!("destructive:blocked by default");
+                println!("lossy argv: blocked ({lossy_cmds} lossy / {executable_cmds} exact-or-inferred)");
+                println!("shell cmds: blocked under sandbox ({shell_cmds} detected)");
+                println!("note:       not deterministic LLM replay");
+            }
+            "Live re-execution" => {
+                println!("executes:   yes — against the CURRENT environment");
+                println!("filesystem: MAY CHANGE");
+                println!("external:   MAY CHANGE");
+                println!("destructive:ALLOWED");
+                println!("warning:    live mode is dangerous; prefer --sandbox");
+                println!("note:       not deterministic LLM replay");
+            }
+            _ => {}
+        }
+        println!("{}", "─".repeat(48));
+    }
 
     let mut engine: Box<dyn ReplayEngine> = if args.mock_tools {
         Box::new(MockReplay)

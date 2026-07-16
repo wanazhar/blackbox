@@ -54,6 +54,8 @@ pub struct FailureFixChainView {
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct CaptureCoverageView {
     pub total_events: u64,
+    #[serde(default)]
+    pub quality_score: u8,
     pub surfaces: Vec<SurfaceView>,
     pub notes: Vec<String>,
 }
@@ -62,6 +64,8 @@ pub struct CaptureCoverageView {
 pub struct SurfaceView {
     pub name: String,
     pub enabled: bool,
+    #[serde(default)]
+    pub status: String,
     pub events_count: u64,
     pub note: Option<String>,
 }
@@ -149,7 +153,29 @@ pub async fn build_summary(
     let coverage_ev = events.iter().find(|e| e.kind == "capture.coverage");
     let capture_coverage: Option<CaptureCoverageView> = coverage_ev.and_then(|ev| {
         let cov = ev.metadata.get("coverage")?;
-        serde_json::from_value(cov.clone()).ok()
+        // Prefer typed CaptureCoverage so status/score fields map cleanly.
+        if let Ok(typed) =
+            serde_json::from_value::<crate::capture::coverage::CaptureCoverage>(cov.clone())
+        {
+            return Some(CaptureCoverageView {
+                total_events: typed.total_events,
+                quality_score: typed.quality_score,
+                surfaces: typed
+                    .surfaces
+                    .into_iter()
+                    .map(|s| SurfaceView {
+                        name: s.name,
+                        enabled: s.enabled,
+                        status: s.status.as_str().to_string(),
+                        events_count: s.events_count,
+                        note: s.note,
+                    })
+                    .collect(),
+                notes: typed.notes,
+            });
+        }
+        // Fallback for older events missing status/score.
+        serde_json::from_value::<CaptureCoverageView>(cov.clone()).ok()
     });
 
     let mut tool_names = Vec::new();
@@ -439,24 +465,37 @@ fn build_narrative(data: &SummaryNarrativeData) -> String {
     // Capture coverage
     if let Some(ref cov) = data.capture_coverage {
         n.push_str(&format!(
-            "Coverage: {} events across {} surfaces\n",
+            "Capture quality: {}% — {} events across {} surfaces\n",
+            cov.quality_score,
             cov.total_events,
             cov.surfaces.len()
         ));
         for s in &cov.surfaces {
-            n.push_str(&format!("  {}: {} events", s.name, s.events_count));
-            if !s.enabled {
-                n.push_str(" (disabled)");
-            }
+            n.push_str(&format!(
+                "  {}: {} ({} events)",
+                s.name,
+                if s.status.is_empty() {
+                    if s.enabled {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    }
+                } else {
+                    s.status.as_str()
+                },
+                s.events_count
+            ));
             if let Some(ref note) = s.note {
                 n.push_str(&format!(" [{}]", note));
             }
             n.push('\n');
         }
-        if !cov.notes.is_empty() {
-            for note in &cov.notes {
-                n.push_str(&format!("  note: {}\n", note));
+        // Keep algorithm notes out of the narrative body; surface only material limitations.
+        for note in &cov.notes {
+            if note.starts_with("quality_score:") {
+                continue;
             }
+            n.push_str(&format!("  note: {}\n", note));
         }
     }
 
@@ -540,14 +579,20 @@ pub fn format_summary_text(s: &SummaryView) -> String {
     // Capture coverage
     if let Some(ref cov) = s.capture_coverage {
         out.push_str("\n── Capture coverage ───────────────────────────────\n");
+        out.push_str(&format!("  quality score: {}%\n", cov.quality_score));
         out.push_str(&format!("  total events: {}\n", cov.total_events));
         for surface in &cov.surfaces {
             out.push_str(&format!(
-                "  {}: {} events{}\n",
+                "  {}: status={} events={}{}\n",
                 surface.name,
+                if surface.status.is_empty() {
+                    "unknown"
+                } else {
+                    surface.status.as_str()
+                },
                 surface.events_count,
                 if let Some(ref note) = surface.note {
-                    format!(" [{}]", note)
+                    format!(" [{note}]")
                 } else {
                     String::new()
                 }

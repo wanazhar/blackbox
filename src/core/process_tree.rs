@@ -1,10 +1,26 @@
 //! Lossless process-tree and process-invocation schema.
 //!
-//! Captures exact argv, parent-child relationships, and lifecycle
-//! for every process observed during a run.
+//! Captures exact argv, parent-child relationships, lifecycle, and
+//! best-effort resource stats for every process observed during a run.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+
+use crate::core::command::{CaptureMethod, CommandMetadata};
+
+/// Best-effort resource sample for a process.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct ProcessResources {
+    /// Cumulative user+system CPU time in milliseconds, when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_time_ms: Option<u64>,
+    /// Resident set size in kilobytes (Linux VmRSS), when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rss_kb: Option<u64>,
+    /// Peak RSS in kilobytes when observed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peak_rss_kb: Option<u64>,
+}
 
 /// A single process invocation with lossless argv and lifecycle metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -13,14 +29,38 @@ pub struct ProcessInvocation {
     pub pid: u32,
     /// Parent process ID.
     pub ppid: u32,
-    /// Full command-line arguments (lossless, unjoined).
+    /// Process group ID, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pgid: Option<u32>,
+    /// Session ID, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sid: Option<u32>,
+    /// Full command-line arguments (lossless, unjoined). Prefer `command_meta.argv`.
     pub command: Vec<String>,
+    /// Canonical lossless command metadata.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_meta: Option<CommandMetadata>,
+    /// Executable path from `/proc/<pid>/exe` when readable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub executable: Option<String>,
+    /// Working directory from `/proc/<pid>/cwd` when readable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    /// UID when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uid: Option<u32>,
+    /// Whether the process left the original process group.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub escaped_pgrp: Option<bool>,
     /// Process start time (from /proc/stat or spawn time).
     pub start_time: Option<DateTime<Utc>>,
     /// Exit code, if the process has exited.
     pub exit_code: Option<i32>,
     /// When the process exited.
     pub exit_time: Option<DateTime<Utc>>,
+    /// Best-effort resource sample.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resources: Option<ProcessResources>,
 }
 
 /// A node in the process tree, containing children recursively.
@@ -35,14 +75,72 @@ pub struct ProcessNode {
 impl ProcessNode {
     /// Create a new root node without children.
     pub fn new(pid: u32, ppid: u32, command: Vec<String>) -> Self {
+        let command_meta = if command.is_empty() {
+            None
+        } else {
+            Some(CommandMetadata::from_proc_argv(
+                command.clone(),
+                command.first().cloned(),
+                None,
+                CaptureMethod::ProcCmdline,
+            ))
+        };
         Self {
             invocation: ProcessInvocation {
                 pid,
                 ppid,
+                pgid: None,
+                sid: None,
                 command,
+                command_meta,
+                executable: None,
+                cwd: None,
+                uid: None,
+                escaped_pgrp: None,
                 start_time: Some(Utc::now()),
                 exit_code: None,
                 exit_time: None,
+                resources: None,
+            },
+            children: Vec::new(),
+        }
+    }
+
+    /// Create a node with full metadata.
+    pub fn with_meta(
+        pid: u32,
+        ppid: u32,
+        command: Vec<String>,
+        executable: Option<String>,
+        cwd: Option<String>,
+        method: CaptureMethod,
+    ) -> Self {
+        let command_meta = if command.is_empty() {
+            None
+        } else {
+            Some(CommandMetadata::from_proc_argv(
+                command.clone(),
+                executable.clone(),
+                cwd.clone(),
+                method,
+            ))
+        };
+        Self {
+            invocation: ProcessInvocation {
+                pid,
+                ppid,
+                pgid: None,
+                sid: None,
+                command,
+                command_meta,
+                executable,
+                cwd,
+                uid: None,
+                escaped_pgrp: None,
+                start_time: Some(Utc::now()),
+                exit_code: None,
+                exit_time: None,
+                resources: None,
             },
             children: Vec::new(),
         }
@@ -51,6 +149,16 @@ impl ProcessNode {
     /// Recursively count all nodes in the tree.
     pub fn count_nodes(&self) -> usize {
         1 + self.children.iter().map(|c| c.count_nodes()).sum::<usize>()
+    }
+
+    /// Maximum depth of the tree (root = 1).
+    pub fn depth(&self) -> usize {
+        1 + self
+            .children
+            .iter()
+            .map(|c| c.depth())
+            .max()
+            .unwrap_or(0)
     }
 
     /// Find a node by PID (depth-first).
@@ -74,6 +182,54 @@ impl ProcessNode {
         }
         pids
     }
+
+    /// Render a simple ASCII process tree for CLI display.
+    pub fn format_tree(&self) -> String {
+        let mut lines = Vec::new();
+        self.format_tree_inner("", true, true, &mut lines);
+        lines.join("\n")
+    }
+
+    fn format_tree_inner(&self, prefix: &str, is_root: bool, is_last: bool, lines: &mut Vec<String>) {
+        let connector = if is_root {
+            ""
+        } else if is_last {
+            "└── "
+        } else {
+            "├── "
+        };
+        let cmd = if self.invocation.command.is_empty() {
+            format!("[{}]", self.invocation.pid)
+        } else {
+            self.invocation
+                .command
+                .iter()
+                .map(|a| {
+                    if a.contains(' ') || a.contains('"') || a.is_empty() {
+                        format!("\"{}\"", a.replace('"', "\\\""))
+                    } else {
+                        a.clone()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        lines.push(format!(
+            "{prefix}{connector}{cmd} (pid={})",
+            self.invocation.pid
+        ));
+        let child_prefix = if is_root {
+            String::new()
+        } else if is_last {
+            format!("{prefix}    ")
+        } else {
+            format!("{prefix}│   ")
+        };
+        let n = self.children.len();
+        for (i, child) in self.children.iter().enumerate() {
+            child.format_tree_inner(&child_prefix, false, i + 1 == n, lines);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -89,6 +245,9 @@ mod tests {
         assert!(node.invocation.start_time.is_some());
         assert!(node.invocation.exit_code.is_none());
         assert!(node.children.is_empty());
+        let meta = node.invocation.command_meta.as_ref().unwrap();
+        assert!(meta.lossless);
+        assert_eq!(meta.argv[2], "echo hi");
     }
 
     #[test]
@@ -127,5 +286,47 @@ mod tests {
         let de: ProcessNode = serde_json::from_str(&json).unwrap();
         assert_eq!(de.invocation.pid, 42);
         assert_eq!(de.invocation.command, vec!["make", "test"]);
+        assert!(de.invocation.command_meta.is_some());
+    }
+
+    #[test]
+    fn with_meta_sets_cwd_and_exe() {
+        let node = ProcessNode::with_meta(
+            10,
+            1,
+            vec!["rg".into(), "Session".into(), "src/".into()],
+            Some("/usr/bin/rg".into()),
+            Some("/project".into()),
+            CaptureMethod::ProcPoller,
+        );
+        assert_eq!(node.invocation.cwd.as_deref(), Some("/project"));
+        assert_eq!(node.invocation.executable.as_deref(), Some("/usr/bin/rg"));
+        let meta = node.invocation.command_meta.as_ref().unwrap();
+        assert_eq!(meta.cwd.as_deref(), Some("/project"));
+        assert_eq!(meta.argv[1], "Session");
+    }
+
+    #[test]
+    fn format_tree_shows_quoted_args() {
+        let mut root = ProcessNode::new(1, 0, vec!["bash".into()]);
+        root.children.push(ProcessNode::new(
+            2,
+            1,
+            vec!["grep".into(), "hello world".into(), "f.txt".into()],
+        ));
+        let text = root.format_tree();
+        assert!(text.contains("bash"));
+        assert!(text.contains("hello world") || text.contains("\"hello world\""));
+        assert!(text.contains("pid=2"));
+    }
+
+    #[test]
+    fn depth_counts_levels() {
+        let mut root = ProcessNode::new(1, 0, vec!["a".into()]);
+        let mut mid = ProcessNode::new(2, 1, vec!["b".into()]);
+        mid.children
+            .push(ProcessNode::new(3, 2, vec!["c".into()]));
+        root.children.push(mid);
+        assert_eq!(root.depth(), 3);
     }
 }

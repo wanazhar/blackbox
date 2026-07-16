@@ -95,14 +95,20 @@ impl RunSupervisor {
     }
 
     async fn execute_inner(&self, args: &RunArgs, run: &mut Run) -> anyhow::Result<()> {
+        // Effective observe-only: supervisor policy OR per-run CLI/ambient flag.
+        // Tests and library callers often use RunSupervisor::new without with_policy.
+        let observe_only = self.policy.observe_only || args.observe_only || args.ambient;
+        let redact = self.policy.redact;
+        let insecure_raw = self.policy.insecure_raw;
+
         let redact_cfg = RedactionConfig {
-            enabled: self.policy.redact,
+            enabled: redact,
             ..RedactionConfig::default()
         };
         let scanner = SecretScanner::new(redact_cfg.clone());
 
         // Redact argv before any persistence (secrets in command lines)
-        if self.policy.redact {
+        if redact {
             run.command = scanner.redact_command(&run.command);
         }
 
@@ -120,7 +126,7 @@ impl RunSupervisor {
             run_id: run.id.clone(),
         };
         let mut spawn_cmd = launch_cmd;
-        if self.policy.observe_only {
+        if observe_only {
             tracing::info!("observe-only mode: skipping adapter launch preparation");
         } else if let Some(prepared) = adapter.prepare_launch(&spawn_cmd, &launch_context) {
             spawn_cmd = prepared.command;
@@ -131,13 +137,13 @@ impl RunSupervisor {
         let mut resume_env: HashMap<String, String> = HashMap::new();
         // Build notes once: adapter[;observe-only][;insecure_raw][;continuity:…][;claim:…]  (never clobber)
         let mut note_owned: Vec<String> = vec![format!("adapter:{adapter_id}")];
-        if self.policy.observe_only {
+        if observe_only {
             note_owned.push("observe-only".into());
         }
-        if self.policy.insecure_raw {
+        if insecure_raw {
             note_owned.push("insecure_raw".into());
         }
-        if !self.policy.observe_only {
+        if !observe_only {
             if let Some(ref inj) = args.resume_injection {
                 spawn_cmd = crate::resume_inject::apply_to_launch(&spawn_cmd, &mut resume_env, inj);
                 tracing::info!(
@@ -825,7 +831,7 @@ impl RunSupervisor {
             }
         };
 
-        // ── Capture coverage report ──────────────────────────────────
+        // ── Capture coverage report (honest surface status + lag) ────
         let pty_events = all_events
             .iter()
             .filter(|e| e.source == EventSource::Terminal)
@@ -846,15 +852,46 @@ impl RunSupervisor {
             .iter()
             .filter(|e| e.kind == "environment.captured")
             .count() as u64;
+        let native_log_events = all_events
+            .iter()
+            .filter(|e| {
+                e.metadata.contains_key("native_log")
+                    || e.kind.starts_with("native.")
+                    || e.metadata
+                        .get("source")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.contains("native"))
+                        .unwrap_or(false)
+            })
+            .count() as u64;
+        // Layer failures: events marked Error from capture sources, or kind contains failed
+        let layer_err = |src: EventSource| {
+            all_events.iter().any(|e| {
+                e.source == src
+                    && (e.status == EventStatus::Error
+                        || e.kind.contains("failed")
+                        || e.kind.contains("error"))
+            })
+        };
         let process_tree_available = cfg!(target_os = "linux");
+        let health = writer.health_snapshot();
+        let capture_lag_note = health.soft_warning();
 
-        let coverage = crate::capture::coverage::CaptureCoverage::from_surface_counts(
-            pty_events,
-            process_events,
-            git_events,
-            fs_events,
-            env_events,
-            process_tree_available,
+        let coverage = crate::capture::coverage::CaptureCoverage::from_run_signals(
+            crate::capture::coverage::RunCoverageSignals {
+                pty_events,
+                process_events,
+                git_events,
+                fs_events,
+                env_events,
+                process_tree_available,
+                native_log_events: Some(native_log_events),
+                process_failed: layer_err(EventSource::Process),
+                pty_failed: layer_err(EventSource::Terminal),
+                git_failed: layer_err(EventSource::Git),
+                fs_failed: layer_err(EventSource::Filesystem),
+                capture_lag_note: capture_lag_note.clone(),
+            },
         );
         let mut cov_ev = TraceEvent::new(&run.id, EventSource::System, "capture.coverage");
         cov_ev.status = EventStatus::Success;
@@ -866,7 +903,27 @@ impl RunSupervisor {
             "total_events".to_string(),
             serde_json::json!(coverage.total_events),
         );
+        cov_ev.metadata.insert(
+            "writer_health".to_string(),
+            serde_json::json!({
+                "events_written": health.events_written,
+                "events_deduped": health.events_deduped,
+                "slow_writes": health.slow_writes,
+                "max_write_ms": health.max_write_ms,
+            }),
+        );
         let _ = writer.write(cov_ev).await;
+
+        if let Some(ref lag) = capture_lag_note {
+            let mut warn = TraceEvent::new(&run.id, EventSource::System, "capture.warning");
+            warn.status = EventStatus::Error;
+            warn.metadata
+                .insert("kind".into(), serde_json::json!("capture_lag"));
+            warn.metadata
+                .insert("message".into(), serde_json::json!(lag));
+            let _ = writer.write(warn).await;
+            eprintln!("warning: {lag}");
+        }
         let session_id = adapter.discover_session_id(&all_events);
         if let Some(ref sid) = session_id {
             tracing::info!(session_id = %sid, "discovered harness session");
@@ -1014,9 +1071,14 @@ mod tests {
     }
 
     #[test]
-    fn capture_config_default_observe_only_false() {
+    fn capture_config_default_observe_only_true() {
+        // Daily-driver trust: new configs default to hard observe-only.
         let cfg = CaptureConfig::default();
-        assert!(!cfg.observe_only);
+        assert!(cfg.observe_only);
+        assert_eq!(
+            cfg.continuity_from_config(),
+            crate::config::ContinuityMode::Off
+        );
     }
 
     #[test]

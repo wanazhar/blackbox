@@ -330,23 +330,30 @@ impl Default for CaptureConfig {
         Self {
             wrap: default_wrap(),
             default_tags: default_auto_tags(),
-            auto_resume: true,
+            auto_resume: false,
             resume_max_tokens: default_resume_tokens(),
-            // New project defaults written by enable: continuity=always
-            continuity: Some(ContinuityMode::Always),
+            // Daily-driver trust default: neutral recorder (not memory bus).
+            // Opt into continuity with `enable --continuity always` / `--memory-bus`.
+            continuity: Some(ContinuityMode::Off),
             memory_max_tokens: None,
             gate_mode: GateMode::Off,
             auto_claim: false,
             claim_ttl_secs: default_claim_ttl(),
             claim_policy: ClaimPolicy::Warn,
-            observe_only: false,
+            observe_only: true,
         }
     }
 }
 
 impl CaptureConfig {
     /// Effective continuity mode from config only (no CLI/env).
+    ///
+    /// Observe-only projects always resolve to Off so the recorder cannot
+    /// silently re-enable continuity inject.
     pub fn continuity_from_config(&self) -> ContinuityMode {
+        if self.observe_only {
+            return ContinuityMode::Off;
+        }
         if let Some(c) = self.continuity {
             return c;
         }

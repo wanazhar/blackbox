@@ -98,7 +98,11 @@ retention config when stores grow.
 
 ## 5. Result table template
 
-Copy into CHANGELOG / release notes:
+Copy into CHANGELOG / release notes after:
+
+```bash
+cargo test --test overhead_bench -- --ignored --nocapture
+```
 
 ```text
 Blackbox overhead (debug build, N samples)
@@ -112,6 +116,16 @@ high-volume PTY (200 lines)  ___ ms       ___ ms         ___ ms
 find (shallow)               ___ ms       ___ ms         ___ ms
 nested process tree          ___ ms       ___ ms         ___ ms
 ```
+
+### Soft smoke (always-on CI, this tree)
+
+| Check | Budget | Status |
+|---|---|---|
+| `overhead_smoke` supervising `true` | < 8s debug | gated in `tests/overhead_smoke.rs` |
+| `overhead_bench` soft_true (observe-only) | < 12s | always-on |
+| event write throughput | > 50 ev/s | always-on |
+
+`blackbox doctor` now reports **daily-driver score** (observe-only, redaction clean, store size, last capture quality, capture lag). Aim for `daily-driver: ready` before leaving ambient wrap installed.
 
 ---
 

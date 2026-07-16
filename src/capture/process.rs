@@ -413,7 +413,8 @@ async fn proc_poller_loop(
         _ = stop_rx.changed() => return,
     };
 
-    let poll_interval = Duration::from_millis(250);
+    // 100ms balances short-lived process discovery vs /proc scan cost.
+    let poll_interval = Duration::from_millis(100);
     let mut known: HashSet<u32> = HashSet::new();
     known.insert(root_pid);
     let root_pgid = read_pgid_sid(root_pid).0;

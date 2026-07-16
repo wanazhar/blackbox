@@ -283,6 +283,18 @@ pub struct DoctorView {
     pub unresolved_failure_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attention_level: Option<String>,
+    /// Soft daily-driver readiness (0–100) for ambient trust.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub daily_driver_score: Option<u8>,
+    /// True when score ≥ 80 and no hard trust blockers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub daily_driver_ready: Option<bool>,
+    /// Human reasons affecting the score (soft).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub daily_driver_notes: Vec<String>,
+    /// Last run capture quality score when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_capture_quality: Option<u8>,
 }
 
 #[derive(Debug, Serialize)]

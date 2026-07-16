@@ -87,10 +87,15 @@ Do not conflate them.
 
 | Mode | How to enable | Mutates launch? | Injects MEMORY/RESUME? | Use when |
 |---|---|---|---|---|
-| **Observe-only** (recorder) | `blackbox enable --observe-only` or `blackbox run --observe-only -- …` | No | No | Evaluating harness/model behavior; ambient flight recorder |
-| **Continuity always** | `blackbox enable --continuity always` (or new-project default) | May prepare adapter launch / inject env | Yes (when configured) | Daily agent work with project memory |
+| **Observe-only** (recorder) | **New-project default**; `blackbox enable --observe-only`; ambient shell wrap always | No | No | Leave ambient on forever; evaluate harness/model behavior |
+| **Continuity always** | `blackbox enable --continuity always` or `--memory-bus` | May prepare adapter launch / inject env | Yes (when configured) | Multi-day agent work with project memory (explicit opt-in) |
 | **Continuity attention** | `continuity = "attention"` | Only when sticky attention needs it | When attention is set | Less aggressive memory inject |
 | **Continuity off** | `continuity = "off"` | No continuity inject | No | Recording without memory plane |
+
+**Ambient shell wrap (`maybe-run`) is always observe-only** — continuity inject
+never applies to wrapped `claude`/`codex`/… launches. Use explicit
+`blackbox run -- <cmd>` (without observe-only, with continuity configured) when
+you want the memory bus.
 
 CLI override: `blackbox run --observe-only -- <cmd>` forces recorder semantics for
 that run even if project continuity is enabled.

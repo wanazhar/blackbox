@@ -929,14 +929,23 @@ async fn cmd_run(cli: &Cli, args: &RunArgs) -> anyhow::Result<()> {
     let discovery = discover(cli).ok();
     let store = open_store(cli)?;
     let store: Arc<dyn TraceStore> = Arc::new(store);
+    let cfg_ref = discovery.as_ref().and_then(|d| d.config.as_ref());
+    // Effective observe-only: CLI flag, ambient wrap, or project config.
+    // Ambient shell capture is always neutral (no continuity inject).
+    let observe_only = args.observe_only
+        || args.ambient
+        || cfg_ref.map(|c| c.capture.observe_only).unwrap_or(false);
     let policy = CapturePolicy {
         insecure_raw: args.insecure_raw,
         redact: !args.no_redact,
-        observe_only: args.observe_only,
+        observe_only,
     };
 
-    let cfg_ref = discovery.as_ref().and_then(|d| d.config.as_ref());
-    let continuity = resolve_continuity(cfg_ref, args.no_auto_resume, args.auto_resume);
+    let continuity = if observe_only {
+        ContinuityMode::Off
+    } else {
+        resolve_continuity(cfg_ref, args.no_auto_resume, args.auto_resume)
+    };
     let max_tok = cfg_ref
         .map(|c| c.capture.memory_max_tokens_effective() as usize)
         .unwrap_or(4000);
@@ -3274,24 +3283,29 @@ async fn cmd_enable(cli: &Cli, args: &EnableArgs) -> anyhow::Result<()> {
     if cfg.retention.keep_runs == 0 {
         cfg.retention.keep_runs = 50;
     }
-    // Continuity: new projects always; re-enable preserves; flags opt-in
+    // Continuity / observe-only: flags opt-in; new projects default to neutral recorder.
     if let Some(ref mode) = args.continuity {
         let m = crate::config::ContinuityMode::parse(mode)
             .ok_or_else(|| anyhow::anyhow!("unknown --continuity {mode:?}"))?;
         cfg.capture.continuity = Some(m);
         cfg.capture.auto_resume = m != crate::config::ContinuityMode::Off;
+        // Explicit continuity implies not hard observe-only (unless mode is off).
+        cfg.capture.observe_only = m == crate::config::ContinuityMode::Off;
     } else if args.memory_bus {
         cfg.capture.continuity = Some(crate::config::ContinuityMode::Always);
         cfg.capture.auto_resume = true;
+        cfg.capture.observe_only = false;
     } else if args.observe_only {
         // Observe-only: no continuity, no auto-resume, no adapter mutations
         cfg.capture.observe_only = true;
         cfg.capture.continuity = Some(crate::config::ContinuityMode::Off);
         cfg.capture.auto_resume = false;
     } else if is_new {
-        // New project: memory bus on
-        cfg.capture.continuity = Some(crate::config::ContinuityMode::Always);
-        cfg.capture.auto_resume = true;
+        // New project daily-driver default: neutral ambient recorder.
+        // Opt into memory bus with --continuity always / --memory-bus.
+        cfg.capture.observe_only = true;
+        cfg.capture.continuity = Some(crate::config::ContinuityMode::Off);
+        cfg.capture.auto_resume = false;
     }
     // Re-enable without flags: preserve existing/derived continuity (do not flip)
     // Always serialize both keys when writing
@@ -4052,6 +4066,85 @@ async fn cmd_doctor(cli: &Cli, args: &DoctorArgs) -> anyhow::Result<()> {
         .as_ref()
         .map(|s| s.attention_level.as_str().to_string());
 
+    // Daily-driver readiness (soft score for ambient trust).
+    let mut dd_notes: Vec<String> = Vec::new();
+    let mut dd_score: u8 = 100;
+    let mut last_capture_quality: Option<u8> = None;
+    let redact_ok = secrets_clean.unwrap_or(true);
+    let enabled_ok = discovery
+        .config
+        .as_ref()
+        .map(|c| c.enabled)
+        .unwrap_or(false);
+    let observe = observe_only.unwrap_or(false);
+    if !enabled_ok {
+        dd_score = dd_score.saturating_sub(40);
+        dd_notes.push("project not enabled — run blackbox enable".into());
+    }
+    if !observe {
+        dd_score = dd_score.saturating_sub(15);
+        dd_notes.push(
+            "continuity/memory may mutate launches — prefer enable --observe-only for ambient trust"
+                .into(),
+        );
+    } else {
+        dd_notes.push("observe-only: ambient recording will not mutate launches".into());
+    }
+    if !redact_ok {
+        dd_score = dd_score.saturating_sub(35);
+        dd_notes.push("recent run argv still matches secret patterns — run blackbox scrub".into());
+    }
+    if storage_warning.is_some() {
+        dd_score = dd_score.saturating_sub(10);
+        dd_notes.push("store size soft warning active — consider blackbox gc".into());
+    }
+    if running_count.unwrap_or(0) > 0 {
+        dd_score = dd_score.saturating_sub(10);
+        dd_notes.push("orphan Running run(s) present — may need recovery".into());
+    }
+    if !on_path {
+        dd_score = dd_score.saturating_sub(5);
+        dd_notes.push("blackbox not on PATH".into());
+    }
+    // Sample last run coverage if store open
+    if let Ok(store) = open_store(cli) {
+        if let Ok(runs) = store.list_runs().await {
+            if let Some(run) = runs.first() {
+                if let Ok(events) = store.get_events(&run.id).await {
+                    if let Some(cov) = events
+                        .iter()
+                        .find(|e| e.kind == "capture.coverage")
+                        .and_then(|e| e.metadata.get("coverage"))
+                    {
+                        if let Some(q) = cov.get("quality_score").and_then(|v| v.as_u64()) {
+                            last_capture_quality = Some(q as u8);
+                            if q < 40 {
+                                dd_score = dd_score.saturating_sub(15);
+                                dd_notes.push(format!(
+                                    "last run capture quality low ({q}%) — check capture surfaces"
+                                ));
+                            }
+                        }
+                        if cov
+                            .get("notes")
+                            .and_then(|n| n.as_array())
+                            .map(|a| a.iter().any(|x| x.as_str().unwrap_or("").contains("lag")))
+                            .unwrap_or(false)
+                        {
+                            dd_score = dd_score.saturating_sub(10);
+                            dd_notes.push("last run reported capture lag".into());
+                        }
+                    }
+                    if events.iter().any(|e| e.kind == "capture.warning") {
+                        dd_score = dd_score.saturating_sub(10);
+                        dd_notes.push("last run has capture.warning events".into());
+                    }
+                }
+            }
+        }
+    }
+    let daily_driver_ready = dd_score >= 80 && redact_ok && enabled_ok;
+
     if cli.json {
         let view = views::DoctorView {
             version: env!("CARGO_PKG_VERSION").to_string(),
@@ -4081,6 +4174,10 @@ async fn cmd_doctor(cli: &Cli, args: &DoctorArgs) -> anyhow::Result<()> {
             claims_active,
             unresolved_failure_id,
             attention_level,
+            daily_driver_score: Some(dd_score),
+            daily_driver_ready: Some(daily_driver_ready),
+            daily_driver_notes: dd_notes.clone(),
+            last_capture_quality,
         };
         return output::emit_ok("doctor", &view);
     }
@@ -4125,6 +4222,21 @@ async fn cmd_doctor(cli: &Cli, args: &DoctorArgs) -> anyhow::Result<()> {
         println!("mode:       observe-only (no continuity, no prompt mutation)");
     } else if let Some(ref mode) = continuity_mode {
         println!("mode:       continuity={mode}");
+    }
+    println!(
+        "daily-driver: {} (score {}%)",
+        if daily_driver_ready {
+            "ready"
+        } else {
+            "not ready"
+        },
+        dd_score
+    );
+    if let Some(q) = last_capture_quality {
+        println!("last capture quality: {q}%");
+    }
+    for n in dd_notes.iter().take(6) {
+        println!("  note: {n}");
     }
     if let Some(n) = run_count {
         println!(

@@ -94,10 +94,12 @@ pub fn run_args_for_record(
         tag: tags,
         insecure_raw: false,
         no_redact: false,
-        no_auto_resume: false,
+        // Ambient shell wrap is always neutral recording. Continuity/memory
+        // inject only applies to explicit `blackbox run` (non-ambient).
+        no_auto_resume: true,
         auto_resume: false,
         ci: false,
-        observe_only: false,
+        observe_only: true,
         artifact_dir: None,
         command,
         resume_injection: None,
@@ -174,6 +176,19 @@ mod tests {
             a,
             MaybeRunAction::Passthrough { reason } if reason.contains("nested")
         ));
+    }
+
+    #[test]
+    fn ambient_record_args_are_observe_only() {
+        let args = run_args_for_record(
+            vec!["claude".into(), "-p".into(), "hi".into()],
+            "/proj".into(),
+            vec!["auto".into()],
+            None,
+        );
+        assert!(args.observe_only, "ambient wrap must be observe-only");
+        assert!(args.ambient);
+        assert!(args.no_auto_resume);
     }
 
     #[test]

@@ -453,6 +453,33 @@ pub fn parse_plaintext(run_id: &str, text: &str, harness: &str) -> Vec<TraceEven
             events.push(tool_call_event(run_id, name.as_str(), None, None));
         }
     }
+    // Common shell/agent banners that imply a tool invocation.
+    let lower = text.to_lowercase();
+    if let Some(rest) = text
+        .strip_prefix("$ ")
+        .or_else(|| text.strip_prefix("> "))
+        .or_else(|| text.strip_prefix("➜ "))
+    {
+        if rest.len() > 2 && !rest.starts_with('#') {
+            events.push(tool_call_event(
+                run_id,
+                "Bash",
+                Some(serde_json::json!({ "command": rest.trim() })),
+                None,
+            ));
+        }
+    }
+    if lower.contains("exit code") || lower.contains("exited with code") {
+        let mut ev = TraceEvent::new(run_id, EventSource::System, "process.exit_banner");
+        ev.status = if lower.contains("exit code 0") || lower.contains("code 0") {
+            EventStatus::Success
+        } else {
+            EventStatus::Error
+        };
+        ev.metadata
+            .insert("message".into(), serde_json::json!(text.trim()));
+        events.push(ev);
+    }
     events
 }
 

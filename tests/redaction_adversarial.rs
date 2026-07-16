@@ -97,6 +97,15 @@ fn adversarial_secrets() -> Vec<(&'static str, &'static str)> {
             "long_line",
             "prefix_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa key=sk-abcdefghijklmnopqrstuvwxyz012345 suffix_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         ),
+        ("hf_token", "hf_abcdefghijklmnopqrstuvwx"),
+        (
+            "sendgrid",
+            "SG.abcdefghijklmnop.qrstuvwxyz0123456789ABCDEF",
+        ),
+        (
+            "azure_key",
+            "AccountKey=abcdefghijklmnopqrstuvwxyz0123456789+/==",
+        ),
     ]
 }
 

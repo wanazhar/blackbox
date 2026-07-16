@@ -164,7 +164,34 @@ impl HarnessAdapter for GeminiAdapter {
     }
 
     fn parse_output(&self, run_id: &str, chunk: &[u8]) -> Vec<TraceEvent> {
-        parse_ndjson_or_plaintext(run_id, chunk, "gemini")
+        let text = String::from_utf8_lossy(chunk);
+        let mut events = Vec::new();
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if trimmed.starts_with('{') {
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                    // Gemini CLI sometimes emits functionCall / tool_call shapes
+                    if let Some(fc) = val
+                        .get("functionCall")
+                        .or_else(|| val.get("function_call"))
+                        .or_else(|| val.pointer("/candidates/0/content/parts/0/functionCall"))
+                    {
+                        let name = fc.get("name").and_then(|n| n.as_str()).unwrap_or("unknown");
+                        let args = fc.get("args").or_else(|| fc.get("arguments")).cloned();
+                        events.push(tool_call_event(run_id, name, args, None));
+                        continue;
+                    }
+                }
+            }
+            events.extend(parse_ndjson_or_plaintext(run_id, line.as_bytes(), "gemini"));
+        }
+        if events.is_empty() {
+            events.extend(parse_ndjson_or_plaintext(run_id, chunk, "gemini"));
+        }
+        events
     }
 
     fn locate_native_logs(&self, context: &RunContext) -> Vec<String> {

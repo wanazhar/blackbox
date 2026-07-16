@@ -12,6 +12,73 @@ use blackbox::storage::TraceStore;
 
 const N: usize = 8;
 
+/// Extended soak (ignored by default): more iterations + nested process + PTY volume.
+///
+/// ```bash
+/// cargo test --test soak_ambient soak_extended -- --ignored --nocapture
+/// ```
+#[tokio::test]
+#[ignore = "extended soak — run with --ignored for longer multi-scenario load"]
+async fn soak_extended_multi_scenario() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("soak-ext.db");
+    let blobs = dir.path().join("blobs");
+    let store = SqliteStore::open_with_blobs(&db, &blobs).unwrap();
+    let store: Arc<dyn TraceStore> = Arc::new(store);
+    let supervisor = RunSupervisor::new(store.clone());
+
+    let scenarios: Vec<Vec<String>> = vec![
+        vec!["true".into()],
+        vec![
+            "sh".into(),
+            "-c".into(),
+            "i=0; while [ $i -lt 40 ]; do echo line-$i; i=$((i+1)); done".into(),
+        ],
+        vec![
+            "sh".into(),
+            "-c".into(),
+            "sh -c 'sh -c \"echo nested; sleep 0.05\"'".into(),
+        ],
+        vec!["sh".into(), "-c".into(), "echo secret=sk-abcdefghijklmnopqrstuvwxyz012345".into()],
+    ];
+
+    for round in 0..12 {
+        let cmd = scenarios[round % scenarios.len()].clone();
+        let args = RunArgs {
+            name: Some(format!("ext-soak-{round}")),
+            project: Some(dir.path().to_string_lossy().into()),
+            tag: vec!["soak-ext".into()],
+            insecure_raw: false,
+            no_redact: false,
+            no_auto_resume: true,
+            auto_resume: false,
+            ci: false,
+            observe_only: true,
+            artifact_dir: None,
+            resume_injection: None,
+            claim_id_note: None,
+            ambient: true,
+            command: cmd,
+        };
+        let run = supervisor.execute(&args).await.expect("ext soak run");
+        assert!(
+            run.notes.as_deref().unwrap_or("").contains("observe-only"),
+            "must stay observe-only"
+        );
+        let events = store.get_events(&run.id).await.unwrap();
+        assert!(events.iter().any(|e| e.kind == "capture.coverage"));
+        // Secret planted in one scenario must not survive previews unredacted when redacted path used
+        for ev in &events {
+            if let Some(p) = ev.metadata.get("preview").and_then(|v| v.as_str()) {
+                assert!(
+                    !p.contains("sk-abcdefghijklmnopqrstuvwxyz012345"),
+                    "secret leaked in preview: {p}"
+                );
+            }
+        }
+    }
+}
+
 #[tokio::test]
 async fn soak_observe_only_repeated_true() {
     let dir = tempfile::tempdir().unwrap();

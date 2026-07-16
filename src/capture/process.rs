@@ -16,10 +16,11 @@ use tokio::sync::mpsc;
 ///
 /// # Limitations (short-lived processes)
 ///
-/// Polling is best-effort (~250 ms interval). Processes that spawn and exit
-/// between polls may be missed. Exact argv is read from `/proc/<pid>/cmdline`
-/// when the process is still alive; exit codes are not always available without
-/// waitpid on the process group. Non-Linux platforms get basic PID tracking only.
+/// Polling is best-effort (adaptive 50–200 ms). Processes that spawn and exit
+/// between polls may be missed. On Linux, exact argv comes from
+/// `/proc/<pid>/cmdline`. On Windows/macOS, `sysinfo` provides best-effort
+/// argv/cwd/exe/parent. Exit codes for grandchildren are usually unavailable
+/// without waitpid on the process group.
 #[derive(Debug)]
 pub struct ProcessCapture {
     event_tx: Option<mpsc::Sender<TraceEvent>>,
@@ -111,9 +112,18 @@ impl CaptureLayer for ProcessCapture {
         let mut meta = meta;
         meta.capture_method = CaptureMethod::AdapterArgv;
         meta.apply_to_event(&mut ev);
+        let tree_backend = if cfg!(target_os = "linux") {
+            "linux_proc"
+        } else {
+            "sysinfo"
+        };
         ev.metadata.insert(
             "process_tree_capture".to_string(),
-            serde_json::json!(cfg!(target_os = "linux")),
+            serde_json::json!(true),
+        );
+        ev.metadata.insert(
+            "process_tree_backend".to_string(),
+            serde_json::json!(tree_backend),
         );
         tx.send(ev).await?;
         let _ = tx
@@ -123,35 +133,36 @@ impl CaptureLayer for ProcessCapture {
         self.run_id = Some(run.id.clone());
         self.event_tx = Some(tx);
 
-        // Spawn background /proc poller only on Linux
+        // Always spawn a process-tree poller:
+        // - Linux: /proc (lossless cmdline)
+        // - others: sysinfo (best-effort Tool Help / libproc)
+        let (pid_tx, pid_rx) = tokio::sync::oneshot::channel();
+        let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+        let run_id = run.id.clone();
+        let event_tx = self.event_tx.clone().unwrap();
+        self.pid_tx = Some(pid_tx);
+        self.stop_tx = Some(stop_tx);
+
         #[cfg(target_os = "linux")]
         {
-            let (pid_tx, pid_rx) = tokio::sync::oneshot::channel();
-            let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
-            let run_id = run.id.clone();
-            let event_tx = self.event_tx.clone().unwrap();
-
-            self.pid_tx = Some(pid_tx);
-            self.stop_tx = Some(stop_tx);
-
             tokio::spawn(async move {
                 proc_poller_loop(run_id, event_tx, pid_rx, stop_rx).await;
             });
         }
         #[cfg(not(target_os = "linux"))]
         {
-            // Honest platform limitation as a structured health signal.
-            if let Some(tx) = &self.event_tx {
-                let _ = tx
-                    .send(crate::capture::health::layer_event(
-                        &run.id,
-                        "process",
-                        "healthy",
-                        EventStatus::Success,
-                        Some("basic PID tracking only (no /proc process-tree)"),
-                    ))
-                    .await;
-            }
+            let _ = event_tx
+                .send(crate::capture::health::layer_event(
+                    &run_id,
+                    "process",
+                    "healthy",
+                    EventStatus::Success,
+                    Some("sysinfo process-tree backend (best-effort argv)"),
+                ))
+                .await;
+            tokio::spawn(async move {
+                sysinfo_poller_loop(run_id, event_tx, pid_rx, stop_rx).await;
+            });
         }
 
         Ok(rx)
@@ -438,11 +449,12 @@ async fn proc_poller_loop(
         _ = stop_rx.changed() => return,
     };
 
-    // 100ms balances short-lived process discovery vs /proc scan cost.
-    let poll_interval = Duration::from_millis(100);
+    // Adaptive poll: 50ms while the tree is changing, back off to 200ms when idle.
+    let mut poll_interval = Duration::from_millis(50);
     let mut known: HashSet<u32> = HashSet::new();
     known.insert(root_pid);
     let root_pgid = read_pgid_sid(root_pid).0;
+    let mut idle_cycles = 0u32;
 
     // Emit root discovery with full snapshot.
     if let Some(snap) = read_process_snapshot(root_pid) {
@@ -477,15 +489,18 @@ async fn proc_poller_loop(
                 snap_ev.status = EventStatus::Success;
                 snap_ev.metadata.insert("root_pid".to_string(), serde_json::json!(root_pid));
                 snap_ev.metadata.insert("process_count".to_string(), serde_json::json!(known.len()));
+                snap_ev.metadata.insert("backend".to_string(), serde_json::json!("linux_proc"));
                 let _ = event_tx.send(snap_ev).await;
                 break;
             }
             _ = tokio::time::sleep(poll_interval) => {
                 let current = find_descendants(root_pid);
+                let mut changed = false;
 
                 // New processes
                 for &pid in &current {
                     if !known.contains(&pid) && pid != root_pid {
+                        changed = true;
                         if let Some(snap) = read_process_snapshot(pid) {
                             let mut ev = TraceEvent::new(
                                 &run_id,
@@ -528,6 +543,7 @@ async fn proc_poller_loop(
                 for &pid in &known {
                     if pid == root_pid { continue; }
                     if !current.contains(&pid) && !process_exists(pid) {
+                        changed = true;
                         let mut ev = TraceEvent::new(
                             &run_id,
                             EventSource::Process,
@@ -539,33 +555,210 @@ async fn proc_poller_loop(
                     }
                 }
 
-                // Periodic resource samples for long-lived children
-                for &pid in &current {
-                    if pid == root_pid { continue; }
-                    if known.contains(&pid) {
-                        if let Some(snap) = read_process_snapshot(pid) {
-                            let mut res = TraceEvent::new(
-                                &run_id,
-                                EventSource::Process,
-                                "process.resource.sample",
-                            );
-                            res.status = EventStatus::Success;
-                            res.metadata.insert("pid".to_string(), serde_json::json!(pid));
-                            if let Some(rss) = snap.resources.rss_kb {
-                                res.metadata.insert("rss_kb".to_string(), serde_json::json!(rss));
+                // Periodic resource samples for long-lived children (every ~1s idle)
+                if idle_cycles.is_multiple_of(5) {
+                    for &pid in &current {
+                        if pid == root_pid { continue; }
+                        if known.contains(&pid) {
+                            if let Some(snap) = read_process_snapshot(pid) {
+                                let mut res = TraceEvent::new(
+                                    &run_id,
+                                    EventSource::Process,
+                                    "process.resource.sample",
+                                );
+                                res.status = EventStatus::Success;
+                                res.metadata.insert("pid".to_string(), serde_json::json!(pid));
+                                if let Some(rss) = snap.resources.rss_kb {
+                                    res.metadata.insert("rss_kb".to_string(), serde_json::json!(rss));
+                                }
+                                if let Some(cpu) = snap.resources.cpu_time_ms {
+                                    res.metadata.insert("cpu_time_ms".to_string(), serde_json::json!(cpu));
+                                }
+                                let _ = event_tx.send(res).await;
                             }
-                            if let Some(cpu) = snap.resources.cpu_time_ms {
-                                res.metadata.insert("cpu_time_ms".to_string(), serde_json::json!(cpu));
-                            }
-                            let _ = event_tx.send(res).await;
                         }
                     }
                 }
 
+                if changed {
+                    idle_cycles = 0;
+                    poll_interval = Duration::from_millis(50);
+                } else {
+                    idle_cycles = idle_cycles.saturating_add(1);
+                    if idle_cycles >= 3 {
+                        poll_interval = Duration::from_millis(200);
+                    }
+                }
                 known = current;
             }
         }
     }
+}
+
+/// Cross-platform process-tree poller (Windows/macOS/etc.) via `sysinfo`.
+///
+/// Parent/child relationships and cmd argv are best-effort depending on OS
+/// permissions. Prefer Linux `/proc` backend when available.
+#[cfg(not(target_os = "linux"))]
+async fn sysinfo_poller_loop(
+    run_id: String,
+    event_tx: mpsc::Sender<TraceEvent>,
+    pid_rx: tokio::sync::oneshot::Receiver<u32>,
+    mut stop_rx: tokio::sync::watch::Receiver<bool>,
+) {
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+
+    let root_pid = tokio::select! {
+        pid = pid_rx => match pid {
+            Ok(p) => p,
+            Err(_) => return,
+        },
+        _ = stop_rx.changed() => return,
+    };
+
+    let mut sys = System::new();
+    let refresh = ProcessRefreshKind::new()
+        .with_cmd(UpdateKind::Always)
+        .with_cwd(UpdateKind::Always)
+        .with_exe(UpdateKind::Always)
+        .with_memory();
+    let mut known: HashSet<u32> = HashSet::new();
+    known.insert(root_pid);
+    let mut poll_interval = Duration::from_millis(50);
+    let mut idle_cycles = 0u32;
+
+    // Root discovery
+    sys.refresh_processes_specifics(ProcessesToUpdate::All, true, refresh);
+    if let Some(proc) = sys.process(Pid::from_u32(root_pid)) {
+        let mut ev = TraceEvent::new(&run_id, EventSource::Process, "process.discovered");
+        ev.status = EventStatus::Success;
+        apply_sysinfo_to_event(&mut ev, root_pid, proc, CaptureMethod::ProcPoller);
+        let _ = event_tx.send(ev).await;
+    }
+
+    loop {
+        tokio::select! {
+            _ = stop_rx.changed() => {
+                for &pid in &known {
+                    if pid == root_pid { continue; }
+                    let mut ev = TraceEvent::new(&run_id, EventSource::Process, "process.exited");
+                    ev.status = EventStatus::Success;
+                    ev.metadata.insert("pid".to_string(), serde_json::json!(pid));
+                    ev.metadata.insert("reason".to_string(), serde_json::json!("observer_stopped"));
+                    let _ = event_tx.send(ev).await;
+                }
+                let mut snap = TraceEvent::new(&run_id, EventSource::Process, "process.tree.snapshot");
+                snap.status = EventStatus::Success;
+                snap.metadata.insert("root_pid".to_string(), serde_json::json!(root_pid));
+                snap.metadata.insert("process_count".to_string(), serde_json::json!(known.len()));
+                snap.metadata.insert("backend".to_string(), serde_json::json!("sysinfo"));
+                let _ = event_tx.send(snap).await;
+                break;
+            }
+            _ = tokio::time::sleep(poll_interval) => {
+                sys.refresh_processes_specifics(ProcessesToUpdate::All, true, refresh);
+                let current = sysinfo_descendants(&sys, root_pid);
+                let mut changed = false;
+
+                for &pid in &current {
+                    if !known.contains(&pid) && pid != root_pid {
+                        changed = true;
+                        if let Some(proc) = sys.process(Pid::from_u32(pid)) {
+                            let mut ev = TraceEvent::new(&run_id, EventSource::Process, "process.exec");
+                            ev.status = EventStatus::Success;
+                            apply_sysinfo_to_event(&mut ev, pid, proc, CaptureMethod::ProcPoller);
+                            let _ = event_tx.send(ev).await;
+                        }
+                    }
+                }
+                for &pid in &known {
+                    if pid == root_pid { continue; }
+                    if !current.contains(&pid) {
+                        changed = true;
+                        let mut ev = TraceEvent::new(&run_id, EventSource::Process, "process.exited");
+                        ev.status = EventStatus::Success;
+                        ev.metadata.insert("pid".to_string(), serde_json::json!(pid));
+                        let _ = event_tx.send(ev).await;
+                    }
+                }
+
+                if changed {
+                    idle_cycles = 0;
+                    poll_interval = Duration::from_millis(50);
+                } else {
+                    idle_cycles = idle_cycles.saturating_add(1);
+                    if idle_cycles >= 3 {
+                        poll_interval = Duration::from_millis(200);
+                    }
+                }
+                known = current;
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn sysinfo_descendants(sys: &sysinfo::System, root: u32) -> HashSet<u32> {
+    use sysinfo::Pid;
+    let mut set = HashSet::new();
+    set.insert(root);
+    // Multi-pass parent walk (same approach as /proc)
+    loop {
+        let mut added = false;
+        for (pid, proc) in sys.processes() {
+            let pid_u = pid.as_u32();
+            if set.contains(&pid_u) {
+                continue;
+            }
+            if let Some(pp) = proc.parent() {
+                if set.contains(&pp.as_u32()) {
+                    set.insert(pid_u);
+                    added = true;
+                }
+            }
+        }
+        if !added {
+            break;
+        }
+    }
+    let _ = Pid::from_u32(root);
+    set
+}
+
+#[cfg(not(target_os = "linux"))]
+fn apply_sysinfo_to_event(
+    ev: &mut TraceEvent,
+    pid: u32,
+    proc: &sysinfo::Process,
+    method: CaptureMethod,
+) {
+    let argv: Vec<String> = proc
+        .cmd()
+        .iter()
+        .map(|s| s.to_string_lossy().into_owned())
+        .collect();
+    let executable = proc.exe().map(|p| p.to_string_lossy().into_owned());
+    let cwd = proc.cwd().map(|p| p.to_string_lossy().into_owned());
+    let ppid = proc.parent().map(|p| p.as_u32()).unwrap_or(0);
+    ev.metadata.insert("pid".into(), serde_json::json!(pid));
+    ev.metadata.insert("ppid".into(), serde_json::json!(ppid));
+    let meta = if argv.is_empty() {
+        let name = proc.name().to_string_lossy().into_owned();
+        CommandMetadata::from_proc_argv(vec![name], executable, cwd, method)
+    } else {
+        CommandMetadata::from_proc_argv(argv, executable, cwd, method)
+    };
+    meta.apply_to_event(ev);
+    // memory() is bytes in sysinfo
+    let rss_kb = proc.memory() / 1024;
+    ev.metadata
+        .insert("rss_kb".into(), serde_json::json!(rss_kb));
+    ev.metadata.insert(
+        "cpu_usage_pct".into(),
+        serde_json::json!(proc.cpu_usage()),
+    );
+    ev.metadata
+        .insert("capture_backend".into(), serde_json::json!("sysinfo"));
 }
 
 #[cfg(not(target_os = "linux"))]

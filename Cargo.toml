@@ -96,6 +96,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 object_store = { version = "0.11", features = ["aws"] }
 bytes = "1"
 toml = { version = "0.8", features = ["parse"] }
+sysinfo = { version = "0.33", features = ["system"] }
 
 [dev-dependencies]
 tempfile = "3"

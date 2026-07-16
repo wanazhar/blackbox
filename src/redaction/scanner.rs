@@ -154,6 +154,29 @@ static BASE_PATTERNS: LazyLock<Vec<(RedactionReason, Regex)>> = LazyLock::new(||
         RedactionReason::AuthorizationHeader,
         r"(?i)authorization\s*[:=]\s*token\s+[A-Za-z0-9\-._~+/]+=*",
     );
+    // SendGrid / Twilio / Mailgun style keys
+    add(
+        &mut patterns,
+        RedactionReason::ApiKey,
+        r"\bSG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}\b",
+    );
+    add(
+        &mut patterns,
+        RedactionReason::ApiKey,
+        r"\bSK[a-f0-9]{32}\b",
+    );
+    // Azure storage / SAS-ish (assignment form only to avoid scarring SHAs)
+    add(
+        &mut patterns,
+        RedactionReason::CloudCredential,
+        r#"(?i)(azure_storage_key|accountkey|sharedaccesssignature)\s*[:=]\s*['"]?[A-Za-z0-9+/=%]{16,}"#,
+    );
+    // Private key material mid-block (PEM body often follows BEGIN)
+    add(
+        &mut patterns,
+        RedactionReason::SshKey,
+        r"(?i)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]{0,200}",
+    );
     // Intentionally NO whole-string base64/hex pattern (e.g. `^[A-Za-z0-9+/]{40,}={0,2}$`).
     // That class matched git SHAs, content-addressed blob keys, and other structural
     // identifiers. PEM private keys are covered by the BEGIN PRIVATE KEY header pattern.

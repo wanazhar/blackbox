@@ -876,7 +876,8 @@ impl RunSupervisor {
                         || e.kind.contains("error"))
             })
         };
-        let process_tree_available = cfg!(target_os = "linux");
+        // Process tree is available on all platforms (Linux /proc or sysinfo backend).
+        let process_tree_available = true;
         let health = writer.health_snapshot();
         let (merge_lag, merge_send_fail) = merge_stats.snapshot();
         let mut capture_lag_note = health.soft_warning();

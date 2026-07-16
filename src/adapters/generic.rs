@@ -81,9 +81,13 @@ impl HarnessAdapter for GenericAdapter {
                 || trimmed.starts_with("Segmentation fault")
                 || trimmed.starts_with("core dumped")
                 || trimmed.starts_with("FAILED")
+                || trimmed.starts_with("Failed")
+                || trimmed.starts_with("FAIL ")
                 || trimmed.starts_with("Aborted")
                 || trimmed.starts_with("Killed")
                 || trimmed.starts_with("Traceback")
+                || trimmed.starts_with("error[E")
+                || trimmed.starts_with("test result: FAILED")
             {
                 let mut ev = TraceEvent::new(run_id, EventSource::System, "process.error_banner");
                 ev.status = EventStatus::Error;

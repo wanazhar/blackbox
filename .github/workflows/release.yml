@@ -76,38 +76,52 @@ jobs:
 
   release:
     name: github release
+    # Publish whatever matrix legs succeeded (e.g. Linux OK, mac failed)
+    # instead of skipping the whole release and leaving "Latest" on the prior tag.
     needs: build
+    if: always() && !cancelled()
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download all artifacts
+      - name: Download available artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+          merge-multiple: true
+        continue-on-error: true
 
       - name: Collect tarballs
+        id: pack
         run: |
           mkdir -p dist
-          find artifacts -name '*.tar.gz' -exec cp {} dist/ \;
-          ls -la dist
+          find artifacts -name '*.tar.gz' -exec cp {} dist/ \; 2>/dev/null || true
+          ls -la dist || true
+          count=$(find dist -name '*.tar.gz' 2>/dev/null | wc -l | tr -d ' ')
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          if [ "$count" = "0" ]; then
+            echo "No binary artifacts — release will note crates.io only"
+          fi
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
+          fail_on_unmatched_files: false
           generate_release_notes: true
           body: |
             ## Install
 
             ```bash
-            # From crates.io
+            # From crates.io (all platforms)
             cargo install blackbox-recorder
 
-            # Or binary (linux x86_64 example)
+            # Or prebuilt binary via install.sh (uses this release's assets)
             curl -fsSL https://raw.githubusercontent.com/wanazhar/blackbox/master/install.sh | sh
             ```
 
             Binary: `blackbox` · crate: `blackbox-recorder`
+
+            If a platform asset is missing from this release, use `cargo install blackbox-recorder`.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

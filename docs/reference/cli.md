@@ -1,8 +1,27 @@
 # CLI reference
 
-**Normative flag and subcommand list.** For task-oriented walkthroughs (install, debug, ambient capture), start with [../guide/README.md](../guide/README.md).
+**Normative flag and subcommand list.** For task-oriented walkthroughs, start with [../guide/README.md](../guide/README.md).
 
-All blackbox subcommands, arguments, exit codes, and JSON output schemas. Every command accepts `--json` for machine-readable output wrapped in the `blackbox.cli/v1` envelope.
+Every command accepts global `--json` for machine-readable output (`blackbox.cli/v1` envelope — [json-api.md](json-api.md)). This page is exhaustive; use the job index below to jump.
+
+---
+
+## Command index by job
+
+| Job | Commands |
+|---|---|
+| **Project setup** | [`enable`](#1-enable--disable) · [`disable`](#1-enable--disable) |
+| **Record** | [`run`](#2-run) · [`maybe-run`](#3-maybe-run) |
+| **Status / memory / multi-agent** | [`status`](#4-status) · [`handoff`](#5-handoff) · [`memory`](#6-memory-show--memory-set) · [`claim`](#7-claim) · [`resolve`](#8-resolve) · [`ack`](#9-ack) · [`context`](#33-context) |
+| **Inspect** | [`runs`](#10-runs) · [`show`](#11-show) · [`timeline`](#12-timeline) · [`inspect`](#13-inspect) · [`watch`](#17-watch) · [`search`](#16-search) |
+| **Explain / compare** | [`postmortem`](#31-postmortem) · [`summary`](#32-summary) · [`analyze`](#15-analyze) · [`diff`](#14-diff) |
+| **Share / move data** | [`export`](#18-export) · [`import`](#19-import) · [`backup` / `restore`](#19b-backup--restore) · [`sync`](#20-sync-push--sync-pull) |
+| **Dashboard / agents** | [`serve`](#21-serve) · [`mcp`](#34-mcp) |
+| **Replay** | [`replay`](#22-replay) · [`fork`](#23-fork) |
+| **Hygiene** | [`scrub`](#24-scrub) · [`doctor`](#25-doctor) · [`stats`](#29-stats) · [`gc`](#30-gc) · [`rm`](#26-rm) · [`purge`](#27-purge) · [`tags`](#28-tags--tag) |
+| **Shell** | [`completions`](#35-completions) |
+
+Guide shortcuts: [getting-started](../guide/getting-started.md) · [debug](../guide/debug-a-failure.md) · [config](../guide/configuration.md) · [security](../guide/security.md).
 
 ---
 

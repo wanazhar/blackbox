@@ -1,232 +1,130 @@
 # Security
 
-**Answers:** What is redacted by default, which flags disable protection, residual risks (same-UID, disk theft), serve auth, and optional at-rest encryption / sealed backup.
+**Answers:** What is redacted before disk, which flags disable protection, multi-user file modes, serve auth, residual threats (same-UID, disk theft, novel secrets), historical scrub, and optional at-rest encryption / sealed backup.
 
-Blackbox runs on machines that may hold secrets — API keys, tokens, passwords, environment variables. The core invariant is **redact-before-write**: matching secrets are scrubbed before they touch SQLite or blobs. Perfect redaction is not claimed; see limitations below.
+Related: [configuration.md](configuration.md) (keys and env), [export-and-sync.md](export-and-sync.md) (share path), [overhead.md](overhead.md) (cost of capture).
 
 ---
 
-## 1. Redaction model
+## Threat model (read this first)
 
-| Surface | Redacted by default? | What is redacted |
+| Adversary / situation | Default protection | Gap |
 |---|---|---|
-| **argv** (command + process tree) | ✅ Yes | Arguments that match secret patterns |
-| **Environment variables** | ✅ Yes | Name denylist **and** value pattern scan (keys, connection strings, tokens) |
-| **Git diffs** | ✅ Yes | Diff text scanned before blob/preview storage |
-| **Terminal output** | ✅ Yes | Inline strings matching secret patterns |
-| **Tool inputs/outputs** | ✅ Yes | Parameters and results matching secret patterns |
-| **Run IDs** | ❌ No | UUIDs — structural identifiers survive |
-| **Blob keys** | ❌ No | SHA-256 hashes — structural identifiers survive |
-| **Timestamps** | ❌ No | Temporal metadata |
+| Accidental commit of agent scrollback with API keys | Redact-before-write + gitignore `.blackbox/` | You can still force `--no-redact` |
+| Colleague on same machine, **other UID** | `0700` / `0600` store modes | Mis-set umask historically → `doctor` hardens |
+| Colleague / malware, **same UID** | None special | Can read store + key files you can read |
+| Stolen laptop, disk unlocked | Optional blob encrypt + sealed sticky; offline backup vault | Live `blackbox.db` metadata is not SQLCipher |
+| Stolen laptop, sealed offline vault only | Passphrase-sealed `backup` | Passphrase strength is yours |
+| Shared export JSON | Redacted export default | `--no-redact` or sealed-open with passphrase |
+| Dashboard on LAN | Non-loopback requires token | Loopback without token = any local user with network to 127.0.0.1 |
 
-### SecretScanner
+**Blackbox is not a vault by default.** It is a redacting flight recorder with optional crypto layers.
 
-The `SecretScanner` (`src/redaction/scanner.rs`) is a multi-strategy scanner:
+---
 
-| Strategy | Example matches |
+## 1. Redact-before-write
+
+Invariant: matching secrets are scrubbed **before** SQLite rows and blob files are written (unless danger flags say otherwise).
+
+| Surface | Default | What is scanned |
+|---|---|---|
+| argv / process tree | On | Secret-like arguments |
+| Environment | On | Name denylist **and** value patterns; capture mode allowlist vs full (see config) |
+| Git diffs | On | Diff text before blob/preview |
+| Terminal (PTY) | On | Stream redaction with overlap window |
+| Tool I/O | On | Nested JSON string values in metadata |
+| Run UUIDs, blob SHA-256 keys, timestamps, event kinds | **Not** redacted | Structural IDs must survive for debugging |
+
+Replacement token: `[REDACTED]`. Events may carry a `redactions` count in metadata.
+
+### Scanner strategies (implementation)
+
+`SecretScanner` (`src/redaction/scanner.rs`) combines:
+
+| Strategy | Examples |
 |---|---|
-| Known env var names | `API_KEY=...`, `TOKEN=...`, `SECRET=...`, `PASSWORD=...` |
-| Cloud / provider keys | `sk-...` (OpenAI), `sk-ant-...`, `ghp_` / `github_pat_`, `AKIA...`, `xoxb-...`, `AIza...`, `xai-...`, npm/pypi tokens |
-| Auth headers / cookies | `Bearer ...`, `Basic ...`, `Set-Cookie`, `sessionid=` |
-| Connection strings | `postgres://user:pass@...`, `https://user:pass@host` |
-| Signed URL params | `X-Amz-Signature=...`, `access_token=...` |
-| PEM private keys | `-----BEGIN … PRIVATE KEY-----` |
-| JSON payload scanning | Nested string values in tool metadata |
+| Env-style names | `API_KEY=`, `TOKEN=`, `PASSWORD=`, … |
+| Provider keys | `sk-…`, `sk-ant-…`, `ghp_` / `github_pat_`, `AKIA…`, `xoxb-…`, `AIza…`, `xai-…`, npm/pypi tokens |
+| Auth headers / cookies | `Bearer`, `Basic`, `Set-Cookie`, `sessionid=` |
+| Connection strings | `postgres://user:pass@…`, embedded basic-auth URLs |
+| Signed URL params | `X-Amz-Signature=`, `access_token=` |
+| PEM private keys | `BEGIN … PRIVATE KEY` |
+| Nested JSON | Tool metadata string leaves |
 
-**Stream redaction:** PTY capture uses `StreamRedactor` with an overlap window so secrets split across chunk boundaries are still detected before write.
+**Stream redaction:** PTY path uses an overlap window (default on the order of 256 bytes) so secrets split across chunk boundaries are still caught before write.
 
-**Structural IDs never scarred:** git SHAs, blob keys (SHA-256 hex), UUIDs, and event kinds are not matched by whole-string base64/hex patterns.
+**Structural IDs not scarred:** whole-string hex/base64 matchers are constrained so git SHAs, blob keys, and UUIDs survive. Regression: `tests/redaction_gate.rs`, `tests/redaction_adversarial.rs`.
 
-**Adversarial corpus:** `tests/redaction_adversarial.rs` is the permanent regression gate (chunk splits, export, mixed SHA+secret).
+### Limitations (honest)
 
-Redacted values are replaced with `[REDACTED]`. Event metadata may include a `redactions` count.
-
-### Known limitations
-
-- Perfect redaction is not guaranteed for novel secret formats; defaults are conservative.
-- Secrets only present in raw PTY blobs under `--insecure-raw` are stored unredacted by design.
-- Overlap window is finite (default 256 bytes); extremely long tokens split with a larger gap may still miss (prefer coalesced storage + scrub).
-- Opt-in danger flags: `--insecure-raw`, `--no-redact` (never enable on shared machines).
-- **Blackbox is not a vault by default.** Same-UID malware and unlocked-disk theft still see traces unless you enable at-rest protections (below). Live SQLCipher for the SQLite DB is intentionally **not** wired; the practical path is blob encryption + sealed offline backup.
+- Novel secret formats can slip; defaults are conservative but not omniscient.
+- `--insecure-raw` stores raw PTY material by design.
+- Overlap window is finite; pathological splits can miss (scrub later; prefer coalesced storage).
+- Old stores captured under older scanners remain hot until `blackbox scrub`.
+- Live SQLite **run/event metadata** is not column-encrypted; blob encrypt + sealed backup are the practical vault path (no live SQLCipher).
 
 ---
 
-## 2. Safe defaults
+## 2. Danger flags
 
-### Capture
-
-```bash
-# Default: redacted
-blackbox run -- npm test
-
-# Unsafe: raw PTY bytes stored as blobs
-blackbox run --insecure-raw -- npm test
-
-# Unsafe: no redaction at all
-blackbox run --no-redact -- npm test
-```
-
-### Export
-
-```bash
-# Default: redacted
-blackbox export <run-id> --format portable -o trace.json
-
-# Unsafe: full unredacted trace
-blackbox export <run-id> --format portable -o trace.json --no-redact
-```
-
-### Sync
-
-```bash
-# Default: redacted
-blackbox sync push --dir /mnt/backup
-
-# Unsafe: raw data
-blackbox sync push --dir /mnt/backup --no-redact
-```
-
----
-
-## 3. Flags
-
-| Flag | Effect | When to use |
+| Flag | Effect | When it is justified |
 |---|---|---|
-| `--insecure-raw` | Store raw PTY bytes as blobs in addition to redacted output | Debugging adapter parsing; **never** on machines with secrets |
-| `--no-redact` | Disable all redaction on capture, export, or sync | Private offline analysis on a trusted machine; **never** when sharing traces |
-
-Both flags require explicit opt-in. They are purposefully named to discourage casual use.
-
----
-
-## Overhead benchmarks (local)
-
-Ambient capture must stay cheap enough to leave on. Soft budgets ship in tests; the full suite is **local-only** (not a hard CI gate):
+| `--insecure-raw` | Keep raw PTY bytes as blobs (in addition to normal pipeline) | Adapter debugging on a machine with **no** secrets |
+| `--no-redact` | Disable redaction on capture **or** export/sync (per command) | Private offline forensics on a trusted host; **never** for shares |
 
 ```bash
-# Soft always-on smoke (debug-friendly budgets)
-cargo test --test overhead_smoke
-cargo test --test overhead_bench soft_true event_write
+# Default — redacted
+blackbox run -- npm test
+blackbox export latest --format portable -o trace.json
+blackbox sync push --dir /backup
 
-# Full local bench with p50/p95 tables (ignored by default)
-cargo test --test overhead_bench -- --ignored --nocapture
+# Explicitly unsafe
+blackbox run --insecure-raw -- … 
+blackbox run --no-redact -- …
+blackbox export latest -o raw.json --no-redact
 ```
 
-`blackbox stats` reports average events/run and blob bytes/run for storage cost visibility.
+Names are intentionally ugly.
 
 ---
 
-## 4. At-rest redaction
+## 3. Historical scrub
 
-Historical runs may contain secrets if captured with `--no-redact` or before new redaction patterns were added.
+If patterns improved or you once used `--no-redact`:
 
 ```bash
-# Re-apply current redaction rules to all historical events
 blackbox scrub
-
-# Also GC orphaned blob files
-blackbox scrub --gc
+blackbox scrub --gc    # re-redact + delete orphan blob keys
 ```
 
-`scrub` re-reads events, re-applies the `SecretScanner` patterns, and rewrites **event I/O blobs** (input/output/error) plus metadata strings. Prefer `blackbox scrub --gc` afterward so replaced secret blobs are deleted. Environment/diff metadata-key blobs are still a residual gap — treat old stores as potentially hot until scrubbed under a current build.
+Rewrites event I/O blobs (input/output/error) and metadata strings under current rules. Prefer `--gc` so replaced secret blobs do not linger. Treat pre-scrub stores as potentially sensitive.
 
 ---
 
-## 4b. Store file permissions (multi-user)
+## 4. Filesystem permissions
 
-On Unix, blackbox sets **owner-only** modes when creating store artifacts:
+On Unix, create paths with owner-only modes when blackbox creates them:
 
 | Path | Mode |
 |---|---|
-| `.blackbox/` and `blobs/` | `0700` |
-| `blackbox.db`, blob files, `state.json`, `MEMORY.*` | `0600` |
+| `.blackbox/`, `blobs/` | `0700` |
+| `blackbox.db`, blobs, `state.json`, `MEMORY.*`, `store.key` | `0600` |
 
-`blackbox doctor` warns (and best-effort hardens) if the store is group/other-readable. This blocks **other local UIDs** with a default umask — not the same user, not root, and not an unlocked stolen disk.
+`blackbox doctor` warns and best-effort hardens group/other-readable stores. This stops **other UIDs**, not root, not same-UID malware, not an unlocked disk image.
 
 ---
 
-## 4c. At-rest encryption and offline vault
+## 5. At-rest encryption and offline vault
 
-Live SQLCipher for the SQLite DB is **not** used (adds key-management complexity and FTS friction). Practical protections:
+Live SQLCipher on the DB is **intentionally not** wired (key UX + FTS complexity). Layered practical path:
 
-| Layer | How |
+| Layer | Mechanism |
 |---|---|
-| **Blob encryption** | `capture.encrypt_blobs=true` → ChaCha20-Poly1305; key in `.blackbox/store.key` or `BLACKBOX_STORE_KEY` / `BLACKBOX_STORE_KEY_FILE` |
-| **Sticky seal** | When store key exists, `state.json` + `MEMORY.json` are sealed on disk |
-| **Sealed export** | `export --format portable --passphrase …` / `--encrypt` |
-| **Offline vault** | `blackbox backup -o vault.bbx.json --passphrase …` then `restore` (DB + sticky; optional blobs). Prefer passphrase so the archive is portable without shipping `store.key`. |
-
-```bash
-# Enable blob encryption (generates store.key if missing)
-# config.toml: [capture] encrypt_blobs = true
-
-# Offline passphrase vault (recommended for laptop theft / cold storage)
-blackbox backup -o ~/vaults/proj.bbx.json --passphrase-env BLACKBOX_EXPORT_PASSPHRASE
-blackbox restore ~/vaults/proj.bbx.json --passphrase-env BLACKBOX_EXPORT_PASSPHRASE
-```
-
-External key path tip: put the key outside the project (`BLACKBOX_STORE_KEY_FILE=~/.config/blackbox/default.key`) so project-tree theft alone is useless.
-
----
-
-## 5. Export and sync
-
-Export and sync operations are **redacted by default**:
-
-```bash
-# Portable export (redacted)
-blackbox export <run-id> -o trace.json
-
-# Sync to directory (redacted)
-blackbox sync push --dir /backup
-
-# Sync to S3 (redacted)
-blackbox sync push --s3 s3://my-bucket/traces/
-```
-
-Pass `--no-redact` only for private offline analysis:
-
-```bash
-blackbox export <run-id> -o trace.json --no-redact
-```
-
----
-
-## 6. Serve security
-
-The dashboard binds to `127.0.0.1:7788` by default (localhost only):
-
-```bash
-blackbox serve
-# Listening on http://127.0.0.1:7788
-```
-
-**Non-loopback binds refuse to start without a token** (`--bind 0.0.0.0:7788` requires `--token` / `BLACKBOX_SERVE_TOKEN`). Loopback without a token still warns: any local user can `curl 127.0.0.1:7788` and read full history.
-
-### Token authentication
-
-```bash
-blackbox serve --token my-secret-token
-# Or via env:
-BLACKBOX_SERVE_TOKEN=my-secret-token blackbox serve
-```
-
-**Authorization header only** — query `?token=` is no longer accepted (tokens in
-URLs leak into browser history, proxies, and Referer). The dashboard migrates a
-one-time `?token=` into `sessionStorage` and uses `fetch` + Bearer for SSE.
-
-```bash
-curl -H "Authorization: Bearer my-secret-token" http://host:7788/api/status
-```
-
-Sync/serve portable export uses the same H-08 blob re-scan as CLI `export`.
-`blackbox scrub` rewrites env/diff/transcript blobs and auto-GCs orphan keys.
-
----
-
-## 7. At-rest blob encryption (optional)
-
-Opt-in ChaCha20-Poly1305 for content-addressed blobs (env dumps, PTY text, diffs):
+| Blob encryption | `encrypt_blobs = true` → ChaCha20-Poly1305; content hash remains SHA-256 of **plaintext** |
+| Key material | `.blackbox/store.key` **or** `BLACKBOX_STORE_KEY` / `BLACKBOX_STORE_KEY_FILE` / `~/.config/blackbox/default.key` |
+| Sticky seal | With key present: seal `state.json` + `MEMORY.json` (markdown may stay plain for preambles) |
+| Sealed export | `export --format portable --passphrase …` or `--encrypt` (store key) |
+| Offline vault | `blackbox backup` / `restore` — DB + sticky; optional blobs; **passphrase preferred**; `store.key` not embedded |
 
 ```toml
 # .blackbox/config.toml
@@ -234,82 +132,85 @@ Opt-in ChaCha20-Poly1305 for content-addressed blobs (env dumps, PTY text, diffs
 encrypt_blobs = true
 ```
 
-Or: `BLACKBOX_ENCRYPT_BLOBS=1`. Key is created at `.blackbox/store.key` (mode `0600`)
-or taken from `BLACKBOX_STORE_KEY` (64 hex chars).
+```bash
+export BLACKBOX_STORE_KEY_FILE=~/.config/blackbox/default.key   # outside project tree
 
-- Content addressing still uses SHA-256 of **plaintext**
-- Legacy unencrypted blobs continue to load
-- **Losing the key makes encrypted blobs unreadable** — back up `store.key`
-- Protects other local UIDs / casual disk access; same-UID malware can still
-  read the key file next to the store
+blackbox backup -o ~/vaults/proj.bbx.json --passphrase '…' --include-db
+# optional: --include-blobs (size-capped)
 
-Native log scan default is **project-only** (`native_log_scope = "project"`)
-so home-dir harness sessions (`~/.claude`, …) are not copied into the store
-unless you set `native_log_scope = "home"`.
+blackbox restore ~/vaults/proj.bbx.json --passphrase '…'
+```
 
-When `store.key` exists, **sticky files** are sealed too:
-- `state.json` (claims, goals, attention)
-- `MEMORY.json` / `RESUME.json` (markdown stays plain for agent preambles)
+**Losing the key loses encrypted blobs.** Back up key material separately from the project tree when using file keys.
+
+Native logs default to **project** scope so home harness dirs (`~/.claude`, …) are not copied into the store unless `native_log_scope = "home"`.
 
 ---
 
-## 8. Sealed export packs
+## 6. Export, sync, and share
 
-Share runs offline without leaving plaintext JSON on disk:
+Defaults redact. Portable import reconstructs runs on another machine. Sealed packs use envelope format `blackbox.export.sealed/v1` (ciphertext + optional PBKDF2 salt).
 
-```bash
-# Passphrase-sealed portable (PBKDF2 + ChaCha20-Poly1305)
-blackbox export latest --format portable --passphrase 'long random phrase' > run.bbx.json
+Sync backends (dir / HTTP / S3) inherit redaction defaults; portable path re-scans blobs (H-08) similarly to CLI export.
 
-# Or seal with the project store key (requires encrypt_blobs / store.key)
-blackbox export latest --format portable --encrypt > run.bbx.json
-
-# Import
-blackbox import run.bbx.json --passphrase 'long random phrase'
-```
-
-Format: `blackbox.export.sealed/v1` JSON envelope (`ciphertext_b64`, optional salt).
-
-**SQLite note:** Run metadata remains in `blackbox.db` unencrypted at runtime.
-Use a **sealed store backup** to vault the DB offline:
-
-```bash
-# Passphrase vault (key never leaves the archive crypto; store.key not included)
-blackbox backup -o vault.bbx.json --passphrase '…' --include-db
-# Optional: also embed blobs (size-capped)
-blackbox backup -o vault.bbx.json --passphrase '…' --include-db --include-blobs
-
-blackbox restore vault.bbx.json --passphrase '…'
-```
-
-### External key (recommended)
-
-Keep the encryption key **outside** the project tree so a stolen checkout is useless:
-
-```bash
-mkdir -p ~/.config/blackbox
-# either:
-export BLACKBOX_STORE_KEY_FILE=~/.config/blackbox/default.key
-# or place a key at ~/.config/blackbox/default.key (auto-detected when present)
-```
-
-`doctor` warns when the key still lives under `.blackbox/store.key`.
-
-### Network binding
-
-```bash
-# Listen on all interfaces (dangerous without a token)
-blackbox serve --bind 0.0.0.0:7788 --token <token>
-```
+Workflow detail: [export-and-sync.md](export-and-sync.md).
 
 ---
 
-## 7. What blackbox does NOT capture
+## 7. Serve / dashboard
 
-| Not captured | Reason |
+```bash
+blackbox serve                          # 127.0.0.1:7788
+blackbox serve --token "$TOKEN"
+BLACKBOX_SERVE_TOKEN="$TOKEN" blackbox serve --bind 0.0.0.0:7788
+```
+
+| Rule | Behavior |
 |---|---|
-| Keylogging or keystroke-level input | PTY captures are output only |
-| Network packets | No eBPF or packet capture layer |
-| Browser CDP events | No Chrome DevTools Protocol integration |
-| System-wide recording | Only project-enabled harness commands |
-| Other processes' secrets | Only the supervised command's environment |
+| Non-loopback bind | **Refuses** without token |
+| Loopback, no token | Starts with warning — any local user can read history |
+| Auth | `Authorization: Bearer <token>` only (no query API auth) |
+| Browser | One-shot `?token=` may be migrated into `sessionStorage` then stripped from URL |
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:7788/api/status
+```
+
+SSE streams and JSON APIs share the same auth middleware.
+
+---
+
+## 8. What blackbox does **not** capture
+
+| Not captured | Why |
+|---|---|
+| Keystroke-level input | PTY path is process I/O, not a keylogger product |
+| Network packets | No eBPF/pcap layer |
+| Browser CDP | No DevTools protocol integration |
+| System-wide all processes | Project-enabled / supervised commands only |
+| Other users’ processes | Only the supervised tree |
+
+---
+
+## 9. Operational checklist
+
+1. Keep `.blackbox/` gitignored.
+2. Never enable `--no-redact` / `--insecure-raw` on shared or secret-bearing hosts.
+3. Run `blackbox doctor` after enable; fix permission and encryption tips.
+4. Prefer `BLACKBOX_STORE_KEY_FILE` outside the repo if `encrypt_blobs` is on.
+5. Use passphrase `backup` for cold storage; test `restore` once.
+6. Token-protect any non-loopback `serve`.
+7. After expanding scanner patterns: `blackbox scrub --gc`.
+
+---
+
+## 10. Related tests and code
+
+| Asset | Role |
+|---|---|
+| `tests/redaction_gate.rs` | Structural IDs live; secrets die |
+| `tests/redaction_adversarial.rs` | Chunk splits, export, mixed SHA+secret |
+| `src/redaction/` | Scanner + stream redactor |
+| `src/crypto.rs` | Blob seal, sealed packs |
+| `src/backup.rs` | Store vault |
+| `src/privacy.rs` | Path modes, bind checks |

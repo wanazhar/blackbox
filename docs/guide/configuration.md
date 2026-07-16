@@ -1,29 +1,55 @@
 # Configuration
 
-**Answers:** Where the store lives, how `config.toml` / env / CLI flags override each other, and what the common knobs do.
+**Answers:** Store path resolution, override precedence (CLI → env → config), product modes (recorder vs continuity), every important `config.toml` key, environment variables, and which CLI flags cross-cut commands.
 
-Task-oriented setup: [getting-started.md](getting-started.md). Exhaustive command flags: [../reference/cli.md](../reference/cli.md).
+Related: [getting-started.md](getting-started.md), [leave-it-on.md](leave-it-on.md), [security.md](security.md). Exhaustive per-command flags: [../reference/cli.md](../reference/cli.md).
 
-Blackbox is configured through **CLI flags**, **environment variables**, and a project-level **`.blackbox/config.toml`**. This document covers those surfaces.
+---
+
+## Quick answers
+
+| Question | Short answer |
+|---|---|
+| Where is my data? | `.blackbox/blackbox.db` + `.blackbox/blobs/` unless overridden |
+| How do I force a store? | `--store PATH` or `BLACKBOX_DB` |
+| Why isn’t continuity injecting? | Ambient is always observe-only; use explicit `blackbox run` and check `observe_only` / continuity |
+| How do I stop ambient for one shell? | `export BLACKBOX_OFF=1` |
+| How do I encrypt blobs? | `capture.encrypt_blobs = true` or `BLACKBOX_ENCRYPT_BLOBS=1` |
+| How do I cap disk? | `[retention] keep_runs = N` + `auto_apply = true` |
 
 ---
 
 ## 1. Store paths
 
-Paths are resolved in priority order:
+Resolved in this order (first hit wins):
 
-| Priority | Source | Example |
+| Priority | Source | Notes |
 |---|---|---|
-| 1 | CLI `--store` | `blackbox run --store /custom/path/db.sqlite` |
-| 2 | `BLACKBOX_DB` env | `export BLACKBOX_DB=/custom/path/db.sqlite` |
-| 3 | Legacy `./blackbox.db` | If that file already exists in the project root |
-| 4 | Default `.blackbox/` | `.blackbox/blackbox.db` + `.blackbox/blobs/` |
+| 1 | CLI `--store <path>` | Usually path to the SQLite file |
+| 2 | `BLACKBOX_DB` | Same |
+| 3 | Legacy `./blackbox.db` | **Only if that file already exists** in the project root |
+| 4 | Default | `.blackbox/blackbox.db` + `.blackbox/blobs/` under the discovered project |
+
+**Project discovery:** walk ancestors from cwd for an enabled `.blackbox/` (config present / enabled). Explicit `--project` / run `--project` can pin the project root when relevant.
+
+### Layout
+
+```text
+.blackbox/
+  config.toml
+  blackbox.db          # SQLite (events, runs, FTS, …)
+  blackbox.db-wal      # WAL (gitignored)
+  blackbox.db-shm
+  blobs/               # content-addressed payloads
+  state.json           # sticky: attention, claims, intent (may be sealed)
+  MEMORY.md            # human-readable pack
+  MEMORY.json          # structured pack (may be sealed)
+  store.key            # optional; prefer external key path
+```
 
 ### Gitignore
 
-Add to your project `.gitignore`:
-
-```
+```gitignore
 .blackbox/
 blackbox.db
 *.db-wal
@@ -32,181 +58,210 @@ blackbox.db
 
 ---
 
-## 2. Config file (`.blackbox/config.toml`)
+## 2. Override precedence
 
-Blackbox reads configuration from `.blackbox/config.toml` when present. A default is created on `blackbox enable`.
+### Continuity (inject policy)
 
-### Full schema
+Effective continuity for an invocation:
 
-```toml
-# ── Capture settings ──
+1. CLI (`--continuity`, `--observe-only`, `--eval`, `--no-auto-resume` / `--auto-resume` as applicable)
+2. `BLACKBOX_CONTINUITY`
+3. `BLACKBOX_AUTO_RESUME` (legacy: `0` → off; `1` → attention when continuity env absent)
+4. `config.toml` → `capture.continuity` / `observe_only` / `auto_resume` derivation
+5. Built-in default for new configs (see schema defaults below)
 
-[capture]
-# Which agent harnesses to wrap (space-separated basenames).
-# Default: claude codex aider cursor cursor-agent gemini opencode grok
-wrap = ["claude", "codex", "aider", "cursor", "cursor-agent", "gemini", "opencode", "grok"]
+**Hard rules that always win conceptually:**
 
-# Continuity mode: "always" | "attention" | "off"
-# New projects default "always"; migrated 1.1 projects default "attention"
-continuity = "always"
+| Rule | Effect |
+|---|---|
+| `observe_only = true` (config or `--observe-only` / `--eval` / ambient) | Continuity inject off for that path |
+| Ambient `maybe-run` | Always observe-only (no MEMORY/env inject) |
+| Explicit `blackbox run` | May inject when continuity allows and observe-only is false |
 
-# Hard observe-only / recorder mode (daily-driver trust).
-# When true: no prompt mutation, no MEMORY/RESUME inject, no adapter
-# prepare_launch flags, no auto parent-run linking. Continuity is forced off.
-# Prefer: blackbox enable --observe-only
-# observe_only = false
+### Capture policy (redaction, store)
 
-# Process-tree enrichment (optional; safe defaults)
-# denser adaptive poll (25–100ms vs 50–200ms)
-# process_dense_poll = false
-# sample redacted /proc/<pid>/environ into process events (opt-in)
-# process_environ = false
-# Linux child subreaper for best-effort descendant exit codes (default true)
-# process_subreaper = true
+| Surface | Typical precedence |
+|---|---|
+| Redaction on | Default on; `--no-redact` / `--insecure-raw` opt-in danger |
+| Blob encryption | `BLACKBOX_ENCRYPT_BLOBS` / config `encrypt_blobs` + key env/files |
+| Process enrichment | Config + `BLACKBOX_PROCESS_*` env |
 
-# Environment capture: "allowlist" (default — PATH/HOME/CI/BLACKBOX_* only)
-# or "full" (all vars after name+value redaction)
-# env_capture = "allowlist"
-# Store full git diffs as blobs (default true). false = preview+stats only.
-# store_git_diffs = true
-# Native log roots: "project" (default), "home" (also ~/.claude etc.), "off"
-# native_log_scope = "project"
-# Encrypt blobs at rest (ChaCha20-Poly1305); key in .blackbox/store.key
-# Also seals state.json + MEMORY.json when the key is present.
-# encrypt_blobs = false
-
-# Auto-resume (legacy 1.0 compat): true | false
-# When continuity ≠ off, this is overridden by continuity mode
-auto_resume = true
-
-# ── Retention settings ──
-
-[retention]
-# Apply retention automatically after each run
-auto_apply = true
-
-# Keep at most N most recent runs (0 = keep all)
-keep_runs = 100
-
-# ── Claim settings ──
-
-[claim]
-# Auto-acquire claim on run start (default false)
-auto_claim = false
-
-# Gate mode: "off" | "warn" | "require_ack"
-gate_mode = "off"
-
-# Claim policy on conflict: "warn" | "block_record"
-policy = "warn"
-```
+When in doubt: `blackbox doctor` and `blackbox status --json` show effective project settings.
 
 ---
 
-## 2b. Product modes: recorder vs continuity
+## 3. Product modes: recorder vs continuity
 
-Blackbox exposes a simple **product mode** (`capture.product_mode()` derived from
-flags):
+Do not conflate **recording** with **memory inject**.
 
 | Product mode | Meaning |
 |---|---|
-| **recorder** | Hard observe-only; ambient wrap never mutates launches (default) |
-| **continuity** | Memory bus may inject on **explicit** `blackbox run` only |
+| **recorder** | Hard observe-only: no prompt mutation, no MEMORY/RESUME inject, no adapter `prepare_launch` rewrites |
+| **continuity** | Memory plane may inject on **explicit** `blackbox run` only |
 
-Ambient shell wrap is **always** recorder semantics.
+Derived roughly from `observe_only` + effective continuity (`capture.product_mode()` in code).
 
-Blackbox can run as a **neutral recorder** or as a **continuity / memory bus**.
-Do not conflate them.
-
-| Mode | How to enable | Mutates launch? | Injects MEMORY/RESUME? | Use when |
+| Mode | How you get it | Mutates launch? | Injects memory? | Use when |
 |---|---|---|---|---|
-| **Observe-only** (recorder) | **New-project default**; `blackbox enable --observe-only`; ambient shell wrap always | No | No | Leave ambient on forever; evaluate harness/model behavior |
-| **Continuity always** | `blackbox enable --continuity always` or `--memory-bus` | May prepare adapter launch / inject env | Yes (when configured) | Multi-day agent work with project memory (explicit opt-in) |
-| **Continuity attention** | `continuity = "attention"` | Only when sticky attention needs it | When attention is set | Less aggressive memory inject |
-| **Continuity off** | `continuity = "off"` | No continuity inject | No | Recording without memory plane |
+| Observe-only / recorder | Default for ambient; `enable --observe-only`; `run --observe-only`; `--eval` | No | No | Leave ambient on; eval harnesses |
+| Continuity always | `enable --memory-bus` / `--continuity always` | May prepare launch / inject env | Yes (when not observe-only) | Multi-session agent work |
+| Continuity attention | `continuity = "attention"` | Only when sticky attention needs it | Conditional | Less aggressive inject |
+| Continuity off | `continuity = "off"` or observe-only | No continuity inject | No | Pure recorder |
 
-**Ambient shell wrap (`maybe-run`) is always observe-only** — continuity inject
-never applies to wrapped `claude`/`codex`/… launches. Use explicit
-`blackbox run -- <cmd>` (without observe-only, with continuity configured) when
-you want the memory bus.
+CLI: `blackbox run --observe-only -- <cmd>` forces recorder for that run even if the project is continuity-oriented.
 
-CLI override: `blackbox run --observe-only -- <cmd>` forces recorder semantics for
-that run even if project continuity is enabled.
+### Replay is a third axis
 
-Replay modes are separate again (see `blackbox replay --help`):
-
-| Mode | Command | Executes? |
+| Mode | Executes child? | Notes |
 |---|---|---|
-| Timeline playback | `blackbox replay <run>` | No |
-| Recorded tool playback | `blackbox replay --mock-tools` | No (mocks) |
-| Sandbox re-execution | `blackbox replay --sandbox` | Yes, isolated; lossy/shell blocked |
-| Live re-execution | `blackbox replay --live` | Yes, dangerous |
-| Forked continuation | `blackbox fork <run> --launch` | Native harness resume when session known |
+| Timeline | No | Playback of recorded events |
+| Mock tools | No (mocks) | Tool replay without real side effects |
+| Sandbox | Yes, isolated | Lossy; some shell ops blocked |
+| Live / fork launch | Yes | Dangerous / native resume when session known |
 
-None of these are deterministic LLM replay.
+None of these are bit-identical LLM re-execution. See `blackbox replay --help` and [CLI reference](../reference/cli.md).
 
 ---
 
-## 3. Environment variables
+## 4. Config file (`.blackbox/config.toml`)
 
-### Store and paths
+Created by `blackbox enable`. Missing keys use Rust/serde defaults (not necessarily every field written out).
 
-| Variable | Purpose | Example |
+### Annotated schema
+
+```toml
+# Top-level
+enabled = true
+
+[capture]
+# Basenames for ambient maybe-run wrap (not full paths).
+wrap = ["claude", "codex", "aider", "cursor", "cursor-agent", "gemini", "opencode", "grok"]
+
+# Continuity: "always" | "attention" | "off"
+# enable --memory-bus sets always; stock Default often observe_only=true + continuity off
+# continuity = "always"
+
+# Hard observe-only: forces continuity off, skips launch mutation / BLACKBOX_* inject
+# observe_only = true
+
+# Legacy: when continuity key absent, true→attention, false→off
+auto_resume = true
+# resume_max_tokens = 4000
+# memory_max_tokens = 4000   # optional override for pack budget
+
+# Explicit run only: "off" | "warn" | "require_ack"
+gate_mode = "off"
+auto_claim = false
+claim_ttl_secs = 1800
+# claim_policy = "warn"   # or "block_record"
+
+# Process tree
+# process_dense_poll = false   # 25–100ms vs 50–200ms
+# process_environ = false      # redacted /proc environ (opt-in)
+# process_subreaper = true     # Linux PR_SET_CHILD_SUBREAPER
+
+# env_capture = "allowlist"    # or "full" (all vars after name+value redaction)
+# store_git_diffs = true       # false = preview+stats only
+# native_log_scope = "project" # "project" | "home" | "off"
+# encrypt_blobs = false
+
+[retention]
+auto_apply = true
+keep_runs = 100              # 0 = keep all (subject to other tools)
+```
+
+### Field reference (capture)
+
+| Key | Default (typical) | Effect |
 |---|---|---|
-| `BLACKBOX_DB` | Override store path | `/tmp/blackbox.db` |
-| `BLACKBOX_SERVE_TOKEN` | Auth token for HTTP serve | `my-secret-token` |
+| `wrap` | common harness basenames | Ambient recording candidates |
+| `continuity` | often `off` unless `--memory-bus` | Inject policy for explicit run |
+| `observe_only` | **true** on default `CaptureConfig` | Recorder semantics |
+| `auto_resume` | true | Legacy continuity derivation when `continuity` absent |
+| `resume_max_tokens` / `memory_max_tokens` | ~4k | Pack budget |
+| `gate_mode` | off | `warn` / `require_ack` on **explicit** run only |
+| `auto_claim` | false | Acquire claim on run (`--ci`/`--eval` may force for invocation) |
+| `claim_ttl_secs` | 1800 | Claim lifetime |
+| `claim_policy` | warn | Conflict: warn vs block_record |
+| `process_dense_poll` | false | Tighter process sampling |
+| `process_environ` | false | Redacted environ sampling |
+| `process_subreaper` | true | Linux descendant exit codes |
+| `env_capture` | allowlist | PATH/HOME/CI/BLACKBOX_* vs full redacted env |
+| `store_git_diffs` | true | Full diff blobs vs preview only |
+| `native_log_scope` | project | Do not ingest `~/.claude` unless `home` |
+| `encrypt_blobs` | false | ChaCha20-Poly1305 blobs + seal sticky JSON |
 
-### Continuity and inject
+### Retention
 
-| Variable | Purpose | Example |
-|---|---|---|
-| `BLACKBOX_CONTINUITY` | Continuity mode override | `always` \| `attention` \| `off` |
-| `BLACKBOX_AUTO_RESUME` | Legacy auto-resume (1.0) | `1` \| `0` |
-| `BLACKBOX_MEMORY_FILE` | Path to MEMORY.md (set by blackbox) | — |
-| `BLACKBOX_MEMORY_SCHEMA` | Memory schema version (set by blackbox) | `blackbox.memory/v1` |
-| `BLACKBOX_RESUME_FILE` | Path to RESUME.md (set by blackbox) | — |
-| `BLACKBOX_RESUME_RUN_ID` | Focus run ID (set by blackbox) | — |
-| `BLACKBOX_RESUME_HINT` | Context hint (set by blackbox) | — |
+| Key | Effect |
+|---|---|
+| `auto_apply` | Apply keep policy after runs |
+| `keep_runs` | Max recent runs retained (0 = unlimited via this knob) |
 
-### Process capture enrichment
+Manual: `blackbox purge`, `blackbox rm`, `blackbox scrub --gc`, `blackbox gc`.
 
-| Variable | Purpose | Example |
-|---|---|---|
-| `BLACKBOX_PROCESS_DENSE_POLL` | Tighter process poll (25–100 ms) | `1` \| `0` |
-| `BLACKBOX_PROCESS_ENVIRON` | Sample redacted `/proc` environ into process events | `1` \| `0` |
-| `BLACKBOX_PROCESS_SUBREAPER` | Linux child subreaper for waitpid exit codes | `1` \| `0` (default on) |
-| `BLACKBOX_ENCRYPT_BLOBS` | Enable at-rest blob encryption | `1` \| `0` |
-| `BLACKBOX_STORE_KEY` | 64-hex store encryption key | — |
-| `BLACKBOX_STORE_KEY_FILE` | Path to key file **outside** project (recommended) | `~/.config/blackbox/default.key` |
-| `BLACKBOX_EXPORT_PASSPHRASE` | Passphrase for sealed export/backup | — |
+---
 
-### Ambient capture
+## 5. Environment variables
 
-| Variable | Purpose | Example |
-|---|---|---|
-| `BLACKBOX_OFF` | Disable all ambient capture | `1` |
-| `BLACKBOX_ACTIVE_RUN` | Set when inside a supervised run (nest protection) | — |
-| `BLACKBOX_ACK` | Acknowledge gate mode | `1` |
+### Store, serve, crypto
 
-### Pricing
+| Variable | Purpose |
+|---|---|
+| `BLACKBOX_DB` | Store SQLite path override |
+| `BLACKBOX_SERVE_TOKEN` | Dashboard/API Bearer token |
+| `BLACKBOX_ENCRYPT_BLOBS` | `1`/`0` enable blob encryption |
+| `BLACKBOX_STORE_KEY` | 64-hex key material |
+| `BLACKBOX_STORE_KEY_FILE` | Key file path (prefer outside project) |
+| `BLACKBOX_EXPORT_PASSPHRASE` | Sealed export / backup passphrase |
 
-| Variable | Purpose | Example |
-|---|---|---|
-| `BLACKBOX_ESTIMATE_COST` | Enable cost estimation | `1` |
-| `BLACKBOX_PRICING` | Override pricing file path | `/path/to/pricing.toml` |
+### Continuity and inject (set by you or by blackbox)
+
+| Variable | Purpose |
+|---|---|
+| `BLACKBOX_CONTINUITY` | `always` \| `attention` \| `off` |
+| `BLACKBOX_AUTO_RESUME` | Legacy on/off → continuity derivation |
+| `BLACKBOX_MEMORY_FILE` | Path to MEMORY.md (**set by blackbox** on inject) |
+| `BLACKBOX_MEMORY_SCHEMA` | e.g. `blackbox.memory/v1` (**set by blackbox**) |
+| `BLACKBOX_RESUME_FILE` / `BLACKBOX_RESUME_RUN_ID` / `BLACKBOX_RESUME_HINT` | Resume inject (**set by blackbox**) |
+
+### Ambient and gates
+
+| Variable | Purpose |
+|---|---|
+| `BLACKBOX_OFF` | Disable ambient capture for this environment |
+| `BLACKBOX_ACTIVE_RUN` | Set while inside supervised run (nest → passthrough) |
+| `BLACKBOX_ACK` | Satisfy `require_ack` gate |
+
+### Process capture
+
+| Variable | Purpose |
+|---|---|
+| `BLACKBOX_PROCESS_DENSE_POLL` | Tighter poll |
+| `BLACKBOX_PROCESS_ENVIRON` | Sample redacted environ |
+| `BLACKBOX_PROCESS_SUBREAPER` | Linux subreaper on/off |
+
+### Pricing (opt-in)
+
+| Variable | Purpose |
+|---|---|
+| `BLACKBOX_ESTIMATE_COST` | Enable `estimated_cost_usd` filling |
+| `BLACKBOX_PRICING` | Path to custom `pricing.toml` |
 
 ### Debug
 
-| Variable | Purpose | Example |
-|---|---|---|
-| `RUST_LOG` | Tracing/logging level | `debug` |
-| `RUST_BACKTRACE` | Full panic backtrace | `1` |
+| Variable | Purpose |
+|---|---|
+| `RUST_LOG` | tracing filter (e.g. `blackbox=debug`) |
+| `RUST_BACKTRACE` | panic backtraces |
 
 ---
 
-## 4. Pricing config (optional)
+## 6. Pricing config (optional)
 
-When `BLACKBOX_ESTIMATE_COST=1`, blackbox fills `estimated_cost_usd` on runs. Built-in model rates are used by default. Custom rates can be set in `.blackbox/pricing.toml`:
+Only when `BLACKBOX_ESTIMATE_COST=1`. Built-in model rates apply; unknown models do not invent prices.
+
+`.blackbox/pricing.toml` (or `BLACKBOX_PRICING`):
 
 ```toml
 [models."my-custom-model"]
@@ -214,45 +269,49 @@ input_per_mtok = 1.0
 output_per_mtok = 2.0
 ```
 
-Or via `BLACKBOX_PRICING=/path/to/pricing.toml`.
-
-> Pricing is **opt-in only** — blackbox never invents a price when disabled or the model is unknown.
-
 ---
 
-## 5. CLI flags reference
+## 7. Cross-cutting CLI flags
 
-See the [CLI reference](../reference/cli.md) for a complete list of all subcommands and their arguments.
-
-Key flags that appear on multiple subcommands:
-
-| Flag | Applies to | Purpose |
+| Flag | Where | Purpose |
 |---|---|---|
-| `--json` | All commands | Machine-readable JSON envelope output |
-| `--store` | All commands | Override store database path |
-| `--no-redact` | capture, export, sync | Disable redaction (dangerous) |
-| `--insecure-raw` | `run` | Store raw PTY bytes (dangerous) |
-| `--no-auto-resume` | `run` | Skip auto-resume injection |
-| `--ci` | `run` | Propagate child exit code |
-| `--eval` | `run` | Eval harness: observe-only + CI + tags `eval`/`ci` |
-| `--observe-only` | `run` | No launch mutation / continuity inject |
-| `--artifact-dir` | `run` | Write run/postmortem/anomalies/summary artifacts |
-| `--tui` | `show` | Interactive TUI viewer |
+| `--json` | global | `blackbox.cli/v1` envelope |
+| `--store` | global | Store path |
+| `--no-redact` | capture/export/sync | Disable redaction (**dangerous**) |
+| `--insecure-raw` | `run` | Raw PTY blobs (**dangerous**) |
+| `--observe-only` | `run` | Recorder semantics |
+| `--ci` | `run` | Propagate exit code; CI-friendly claim behavior |
+| `--eval` | `run` | observe-only + CI + tags `eval`/`ci` |
+| `--artifact-dir` | `run` | `run.json`, `postmortem.json`, `anomalies.json`, `summary.txt`, … |
+| `--no-auto-resume` / `--auto-resume` | `run` | Continuity inject override |
+| `--tui` | `show` | Interactive viewer |
+
+Full list: [../reference/cli.md](../reference/cli.md).
 
 ---
 
-## 6. Shell wrappers
-
-Generated by `blackbox enable --install-shell`:
-
-- **bash/zsh**: Managed blocks in `~/.bashrc` / `~/.zshrc`
-- **PowerShell**: Managed blocks in PowerShell profile
-- Idempotent: running `--install-shell` multiple times creates only one block
-- Safe: if `blackbox` binary is missing, the bare command runs (never hard-fail)
-- Escape: `BLACKBOX_OFF=1` before the harness command skips recording
-
-Remove with:
+## 8. Shell wrappers
 
 ```bash
+blackbox enable --install-shell
 blackbox enable --uninstall-shell
 ```
+
+- Managed markers: `# >>> blackbox >>>` … `# <<< blackbox <<<`
+- bash/zsh rc or PowerShell profile
+- Idempotent single block; missing binary → bare command (never hard-fail)
+- Escape: `BLACKBOX_OFF=1`
+
+Operator depth: [leave-it-on.md](leave-it-on.md). Normative table: [../ambient-contract.md](../ambient-contract.md).
+
+---
+
+## 9. Verify effective config
+
+```bash
+blackbox doctor
+blackbox status --json
+blackbox doctor --json
+```
+
+Look for: store path, product mode / continuity, encrypt_blobs, native_log_scope, retention, orphan Running runs, permission warnings.

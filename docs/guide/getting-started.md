@@ -55,7 +55,13 @@ Everything after `--` is the supervised command:
 blackbox run -- echo hello world
 ```
 
-You should see a completion line with a **short run id** (prefix of the UUID) and status.
+Example human output (wording may vary slightly by version):
+
+```text
+Run completed: a1b2c3d4  (succeeded)
+```
+
+The short id is a unique prefix of the run UUID — usable anywhere a run id is accepted (`show`, `timeline`, `postmortem`, …).
 
 ### What happens (accurate, brief)
 
@@ -95,11 +101,14 @@ blackbox show latest --transcript
 blackbox timeline latest --semantic
 ```
 
+`runs` lists recent rows (id prefix, status, exit, label, time). `show` prints run metadata and a summary of what was captured. `timeline --semantic` hides observer bookkeeping so tool/terminal structure stays readable.
+
 JSON (envelope `blackbox.cli/v1`):
 
 ```bash
 blackbox runs --json
 blackbox show latest --json
+# shape: { "ok": true, "command": "runs"|"show", "data": { … } }
 ```
 
 Interactive:

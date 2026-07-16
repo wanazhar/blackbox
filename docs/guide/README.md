@@ -21,11 +21,11 @@ For the full map (agents, reference, internals), see the [docs index](../README.
 |---|---|
 | [Debug a failure](debug-a-failure.md) | Postmortem, anomalies, evidence → timeline, handoff |
 | [Leave it on](leave-it-on.md) | Ambient shell wrappers, `BLACKBOX_OFF`, wrap list, nest rules |
-| [Configuration](configuration.md) | Store paths, `config.toml`, flags, env vars |
-| [Security](security.md) | Redaction model, danger flags, at-rest options, serve auth |
-| [Export and sync](export-and-sync.md) | Formats, redacted defaults, push/pull backends |
-| [Overhead](overhead.md) | Capture cost, storage stats, soft budgets |
-| [Troubleshooting](troubleshooting.md) | Diagnostics, common failures, recovery |
+| [Configuration](configuration.md) | Precedence, product modes, full knobs + env |
+| [Security](security.md) | Threat model, redaction, crypto, serve auth |
+| [Export and sync](export-and-sync.md) | Formats, sealed packs, sync, store vault |
+| [Overhead](overhead.md) | Soft benches, stats, cost knobs |
+| [Troubleshooting](troubleshooting.md) | Q→fix diagnostics and recovery |
 
 ## How these relate to reference
 

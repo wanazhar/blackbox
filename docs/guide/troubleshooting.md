@@ -1,182 +1,270 @@
 # Troubleshooting
 
-**Answers:** How to diagnose a broken install or store (`doctor` / `stats`), fix common errors, and recover from stuck runs or ambient misconfiguration.
+**Answers:** How to diagnose install/store/ambient/continuity problems, recover abandoned runs, reclaim disk, and distinguish “capture is broken” from “the agent failed.”
 
-Related: [install.md](install.md), [leave-it-on.md](leave-it-on.md), [debug-a-failure.md](debug-a-failure.md) (logical agent failures vs capture failures).
+| If the problem is… | Go here instead |
+|---|---|
+| Agent logic failed but capture looks fine | [debug-a-failure.md](debug-a-failure.md) |
+| Install only | [install.md](install.md) |
+| Ambient policy questions | [leave-it-on.md](leave-it-on.md) |
+| Secrets / permissions | [security.md](security.md) |
 
 ---
 
-## 1. Diagnostics
-
-### Health check
+## 1. Always start with diagnostics
 
 ```bash
+blackbox --version
+which -a blackbox
 blackbox doctor
-```
-
-Shows: store path, schema version, run count, database size, blob count and size, and any storage warnings.
-
-### With JSON output
-
-```bash
 blackbox doctor --json
-```
-
-Returns all fields in machine-readable format for programmatic inspection.
-
-### Stats
-
-```bash
 blackbox stats
+blackbox status
 ```
 
-Shows: total runs, events, blobs, storage sizes, and retention auto_apply status.
+### What to look for in `doctor`
+
+| Signal | Meaning |
+|---|---|
+| Store path | Unexpected path → env legacy db / `--store` (see config) |
+| Schema version | Migration or corrupt open issues |
+| Run count / DB + blob sizes | Growth / retention |
+| Permission warnings | Group/other-readable store |
+| `encrypt_blobs` / key path | Crypto on? External key? |
+| Orphan `Running` runs | Crash mid-run; recovered on open as `Failed` |
+| Capture quality notes | Last run coverage/lag warnings |
+| Daily-driver score notes | Soft score + tips (ambient, vault, eval, …) |
+
+`stats` summarizes runs/events/blobs and retention auto-apply.
 
 ---
 
-## 2. Common issues
+## 2. Common problems (Q → fix)
 
-### "blackbox: command not found"
+### `blackbox: command not found`
 
-The binary is not in PATH:
+Binary not on `PATH`.
 
 ```bash
-# Binary install
 curl -fsSL https://raw.githubusercontent.com/wanazhar/blackbox/master/install.sh | sh
-
-# Or from crates.io
+# or
 cargo install blackbox-recorder
-
-# Verify
+hash -r 2>/dev/null; rehash 2>/dev/null
 blackbox --version
 ```
 
-### "No project found"
-
-Blackbox could not find an enabled project. Ensure you're in a project directory that has been enabled:
+### Wrong binary / old version
 
 ```bash
-# Check if enabled
+which -a blackbox
+blackbox --version
+type blackbox
+```
+
+Remove stale copies or put the intended install directory first on `PATH`.
+
+### “No project found” / not enabled
+
+Discovery walks ancestors for `.blackbox/`.
+
+```bash
+pwd
 blackbox status
-
-# Enable if not
-blackbox enable
+blackbox enable                 # or enable --memory-bus --install-shell
+ls -la .blackbox/config.toml
 ```
 
-Blackbox walks ancestors from the current working directory looking for `.blackbox/`. If your project root is above the current directory, it will be found.
+If you expected a parent project, `cd` there or pass project/store overrides.
 
-### Store path resolution unexpected
+### Store path is not what I think
 
-If `blackbox doctor` shows a different store path than expected, check:
-
-1. `BLACKBOX_DB` env var is not set unexpectedly
-2. No leftover `./blackbox.db` from an older version (legacy path takes priority over `.blackbox/`)
-3. `--store` flag was not passed to a previous command
-
-### "Continuity not working as expected"
+Priority: `--store` → `BLACKBOX_DB` → legacy `./blackbox.db` if present → `.blackbox/blackbox.db`.
 
 ```bash
-# Check current continuity mode
-blackbox status --json | grep continuity
-
-# Check effective mode (after precedence resolution)
-# Precedence: CLI flag > BLACKBOX_CONTINUITY > BLACKBOX_AUTO_RESUME > config > project default
+echo "BLACKBOX_DB=${BLACKBOX_DB-}"
+ls -la blackbox.db .blackbox/blackbox.db 2>/dev/null
+blackbox doctor
 ```
 
-If `continuity=always` but no inject is happening:
-- Check `BLACKBOX_OFF` is not set
-- Check you're in an enabled project
-- Check the harness is in the wrap list
+A leftover root `blackbox.db` **wins** over `.blackbox/` — delete or migrate deliberately.
 
-### "Attention level stuck on 'continue' after successful run"
+### Ambient wrap does nothing
 
-This is **M6 by design** — an unrelated success does not clear an unresolved failure. To clear:
+Checklist:
+
+1. `blackbox enable --install-shell` and restart shell / source rc  
+2. Harness **basename** is on `capture.wrap`  
+3. `BLACKBOX_OFF` unset  
+4. Not nested under `BLACKBOX_ACTIVE_RUN`  
+5. Project enabled and discovery finds it  
+6. `blackbox` on PATH (else wrapper runs bare command silently)
+
+```bash
+echo "OFF=${BLACKBOX_OFF-} ACTIVE=${BLACKBOX_ACTIVE_RUN-}"
+blackbox maybe-run -- true    # policy-dependent; prefer real harness test
+blackbox runs
+```
+
+Normative order: [../ambient-contract.md](../ambient-contract.md).
+
+### Continuity / memory not injecting
+
+| Check | Notes |
+|---|---|
+| Ambient vs explicit | Wrappers never inject; use `blackbox run -- …` |
+| `observe_only` | Config or `--observe-only` / `--eval` disables inject |
+| Continuity mode | `status --json`, config `continuity`, env `BLACKBOX_CONTINUITY` |
+| `BLACKBOX_OFF` | Disables ambient; can also confuse workflows |
+| Harness cooperation | Inject is env/files/preamble — model must read it |
+
+```bash
+blackbox status --json
+# inspect capture / attention / memory fields in the view
+```
+
+### Attention stuck on `continue` after a success
+
+**By design:** unrelated success does not clear an unresolved failure.
 
 ```bash
 blackbox resolve
+blackbox resolve --clear-wip
 ```
 
-If the issue is a dirty git tree showing `.blackbox/` as dirty, ensure `.blackbox/` is in `.gitignore` or update to the latest version (1.2.0) which filters `.blackbox/` paths from the porcelain check.
+If git is noisy because `.blackbox/` is dirty, gitignore it (porcelain checks also filter `.blackbox/` in current releases).
 
-### "Memory pack is empty or degraded"
+### Memory pack empty or `degraded`
 
-A `degraded = true` pack means the store could not be opened. Possible causes:
-- Store file locked by another process
-- Store file corrupted (run `blackbox doctor` to check)
-- Build exceeded 2-second hard degrade threshold
+`degraded = true` means pack built without full store (sticky-only). Causes:
 
-The pack is still injected — degraded means sticky-only, no store data.
+- Store open failure / lock
+- Corruption (doctor)
+- Hard time budget exceeded during pack build
 
-### "Blobs growing unbounded"
+Pack may still be delivered; fidelity is reduced. Fix store access, then re-run to refresh.
 
-Configure retention to auto-clean:
+### Claim conflicts
+
+```bash
+blackbox claim status
+blackbox claim release          # if you own it
+# or acquire with your holder after coordination
+blackbox claim acquire --holder "$USER"
+```
+
+`gate_mode = require_ack` on explicit run: set `BLACKBOX_ACK=1` or `blackbox ack`.
+
+### Dashboard unauthorized / empty
+
+```bash
+# token required for non-loopback; Bearer only
+curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:7788/api/runs
+curl -s -H "Authorization: Bearer $BLACKBOX_SERVE_TOKEN" http://127.0.0.1:7788/api/runs
+```
+
+### Blobs / DB growing without bound
 
 ```toml
-# .blackbox/config.toml
 [retention]
 auto_apply = true
 keep_runs = 50
 ```
 
-Or manually GC:
+```bash
+blackbox stats
+blackbox purge --keep 50      # see CLI help for exact flags
+blackbox scrub --gc
+blackbox gc
+```
+
+Also consider `store_git_diffs = false`, `env_capture = "allowlist"`, `native_log_scope = "project"`.
+
+### Encrypted blobs unreadable
+
+Missing key: set `BLACKBOX_STORE_KEY` / `BLACKBOX_STORE_KEY_FILE` or restore `store.key`. Without key, encrypted blobs cannot be opened — by design.
+
+### Import / sealed pack fails
 
 ```bash
-blackbox purge --keep 50
-blackbox scrub --gc
+blackbox import pack.json --passphrase '…'
+# ensure format is portable or sealed v1; wrong passphrase fails closed
 ```
 
 ---
 
-## 3. Recovery
+## 3. Recovery procedures
 
-### Recover from crash
+### Crash mid-run
 
-If blackbox was killed during recording, the run will be marked as `Failed` on the next store open. This happens automatically — no action needed.
+On next store open, abandoned `Running` rows become `Failed`. No manual repair required.
 
 ```bash
 blackbox doctor
-# Should show: "Recovered N abandoned runs"
+blackbox runs
 ```
 
-### Re-apply redaction to historical runs
-
-If new secret patterns have been added:
+### Re-redact history
 
 ```bash
-blackbox scrub
+blackbox scrub --gc
 ```
 
-This re-applies the current `SecretScanner` rules to all historical events without touching blob content.
-
-### Re-import from backup
+### Restore from portable export
 
 ```bash
 blackbox import trace.json
+# sealed:
+blackbox import trace.sealed.json --passphrase '…'
 ```
 
-Reconstructs the full store from a portable export.
+### Restore from store backup
+
+```bash
+blackbox restore vault.bbx.json --passphrase '…'
+```
+
+### Nuclear: disable ambient, keep data
+
+```bash
+blackbox disable
+blackbox enable --uninstall-shell
+# data remains under .blackbox/
+```
 
 ---
 
 ## 4. FAQ
 
-**Q: Does blackbox slow down my agent?**  
-A: The overhead is minimal — ~50ms for continuity=always on a `true` run (tested in `tests/overhead_smoke.rs`). Git porcelain has a 500ms timeout; if it fails, `dirty=false` is used.
+**Does blackbox slow my agent down?**  
+Overhead is designed for ambient use. Soft budgets live in `tests/overhead_smoke.rs` / `overhead_bench`. Git porcelain is time-bounded (failure → conservative dirty=false). See [overhead.md](overhead.md).
 
-**Q: Can I use blackbox without installing shell wrappers?**  
-A: Yes. Shell wrappers enable ambient capture (auto-record when you run `claude` in the project). Without them, you must use `blackbox run -- <command>` explicitly.
+**Can I use blackbox without shell wrappers?**  
+Yes. Explicit `blackbox run -- <cmd>` only.
 
-**Q: Does blackbox work with Windows?**  
-A: Partially. Unix PTY is supported on Linux/macOS. Windows has soft/hard kill via `taskkill` and PowerShell profile install. Interactive TUI parity is a low-priority post-1.2 item.
+**Windows?**  
+Partial: PowerShell install, process kill paths; full PTY fidelity is strongest on Unix. Check current CLI notes for platform limits.
 
-**Q: How do I share a trace with someone?**  
-A: Use `blackbox export <run-id> -o trace.json`. The export is redacted by default — no secrets leak. The recipient imports it with `blackbox import trace.json`.
+**How do I share a run?**  
+`blackbox export <id> -o trace.json` (redacted). Recipient: `blackbox import trace.json`. Or sealed passphrase export.
 
-**Q: What happens when my project has no `.blackbox/` directory?**  
-A: `blackbox status` shows "not enabled". Run `blackbox enable` to create it.
+**Why crates.io name `blackbox-recorder`?**  
+Package name collision; binary and crate path remain `blackbox`.
 
-**Q: How is this different from just recording terminal output?**  
-A: Blackbox provides structured events (tool calls, file writes, git state), harness adapter parsing, secret redaction, side-effect classification, search, and the continuity plane — it's a structured trace, not a raw text log.
+**Is postmortem an LLM summary?**  
+No. Deterministic analysis over the event stream (headline, evidence, anomalies, …).
 
-**Q: Why "blackbox-recorder" on crates.io but "blackbox" everywhere else?**  
-A: The name `blackbox` is already taken on crates.io. The binary, library, and CLI are all `blackbox`; only the package name had to change.
+**Diff vs postmortem?**  
+Postmortem explains one run; `diff` compares two runs’ trajectories.
+
+**JSON shape?**  
+[../reference/json-api.md](../reference/json-api.md).
+
+---
+
+## 5. Still stuck?
+
+1. `blackbox doctor --json` and `blackbox status --json`  
+2. Minimal repro: `blackbox run --observe-only -- true` then `show latest`  
+3. File an issue with doctor JSON (redact hosts/paths if needed), OS, version, and whether ambient or explicit run  
+
+Contributor internals: [../internals/architecture.md](../internals/architecture.md).

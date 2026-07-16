@@ -1,10 +1,10 @@
 # Overhead & storage cost
 
-Blackbox is meant to stay enabled. This page documents how to measure capture
-overhead locally and how `stats` / `doctor` report cost.
+**Answers:** How expensive ambient/explicit capture is in practice, which soft tests exist, how `stats`/`doctor` surface disk cost, and which config knobs reduce volume.
 
-> **Note:** Full micro-benchmarks are **local-only** soft checks. They are not
-> hard CI release gates (and should not be used as flaky performance tests).
+Blackbox is meant to stay enabled. Numbers below are **local soft checks**, not hard release gates—use them to sanity-check a machine, not as flaky CI.
+
+Related: [configuration.md](configuration.md) (retention, env capture), [leave-it-on.md](leave-it-on.md).
 
 ---
 
@@ -158,10 +158,26 @@ nested process tree          ___ ms       ___ ms         ___ ms
 | event write throughput | > 50 ev/s | always-on |
 
 `blackbox doctor` now reports **daily-driver score** (observe-only, redaction clean, store size, last capture quality, capture lag). Aim for `daily-driver: ready` before leaving ambient wrap installed.
+
 ---
 
-## 6. Related
+## 6. Knobs that reduce cost / volume
+
+| Knob | Effect |
+|---|---|
+| `[retention] keep_runs` + `auto_apply` | Cap historical runs |
+| `store_git_diffs = false` | Preview + stats only (no full diff blobs) |
+| `env_capture = "allowlist"` | Smaller, safer env capture (default) |
+| `native_log_scope = "project"` | Avoid home-dir harness log ingest (default) |
+| `process_dense_poll = false` | Default; dense poll costs more CPU |
+| `process_environ = false` | Default; environ sampling is opt-in |
+| `--observe-only` / ambient | Less inject work (not less PTY capture) |
+| `blackbox scrub --gc` / `gc` | Reclaim orphan blobs |
+
+---
+
+## 7. Related
 
 - [Security](security.md) — redaction is always-on by default (small CPU cost)
-- [Configuration](configuration.md) — retention / wrap list
+- [Configuration](configuration.md) — retention / wrap list / process knobs
 - CLI: `blackbox stats`, `blackbox doctor`, `blackbox gc`

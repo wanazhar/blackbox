@@ -11,6 +11,9 @@ All notable changes to **blackbox** are documented here.
   getting-started + README landing
 - Historical `docs/plan/*` / `docs/history/*` and internals/reference pages labeled so
   design archives are not mistaken for how-to
+- Deep rewrites: configuration (precedence + full knobs), security (threat model first),
+  troubleshooting (Q→fix), export/sync (decision table + vault), overhead (cost knobs)
+- CLI reference: command index by job; sample outputs in getting-started / debug guides
 
 ### Daily-driver trust (post-1.2)
 - **Observe-only default** for ambient capture; product mode `recorder` | `continuity`

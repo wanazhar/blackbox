@@ -24,6 +24,23 @@ blackbox timeline latest --semantic
 blackbox handoff --json          # for the next agent or your own notes
 ```
 
+What you are looking for:
+
+| Command | Signal |
+|---|---|
+| `status` | `attention` level, unresolved failure, active claim |
+| `postmortem` | `headline`, `next_action`, `evidence[]`, `anomalies[]` |
+| `timeline` | Concrete seq / tool events behind evidence |
+| `handoff --json` | Packaged memory + resume context for the next session |
+
+Example postmortem lines (illustrative):
+
+```text
+headline: tool_loop on Bash (12×) then non-zero exit
+next:    inspect seq=40–52; avoid repeating the same curl
+anomalies: 2 (high: tool_loop, warn: long_silence)
+```
+
 Optional interactive:
 
 ```bash

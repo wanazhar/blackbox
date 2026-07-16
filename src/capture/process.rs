@@ -840,7 +840,8 @@ async fn sysinfo_poller_loop(
     };
 
     let mut sys = System::new();
-    let refresh = ProcessRefreshKind::new()
+    // sysinfo 0.33: use nothing() not new() (mac release builds failed on ProcessRefreshKind::new)
+    let refresh = ProcessRefreshKind::nothing()
         .with_cmd(UpdateKind::Always)
         .with_cwd(UpdateKind::Always)
         .with_exe(UpdateKind::Always)

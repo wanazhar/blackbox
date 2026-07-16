@@ -4,6 +4,14 @@ All notable changes to **blackbox** are documented here.
 
 ## [Unreleased]
 
+### Docs
+- **Human-track revamp:** `docs/README.md` index by question; `docs/WRITING.md` style guide
+  (competent technical audience — no dumbing down)
+- New guides: what-is, install, everyday-use, debug-a-failure, leave-it-on; rewritten
+  getting-started + README landing
+- Historical `docs/plan/*` / `docs/history/*` and internals/reference pages labeled so
+  design archives are not mistaken for how-to
+
 ### Daily-driver trust (post-1.2)
 - **Observe-only default** for ambient capture; product mode `recorder` | `continuity`
 - **Path-scoped claims**: non-overlapping `--path` scopes; project claim remains exclusive

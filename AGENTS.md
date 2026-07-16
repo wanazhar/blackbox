@@ -157,29 +157,35 @@ Runtime artifacts (`.blackbox/`, `*.db`, `*.db-wal`, `*.db-shm`) are gitignored.
 
 ## Docs map
 
+**Writing standard:** [docs/WRITING.md](docs/WRITING.md) — competent technical audience, answer-first, no dumbing down. Prefer [docs/README.md](docs/README.md) as the index.
+
 | File | Audience | Content |
 |---|---|---|
-| `README.md` | All users | Project intro, quick start, commands |
-| `CHANGELOG.md` | All users | Release notes |
+| `README.md` | All | Landing: install, first commands, links by question |
+| `docs/README.md` | All | Full docs index by track |
+| `docs/WRITING.md` | Contributors | Doc style + glossary |
+| `docs/guide/README.md` | Operators | Guide map |
+| `docs/guide/what-is-blackbox.md` | Operators | Mental model + boundaries |
+| `docs/guide/install.md` | Operators | Install + verify |
+| `docs/guide/getting-started.md` | Operators | Enable → first run → inspect |
+| `docs/guide/everyday-use.md` | Operators | List/show/TUI/serve/search |
+| `docs/guide/debug-a-failure.md` | Operators | Postmortem, anomalies, handoff |
+| `docs/guide/leave-it-on.md` | Operators | Ambient wrappers + opt-out |
+| `docs/guide/configuration.md` | Operators | Flags, env, config.toml |
+| `docs/guide/security.md` | Operators | Redaction + at-rest |
+| `docs/guide/export-and-sync.md` | Operators | Export/sync/backup |
+| `docs/guide/troubleshooting.md` | Operators | Diagnostics + recovery |
+| `docs/guide/overhead.md` | Operators | Cost / soft budgets |
+| `docs/skills/blackbox.md` | Agents | Session playbook |
+| `docs/reference/*` | Automation | CLI, JSON, MCP, schemas |
+| `docs/internals/*` | Contributors | Architecture truth |
+| `docs/plan/*`, `docs/history/*` | Historical | Design archives — not how-to |
+| `docs/ROADMAP.md` | All | Quality bar / version story |
+| `CHANGELOG.md` | All | Release notes |
 | `AGENTS.md` | Contributors | This file |
-| `docs/ROADMAP.md` | All | Quality bar, adoption bar, memory bar, backlog |
-| `docs/guide/getting-started.md` | New users | Step-by-step walkthrough |
-| `docs/guide/configuration.md` | All | CLI flags, env vars, config.toml, pricing |
-| `docs/guide/security.md` | All | Redaction model, safe defaults |
-| `docs/guide/export-and-sync.md` | Users | Export formats, sync backends |
-| `docs/guide/troubleshooting.md` | All | FAQ, common issues, recovery |
-| `docs/reference/cli.md` | Users | Every subcommand with args + examples |
-| `docs/reference/json-api.md` | Devs | JSON envelope + all view schemas |
-| `docs/reference/mcp.md` | Devs | MCP tool reference |
-| `docs/reference/stream-protocol.md` | Devs | NDJSON stream protocol |
-| `docs/reference/memory-pack.md` | Devs | ProjectMemoryPack schema |
-| `docs/reference/portable-format.md` | Users | Export/import format |
-| `docs/internals/architecture.md` | Contributors | Full architecture + data flow |
-| `docs/internals/capture-pipeline.md` | Contributors | Capture layers, PTY I/O, adapters |
-| `docs/internals/storage.md` | Contributors | SQLite schema, blobs, FTS5, GC |
-| `docs/internals/continuity-plane.md` | Contributors | State, memory pack, claims, gates |
-| `docs/plan/*.md` | Historical | Design documents (shipped) |
-| `docs/PUBLISH.md` | Maintainers | crates.io publish checklist |
+| `docs/PUBLISH.md` | Maintainers | crates.io checklist |
+
+When editing operator guides, do not lead with design-doc IDs (A1/M2a). Put depth in reference/internals and link.
 
 ## Development commands
 

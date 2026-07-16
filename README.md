@@ -1,122 +1,131 @@
 # blackbox
 
-**Flight recorder, debugger, and project memory bus for AI-agent runs.**
+Local **flight recorder, debugger, and project memory** for AI-agent runs and other commands you need an honest timeline for.
 
-Supervise any command under a PTY, capture terminal output plus git/filesystem/process context into SQLite, then inspect, search, export, and sync traces — with **secrets redacted by default**.
+Supervise a process under a PTY, merge git/filesystem/process signal, **redact secrets before write**, store an ordered event stream in SQLite + content-addressed blobs, then inspect with CLI, TUI, dashboard, MCP, or `--json`.
 
 | | |
 |---|---|
-| **CLI / lib name** | `blackbox` |
-| **crates.io package** | [`blackbox-recorder`](https://crates.io/crates/blackbox-recorder) |
+| **Binary / lib** | `blackbox` |
+| **crates.io** | [`blackbox-recorder`](https://crates.io/crates/blackbox-recorder) |
 | **License** | MIT OR Apache-2.0 |
-| **Version** | **1.2.0** — Agent Memory Bus |
+| **Docs** | **[docs/README.md](docs/README.md)** — index by question |
 
 ---
 
-## Why blackbox?
+## Who this is for
 
-- **Secrets stay out of the store** — argv, env, and terminal output are redacted before write. Raw capture requires explicit `--insecure-raw`.
-- **Honest timelines** — a single `EventWriter` owns monotonic sequence numbers. Order matches capture order.
-- **Payloads as blobs** — large content lives under content-addressed files; events keep short previews.
-- **Project-local store** — `.blackbox/blackbox.db` + `.blackbox/blobs/` (override with `--store` / `BLACKBOX_DB`).
-- **Safe share defaults** — export and sync redact unless you pass `--no-redact`.
-- **Agent-native** — `--json` envelope, handoff, MCP tools, project memory bus on launch.
-- **Continuity plane (1.2)** — every supervised launch delivers a bounded project memory pack (files, env, preamble). Agents cannot honestly start cold.
+You already use a terminal and probably an agent harness (Claude, Codex, aider, …). You want:
+
+1. **Record** what actually ran (not a partial scrollback)
+2. **Inspect** failures with structure (postmortem, anomalies, timeline)
+3. **Continue** work with project memory and handoff—without treating the store as a cloud brain
+
+It is not a SaaS, not a secret vault by default, and not deterministic LLM replay. Boundaries: [What is blackbox?](docs/guide/what-is-blackbox.md).
 
 ---
 
-## Quick start
+## Install
 
 ```bash
-# Install (binary, no Rust required)
+# Binary (no Rust required)
 curl -fsSL https://raw.githubusercontent.com/wanazhar/blackbox/master/install.sh | sh
 
-# Or from crates.io
+# Or crates.io (package name ≠ binary name)
 cargo install blackbox-recorder
 
-# Enable a project with memory bus
-cd ~/my-project
-blackbox enable --install-shell --memory-bus
-
-# Record your first run
-blackbox run -- echo hello world
-
-# See the result
-blackbox runs
-blackbox show <short-id>
-blackbox handoff --json
-
-# Check project memory
-blackbox memory show --json
-blackbox memory set --goal "Fix the CI"
-blackbox resolve
+blackbox --version
+blackbox doctor
 ```
 
-See the [Getting Started guide](docs/guide/getting-started.md) for a full walkthrough.
+Details: [Install](docs/guide/install.md).
 
 ---
 
-## Documentation
+## First five minutes
 
-| For | Start here |
+```bash
+cd ~/my-project
+blackbox enable --memory-bus --install-shell   # or: blackbox enable
+
+blackbox run -- echo hello world
+blackbox runs
+blackbox show latest
+blackbox timeline latest --semantic
+```
+
+Failed run?
+
+```bash
+blackbox postmortem latest
+blackbox show latest --tui    # e = failure story, Enter/g = jump to seq
+```
+
+Full walkthrough: [Getting started](docs/guide/getting-started.md).
+
+---
+
+## Documentation by question
+
+| Question | Doc |
 |---|---|
-| **New users** | [Getting started](docs/guide/getting-started.md) |
-| **Configuration** | [Configuration guide](docs/guide/configuration.md) |
-| **Security model** | [Security guide](docs/guide/security.md) |
-| **CLI reference** | [CLI reference](docs/reference/cli.md) |
-| **MCP tools** | [MCP reference](docs/reference/mcp.md) |
-| **JSON API** | [JSON API reference](docs/reference/json-api.md) |
-| **Memory pack** | [Memory pack reference](docs/reference/memory-pack.md) |
-| **Contributors** | [AGENTS.md](AGENTS.md) |
-| **Architecture** | [Architecture internals](docs/internals/architecture.md) |
-| **Roadmap & quality bar** | [ROADMAP.md](docs/ROADMAP.md) |
-| **Changelog** | [CHANGELOG.md](CHANGELOG.md) |
+| What is this, technically? | [What is blackbox?](docs/guide/what-is-blackbox.md) |
+| Day-to-day CLI / TUI / dashboard | [Everyday use](docs/guide/everyday-use.md) |
+| Debug a failed agent run | [Debug a failure](docs/guide/debug-a-failure.md) |
+| Ambient shell wrappers | [Leave it on](docs/guide/leave-it-on.md) |
+| Config, env, store paths | [Configuration](docs/guide/configuration.md) |
+| Redaction & threat model | [Security](docs/guide/security.md) |
+| Export / sync / backup | [Export and sync](docs/guide/export-and-sync.md) |
+| Something broken | [Troubleshooting](docs/guide/troubleshooting.md) |
+| **Full docs map** | **[docs/README.md](docs/README.md)** |
 
----
+### Reference & agents
 
-## Key features by version
-
-### 1.0 — Capability daily-driver
-
-PTY capture, redact-before-write, SQLite + content-addressed blobs, CLI/TUI/dashboard, MCP stdio server, auto-resume, harness adapters (Claude, Codex, aider, etc.), export (JSONL/HTML/portable), sync (dir/HTTP/S3), search (FTS5), replay (timeline/mock/sandbox/fork).
-
-### 1.1 — Adoption bar ("leave it on")
-
-Ambient shell contract (OFF/nest/wrap/binary-missing), redaction regression gate, resume-pack quality, cost visibility (doctor/stats), CI/eval polish (`--ci`, `--artifact-dir`, `postmortem --fail-on-failure`), pricing opt-in, sandbox git restore, Windows soft/hard kill + PowerShell install, richer adapters (aider/gemini/cursor/opencode/grok).
-
-### 1.2 — Agent Memory Bus / Continuity plane
-
-Project memory pack (`blackbox.memory/v1`) with budget shrink, continuity modes (`always`/`attention`/`off`), sticky state v2 + M6 attention discipline, `state.lock` + claims (one active project claim), gate modes (`warn`/`require_ack`), memory CLI/MCP surfaces, M2a quality test suite.
-
----
-
-## Commands at a glance
-
-| Command | Purpose |
+| | |
 |---|---|
-| `enable` / `disable` | Opt-in project capture; `--install-shell` wrappers |
-| `run` | Supervise a command; capture events |
-| `maybe-run` | Project-gated ambient capture (shell wrappers) |
-| `status` / `handoff` | Project status + agent handoff with memory pack |
-| `memory show` / `set` | Project memory pack display and intent update |
-| `claim` | Acquire/release/status project claim |
-| `resolve` | Clear unresolved failure attention |
-| `ack` | Acknowledge gate (required_ack mode) |
-| `runs` / `show` / `timeline` / `inspect` | List, view, and inspect runs and events |
-| `diff` | Compare two runs |
-| `analyze` | Error, side-effect, and correlation analysis |
-| `search` | Full-text search across events |
-| `export` / `import` | Share traces (redacted by default) |
-| `sync push` / `pull` | Sync to directory, HTTP, or S3 |
-| `serve` | Local web dashboard + JSON/SSE API |
-| `replay` / `fork` | Replay run timeline or fork from checkpoint |
-| `postmortem` / `summary` | Failure/success postmortem |
-| `context` | Bounded resume pack |
-| `scrub` / `gc` | Re-redact historical secrets + blob GC |
-| `doctor` / `stats` | Diagnostics and storage usage |
-| `purge` / `rm` | Delete runs by policy |
-| `mcp` | MCP stdio server |
-| `completions` | Shell completions |
+| Every subcommand | [CLI reference](docs/reference/cli.md) |
+| `--json` views | [JSON API](docs/reference/json-api.md) |
+| MCP tools | [MCP reference](docs/reference/mcp.md) |
+| Memory pack schema | [Memory pack](docs/reference/memory-pack.md) |
+| Coding-agent playbook | [skills/blackbox.md](docs/skills/blackbox.md) |
+
+### Contributors
+
+| | |
+|---|---|
+| Repo map & conventions | [AGENTS.md](AGENTS.md) |
+| Architecture | [docs/internals/architecture.md](docs/internals/architecture.md) |
+| How we write docs | [docs/WRITING.md](docs/WRITING.md) |
+| Roadmap / quality bar | [docs/ROADMAP.md](docs/ROADMAP.md) |
+| Changelog | [CHANGELOG.md](CHANGELOG.md) |
+
+---
+
+## Commands (orientation, not a full reference)
+
+| Job | Command |
+|---|---|
+| Enable project | `blackbox enable` / `--memory-bus` / `--install-shell` |
+| Record | `blackbox run -- <cmd>` · `--ci` · `--eval` · `--observe-only` |
+| Ambient policy | `blackbox maybe-run` (shell wrappers) |
+| Inspect | `runs` · `show` · `timeline` · `inspect` · `tui` · `serve` |
+| Explain failure | `postmortem` · `analyze` · `diff` |
+| Continuity | `status` · `handoff` · `memory` · `claim` · `resolve` · `context` |
+| Share | `export` · `import` · `sync` · `backup` / `restore` |
+| Hygiene | `doctor` · `stats` · `scrub` · `gc` · `purge` / `rm` |
+| Agents | `mcp` · global `--json` |
+
+Exhaustive flags: [docs/reference/cli.md](docs/reference/cli.md).
+
+---
+
+## Defaults worth knowing
+
+- **Redact-before-write** on argv, env, terminal, tool payloads. Raw capture requires `--insecure-raw` / `--no-redact` (dangerous).
+- **Store is project-local:** `.blackbox/blackbox.db` + `.blackbox/blobs/` (override: `--store`, `BLACKBOX_DB`).
+- **Export/sync redact** unless `--no-redact`.
+- **Ambient capture is observe-only** (no continuity inject). Explicit `run` is the inject path.
+- **At-rest:** optional `encrypt_blobs` + sealed sticky files; offline vault via `blackbox backup`/`restore`. Live SQLCipher is not used—see [security](docs/guide/security.md).
 
 ---
 
@@ -130,7 +139,7 @@ cargo fmt
 cargo build --release
 ```
 
-CI runs clippy (`-D warnings`) and the full test suite. See [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+Stable Rust, edition 2021. CI: [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
 ---
 

@@ -1,5 +1,7 @@
 # Capture Pipeline
 
+> **Contributor / deep-dive.** Operator overview: [../guide/what-is-blackbox.md](../guide/what-is-blackbox.md).
+
 > How blackbox observes harness activity through independent capture layers,
 > merges their event streams, and persists a consistent ordered trace.
 

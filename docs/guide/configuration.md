@@ -1,6 +1,10 @@
 # Configuration
 
-Blackbox can be configured through CLI flags, environment variables, and a project-level TOML config file. This document covers all configuration surfaces.
+**Answers:** Where the store lives, how `config.toml` / env / CLI flags override each other, and what the common knobs do.
+
+Task-oriented setup: [getting-started.md](getting-started.md). Exhaustive command flags: [../reference/cli.md](../reference/cli.md).
+
+Blackbox is configured through **CLI flags**, **environment variables**, and a project-level **`.blackbox/config.toml`**. This document covers those surfaces.
 
 ---
 

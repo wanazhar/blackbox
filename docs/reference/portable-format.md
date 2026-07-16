@@ -1,5 +1,8 @@
 # Portable format reference
 
+**Wire format for import/export archives.** Operator workflow: [../guide/export-and-sync.md](../guide/export-and-sync.md). Sealed packs and passphrase sealing are covered there and in [../guide/security.md](../guide/security.md).
+
+
 Blackbox can export traces to a portable JSON archive and import them back. This is useful for sharing traces between projects, machines, or debugging offline.
 
 ---

@@ -1,6 +1,8 @@
 # Security
 
-Blackbox runs on machines that may hold secrets — API keys, tokens, passwords, environment variables. The entire design is built around **redact-before-write**: secrets are scrubbed before they touch disk.
+**Answers:** What is redacted by default, which flags disable protection, residual risks (same-UID, disk theft), serve auth, and optional at-rest encryption / sealed backup.
+
+Blackbox runs on machines that may hold secrets — API keys, tokens, passwords, environment variables. The core invariant is **redact-before-write**: matching secrets are scrubbed before they touch SQLite or blobs. Perfect redaction is not claimed; see limitations below.
 
 ---
 

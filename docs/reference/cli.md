@@ -1,5 +1,7 @@
 # CLI reference
 
+**Normative flag and subcommand list.** For task-oriented walkthroughs (install, debug, ambient capture), start with [../guide/README.md](../guide/README.md).
+
 All blackbox subcommands, arguments, exit codes, and JSON output schemas. Every command accepts `--json` for machine-readable output wrapped in the `blackbox.cli/v1` envelope.
 
 ---

@@ -1,6 +1,8 @@
 # Export and sync
 
-Blackbox supports exporting traces to shareable formats and syncing them to remote storage. Both are **redacted by default** — pass `--no-redact` only for private offline analysis.
+**Answers:** How to export a run (JSONL / HTML / portable), import portable archives, sync to dir/HTTP/S3, and use sealed packs / store backup.
+
+Both export and sync are **redacted by default**. Pass `--no-redact` only for private offline analysis on a trusted machine. Threat model: [security.md](security.md).
 
 ---
 
@@ -102,3 +104,24 @@ The redaction gate is tested in `tests/redaction_gate.rs`: structural IDs (SHA, 
 | Generate a visual report | HTML | `blackbox export <id> --format html` |
 | Backup all local traces | Sync → directory | `blackbox sync push --dir /mnt/backup` |
 | Share via S3 bucket | Sync → S3 | `blackbox sync push --s3 s3://bucket/traces/` |
+| Offline passphrase vault (DB + sticky) | Sealed backup | `blackbox backup` / `restore` (see below) |
+
+---
+
+## 5. Sealed export packs and store backup
+
+Portable export can be **sealed** (passphrase or store key):
+
+```bash
+blackbox export <run-id> --format portable --passphrase '…' -o trace.sealed.json
+blackbox import trace.sealed.json --passphrase '…'
+```
+
+Whole-store offline vault (not live SQLCipher):
+
+```bash
+blackbox backup -o vault.bbx.json --passphrase '…'
+blackbox restore vault.bbx.json --passphrase '…'
+```
+
+`store.key` is never embedded in backups by default. Prefer passphrase-sealed archives for cold storage away from the machine. Details and threat model: [security.md](security.md) § at-rest.

@@ -1,6 +1,6 @@
 # Ambient capture contract (1.1)
 
-Normative behavior for project-scoped ambient recording. See also [`docs/plan/adoption-1.1.md`](plan/adoption-1.1.md) (A1).
+**Normative** behavior for project-scoped ambient recording. Operator explanation: [guide/leave-it-on.md](guide/leave-it-on.md). Historical design: [plan/adoption-1.1.md](plan/adoption-1.1.md).
 
 ## Decision order (`blackbox maybe-run`)
 

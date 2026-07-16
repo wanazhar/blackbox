@@ -1,5 +1,7 @@
 # blackbox as Daily-Driver Flight Recorder for AI-Agent Workflows
 
+> **Historical design document.** Not a getting-started guide. Current docs: [../README.md](../README.md).
+
 | Field | Value |
 |---|---|
 | **Document** | Product + Technical Design |

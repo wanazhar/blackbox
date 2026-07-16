@@ -1,5 +1,7 @@
 # Blackbox 1.1 — Adoption release (“leave it on”)
 
+> **Historical design document** (shipped). Operator how-to: [../guide/leave-it-on.md](../guide/leave-it-on.md). Normative ambient table: [../ambient-contract.md](../ambient-contract.md). Docs index: [../README.md](../README.md).
+
 | Field | Value |
 |---|---|
 | **Document** | Product + technical design for 1.1 |

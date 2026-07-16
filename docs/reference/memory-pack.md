@@ -1,6 +1,8 @@
 # Memory pack reference (blackbox.memory/v1)
 
-The Project Memory Pack is the 1.2 continuity-plane document — a bounded snapshot of project-level context delivered to every supervised launch. It is rebuilt after every run and written to `.blackbox/MEMORY.md` + `.blackbox/MEMORY.json`.
+**Schema and field semantics** for `blackbox.memory/v1`. Conceptual overview: [../guide/what-is-blackbox.md](../guide/what-is-blackbox.md). Continuity implementation: [../internals/continuity-plane.md](../internals/continuity-plane.md).
+
+The Project Memory Pack is a bounded snapshot of project-level context delivered on supervised launches when continuity is enabled. It is rebuilt after every run (when continuity ≠ off) and written to `.blackbox/MEMORY.md` + `.blackbox/MEMORY.json`.
 
 ---
 

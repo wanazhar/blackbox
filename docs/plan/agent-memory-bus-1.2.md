@@ -1,5 +1,7 @@
 # Blackbox 1.2 — Agent Memory Bus (Continuity Plane)
 
+> **Historical design document** (shipped). Operator entry: [../guide/what-is-blackbox.md](../guide/what-is-blackbox.md). Implementation: [../internals/continuity-plane.md](../internals/continuity-plane.md). Schema: [../reference/memory-pack.md](../reference/memory-pack.md).
+
 | Field | Value |
 |---|---|
 | **Document** | Product + technical design for 1.2 |

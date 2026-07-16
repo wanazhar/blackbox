@@ -1,5 +1,7 @@
 # JSON API reference
 
+**Schema reference for automation.** Humans debugging a single failure usually want [../guide/debug-a-failure.md](../guide/debug-a-failure.md) first; agents should also see [../skills/blackbox.md](../skills/blackbox.md).
+
 All blackbox CLI commands accept `--json` to produce a machine-readable envelope (`blackbox.cli/v1`). This document describes the envelope format and every view type.
 
 ---

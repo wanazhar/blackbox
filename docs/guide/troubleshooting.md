@@ -1,6 +1,8 @@
 # Troubleshooting
 
-Common issues, diagnostics, and recovery procedures for blackbox.
+**Answers:** How to diagnose a broken install or store (`doctor` / `stats`), fix common errors, and recover from stuck runs or ambient misconfiguration.
+
+Related: [install.md](install.md), [leave-it-on.md](leave-it-on.md), [debug-a-failure.md](debug-a-failure.md) (logical agent failures vs capture failures).
 
 ---
 

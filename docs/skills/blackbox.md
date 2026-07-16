@@ -1,6 +1,8 @@
 # blackbox skill (for coding agents)
 
-Local flight recorder + **project memory bus** for AI-agent runs. Secrets redacted by default.
+Local flight recorder + **project memory** for AI-agent runs. Secrets redacted by default.
+
+Human operators: [../guide/README.md](../guide/README.md). MCP: [../reference/mcp.md](../reference/mcp.md). JSON views: [../reference/json-api.md](../reference/json-api.md).
 
 ## When to use
 

@@ -1,5 +1,7 @@
 # MCP tools reference
 
+**Agent integration surface.** Session habits: [../skills/blackbox.md](../skills/blackbox.md). Human operators can use the same capabilities via CLI (`handoff`, `memory`, `status`, …) in [../guide/everyday-use.md](../guide/everyday-use.md).
+
 Blackbox provides a **Model Context Protocol (MCP)** server that exposes project memory, traces, and claims as tools. Agents that support MCP (Claude Desktop, Claude Code, etc.) can call these tools instead of parsing CLI output.
 
 ---

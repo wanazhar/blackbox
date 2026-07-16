@@ -1,5 +1,7 @@
 # Blackbox Architecture
 
+> **Contributor / deep-dive documentation.** For install and day-to-day use, see [../guide/README.md](../guide/README.md).
+
 **Blackbox** is a Rust flight recorder and debugger for AI-agent runs. It launches agent commands (Claude, Codex, or generic), captures terminal output and structured events via PTY supervision, stores traces in SQLite + content-addressed blobs, and provides CLI, TUI, and a local web dashboard for inspection.
 
 - **Source:** <https://github.com/wanazhar/blackbox>

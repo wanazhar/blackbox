@@ -1,190 +1,170 @@
 # Getting started
 
-A step-by-step walkthrough to install blackbox, enable a project, record your first run, inspect it, and use the Agent Memory Bus.
+**Answers:** How to enable a project, record the first run, inspect it, and optionally turn on project memory and ambient wrappers—without requiring prior knowledge of blackbox internals.
+
+**Prerequisites:** [Install](install.md) (`blackbox --version` works). **Background:** [What is blackbox?](what-is-blackbox.md).
 
 ---
 
-## 1. Install
-
-### Binary (no Rust required)
+## 1. Enable a project
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/wanazhar/blackbox/master/install.sh | sh
-```
+cd ~/my-project   # or any repo you want traced
 
-### From crates.io
+# Minimal: project store + config
+blackbox enable
 
-```bash
-cargo install blackbox-recorder
-```
-
-### Verify
-
-```bash
-blackbox --version
-# Should print: blackbox-recorder 1.2.0
-blackbox doctor
-# Should show store path, schema version, and environment
-```
-
----
-
-## 2. Enable a project
-
-Create a new project or use an existing one:
-
-```bash
-cd ~/my-project
-
-# Enable blackbox for this project + install shell wrappers
-blackbox enable --install-shell
-
-# With memory bus (recommended for new projects)
+# Recommended for agent workflows: continuity defaults + shell wrappers
 blackbox enable --memory-bus --install-shell
 ```
 
-What `enable` does:
-1. Creates the `.blackbox/` directory structure
-2. Writes a default `.blackbox/config.toml`
-3. Sets `capture.continuity = "always"` (with `--memory-bus`)
-4. Installs shell wrappers for common agent harnesses (claude, codex, aider, etc.)
+| Flag | Effect |
+|---|---|
+| *(none)* | Creates `.blackbox/`, default `config.toml`, `enabled = true` |
+| `--memory-bus` | Continuity-oriented defaults (`capture.continuity = "always"` among them) |
+| `--install-shell` | Installs managed wrappers for harness basenames on the wrap list |
 
-### Shell wrappers
+**What lands on disk:**
 
-Shell wrappers are managed blocks in your `~/.bashrc`, `~/.zshrc`, or PowerShell profile. They look like:
-
-```bash
-# >>> blackbox >>>
-command blackbox maybe-run -- <name> "$@"
-# <<< blackbox <<<
+```text
+.blackbox/
+  config.toml      # capture, retention, product mode, …
+  blackbox.db      # created on first write
+  blobs/           # content-addressed payloads
+  # later: state.json, MEMORY.md, MEMORY.json, store.key (if encrypt_blobs), …
 ```
 
-Wrappers never hard-fail: if `blackbox` is missing from PATH, the bare command is invoked.
+Add to `.gitignore` if not already ignored:
+
+```gitignore
+.blackbox/
+blackbox.db
+*.db-wal
+*.db-shm
+```
+
+Shell wrapper mechanics and opt-out: [leave-it-on.md](leave-it-on.md).
 
 ---
 
-## 3. Record your first run
+## 2. Record a run
+
+Everything after `--` is the supervised command:
 
 ```bash
-# Run a command under observation
 blackbox run -- echo hello world
-
-# Output:
-# [handoff hint when failure attention is needed]
-# Run completed: <short-id>  (succeeded)
 ```
 
-### What happens
+You should see a completion line with a **short run id** (prefix of the UUID) and status.
 
-1. Blackbox creates a new `Run` record
-2. Capture layers start: **PTY** (terminal I/O), **Git** (snapshot), **Filesystem** (file writes), **Process** (child lifecycle)
-3. The command runs under a pseudo-terminal
-4. All output is captured, normalized (ANSI stripped), and redacted for secrets
-5. Large output is stored as content-addressed blobs
-6. On completion: run is updated, checkpoint is written, memory pack is refreshed, attention is computed
+### What happens (accurate, brief)
 
-### Record a CI job
+1. Resolve store path (CLI / env / legacy db / `.blackbox/`).
+2. Insert a **Run** row; start capture layers (PTY, git, filesystem, process as configured).
+3. Spawn the command under a **PTY**; stream output through normalize → **redact** → blob/event pipeline; harness **adapter** may parse tool calls.
+4. On exit: stop layers, checkpoint, update run status/exit code, refresh project memory when continuity ≠ off, apply sticky **attention**.
+
+Full pipeline: [capture-pipeline](../internals/capture-pipeline.md).
+
+### Variants you will use soon
 
 ```bash
+# Propagate child exit code (CI)
 blackbox run --ci --artifact-dir ./artifacts -- npm test
 
-# Model/harness eval (observe-only; tags eval+ci; no continuity inject)
+# Eval / benchmark: force observe-only + CI + tags eval,ci (no launch mutation)
 blackbox run --eval --artifact-dir ./eval-out -- your-agent --prompt "…"
+
+# Hard observe-only without full eval tag set
+blackbox run --observe-only -- claude -p "…"
+
+# Label and tag
+blackbox run --name "fix-login" --tag wip -- claude -p "Fix login"
 ```
 
-`--ci` propagates the child exit code. `--eval` is the benchmark mode: forces observe-only + CI exit codes + tags `eval`/`ci`. `--artifact-dir` writes `run.json`, `postmortem.json`, `anomalies.json`, `summary.txt`, and optional `portable.json`.
+`--artifact-dir` writes `run.json`, `postmortem.json`, `anomalies.json`, `summary.txt`, and optional portable export. See [CLI reference](../reference/cli.md).
 
 ---
 
-## 4. Inspect the result
+## 3. Inspect
 
 ```bash
-# List recent runs
 blackbox runs
-
-# Show details of a specific run
-blackbox show <short-id>
-
-# View the event timeline
-blackbox timeline <short-id>
-
-# Inspect a specific event
-blackbox timeline <short-id> --kind tool.call
-blackbox inspect <event-id>
+blackbox show latest
+blackbox show latest --transcript
+blackbox timeline latest --semantic
 ```
 
-### With JSON output
+JSON (envelope `blackbox.cli/v1`):
 
 ```bash
 blackbox runs --json
-blackbox show <short-id> --json
-blackbox timeline <short-id> --json
+blackbox show latest --json
 ```
 
-All commands accept `--json` for machine-readable output wrapped in the `blackbox.cli/v1` envelope.
+Interactive:
+
+```bash
+blackbox show latest --tui
+# or: blackbox serve   → http://127.0.0.1:7788
+```
+
+Day-to-day patterns: [everyday-use.md](everyday-use.md).
 
 ---
 
-## 5. Postmortem a failed run
-
-When a run fails, blackbox sets `attention_level = continue` and provides rich context:
+## 4. When something fails
 
 ```bash
-# Quick failure analysis
-blackbox postmortem latest --json
-
-# Contains: headline, attention_reason, failed_tools, errors_top, side_effects, summary
-```
-
-The handoff command packages this for the next agent:
-
-```bash
+blackbox postmortem latest
 blackbox handoff --json
-# Returns: status + project_memory + resume_pack (when attention needed)
 ```
+
+Step-by-step: [debug-a-failure.md](debug-a-failure.md).
 
 ---
 
-## 6. Use the Memory Bus
-
-If you enabled with `--memory-bus`, every supervised launch delivers project memory:
+## 5. Project memory (if you used `--memory-bus`)
 
 ```bash
-# View the current project memory pack
-blackbox memory show --json
-
-# Set a project goal and open items
-blackbox memory set --goal "Fix CI pipeline" --open "Fix flaky test" --open "Update README"
-
-# Acquire a project claim (prevents concurrent agent conflicts)
-blackbox claim acquire --holder "my-agent"
-
-# Release when done
-blackbox claim release
-
-# Clear an unresolved failure
-blackbox resolve
-
-# With --clear-wip (also clears open items and goal)
-blackbox resolve --clear-wip
+blackbox memory show
+blackbox memory set --goal "Fix the CI flake" --open "Stabilize auth test"
+blackbox status
 ```
+
+Supervised **explicit** runs can inject the memory pack (files / env / preamble depending on harness). Ambient wrappers record but do **not** inject.
+
+Multi-agent claim:
+
+```bash
+blackbox claim acquire --holder "$USER"
+# … work …
+blackbox claim release
+```
+
+Schema: [memory-pack.md](../reference/memory-pack.md). Semantics: [continuity-plane](../internals/continuity-plane.md).
 
 ---
 
-## 7. Next steps
+## 6. Sanity checks
 
-| Guide | What it covers |
+```bash
+blackbox doctor
+blackbox stats
+```
+
+If store path, permissions, or redaction look wrong: [troubleshooting.md](troubleshooting.md), [security.md](security.md).
+
+---
+
+## Next
+
+| Job | Guide |
 |---|---|
-| [Configuration](configuration.md) | All CLI flags, env vars, config.toml options |
-| [Security](security.md) | Redaction model, what's captured, safe defaults |
-| [Overhead](overhead.md) | Local benchmarks, stats averages, storage soft warnings |
-| [Export and sync](export-and-sync.md) | Export formats, sync push/pull to dir/S3/HTTP |
-| [Troubleshooting](troubleshooting.md) | Common issues, FAQ, doctor diagnostics |
-
-### CLI reference
-
-For a complete list of all subcommands with arguments, examples, and JSON schemas, see the [CLI reference](../reference/cli.md).
-
-### Architecture
-
-For contributors and deep-dive readers, the [architecture doc](../internals/architecture.md) describes the full data flow and module structure.
+| Daily commands, TUI, dashboard | [everyday-use.md](everyday-use.md) |
+| Ambient “leave it on” | [leave-it-on.md](leave-it-on.md) |
+| Debug failures | [debug-a-failure.md](debug-a-failure.md) |
+| Config surfaces | [configuration.md](configuration.md) |
+| Export / sync | [export-and-sync.md](export-and-sync.md) |
+| All flags | [../reference/cli.md](../reference/cli.md) |
+| Agent session playbook | [../skills/blackbox.md](../skills/blackbox.md) |

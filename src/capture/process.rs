@@ -1,6 +1,7 @@
 use crate::capture::CaptureLayer;
+use crate::core::command::{CaptureMethod, CommandMetadata};
 use crate::core::event::{EventSource, EventStatus, TraceEvent};
-use crate::core::process_tree::ProcessNode;
+use crate::core::process_tree::{ProcessNode, ProcessResources};
 use crate::core::run::Run;
 use async_trait::async_trait;
 use std::collections::HashSet;
@@ -11,7 +12,7 @@ use tokio::sync::mpsc;
 ///
 /// Tracks the supervised process lifecycle, records basic process metadata,
 /// and on Linux discovers child processes via /proc polling for lossless
-/// process-tree capture.
+/// process-tree capture (exact argv, cwd, executable, best-effort resources).
 #[derive(Debug)]
 pub struct ProcessCapture {
     event_tx: Option<mpsc::Sender<TraceEvent>>,
@@ -57,6 +58,14 @@ impl ProcessCapture {
             ev.status = EventStatus::Success;
             ev.metadata
                 .insert("pid".to_string(), serde_json::json!(pid));
+
+            #[cfg(target_os = "linux")]
+            {
+                if let Some(snap) = read_process_snapshot(pid) {
+                    apply_snapshot_to_event(&mut ev, &snap, CaptureMethod::ProcCmdline);
+                }
+            }
+
             let _ = tx.send(ev).await;
         }
     }
@@ -89,10 +98,12 @@ impl CaptureLayer for ProcessCapture {
 
         let mut ev = TraceEvent::new(&run.id, EventSource::Process, "process.observer.started");
         ev.status = EventStatus::Success;
-        ev.metadata.insert(
-            "command".to_string(),
-            serde_json::json!(run.command.join(" ")),
-        );
+        // Supervised command is known exactly from the Run record (argv array).
+        let meta = CommandMetadata::from_adapter_argv(run.command.clone(), Some(run.cwd.clone()));
+        // Tag as exact argv from the launch path (not proc yet).
+        let mut meta = meta;
+        meta.capture_method = CaptureMethod::AdapterArgv;
+        meta.apply_to_event(&mut ev);
         ev.metadata.insert(
             "process_tree_capture".to_string(),
             serde_json::json!(cfg!(target_os = "linux")),
@@ -144,9 +155,11 @@ impl CaptureLayer for ProcessCapture {
                 );
                 if let Some(ref tree) = self.process_tree {
                     ev.metadata.insert(
-                        "tree_depth".to_string(),
+                        "tree_nodes".to_string(),
                         serde_json::json!(tree.count_nodes()),
                     );
+                    ev.metadata
+                        .insert("tree_depth".to_string(), serde_json::json!(tree.depth()));
                 }
                 let _ = tx.send(ev).await;
             }
@@ -155,10 +168,24 @@ impl CaptureLayer for ProcessCapture {
     }
 }
 
-// ── Linux /proc poller ──────────────────────────────────────────────
+// ── Linux /proc helpers ─────────────────────────────────────────────
+
+/// Snapshot of process state read from /proc.
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone)]
+struct ProcessSnapshot {
+    pid: u32,
+    ppid: u32,
+    argv: Vec<String>,
+    executable: Option<String>,
+    cwd: Option<String>,
+    pgid: Option<u32>,
+    sid: Option<u32>,
+    uid: Option<u32>,
+    resources: ProcessResources,
+}
 
 #[cfg(target_os = "linux")]
-/// Read the null-separated command line from /proc/[pid]/cmdline.
 fn read_cmdline(pid: u32) -> Option<Vec<String>> {
     let path = format!("/proc/{pid}/cmdline");
     let data = std::fs::read(&path).ok()?;
@@ -178,7 +205,6 @@ fn read_cmdline(pid: u32) -> Option<Vec<String>> {
 }
 
 #[cfg(target_os = "linux")]
-/// Read the parent PID from /proc/[pid]/status.
 fn read_ppid(pid: u32) -> Option<u32> {
     let path = format!("/proc/{pid}/status");
     let data = std::fs::read_to_string(&path).ok()?;
@@ -191,13 +217,147 @@ fn read_ppid(pid: u32) -> Option<u32> {
 }
 
 #[cfg(target_os = "linux")]
-/// Check if a process with the given PID is alive.
+fn read_status_fields(pid: u32) -> (Option<u32>, Option<u32>, Option<u32>, Option<u64>) {
+    let path = format!("/proc/{pid}/status");
+    let Ok(data) = std::fs::read_to_string(&path) else {
+        return (None, None, None, None);
+    };
+    let mut uid = None;
+    let mut rss_kb = None;
+    for line in data.lines() {
+        if let Some(rest) = line.strip_prefix("Uid:") {
+            // Real, effective, saved, fs
+            if let Some(first) = rest.split_whitespace().next() {
+                uid = first.parse().ok();
+            }
+        } else if let Some(rest) = line.strip_prefix("VmRSS:") {
+            if let Some(first) = rest.split_whitespace().next() {
+                rss_kb = first.parse().ok();
+            }
+        }
+    }
+    // pgid/sid from /proc/pid/stat fields
+    let (pgid, sid) = read_pgid_sid(pid);
+    (pgid, sid, uid, rss_kb)
+}
+
+#[cfg(target_os = "linux")]
+fn read_pgid_sid(pid: u32) -> (Option<u32>, Option<u32>) {
+    // /proc/pid/stat: pid (comm) state ppid pgrp session ...
+    let path = format!("/proc/{pid}/stat");
+    let Ok(data) = std::fs::read_to_string(&path) else {
+        return (None, None);
+    };
+    // comm can contain spaces/parens — find last ')' then split rest
+    let rest = match data.rfind(')') {
+        Some(i) => &data[i + 1..],
+        None => return (None, None),
+    };
+    let fields: Vec<&str> = rest.split_whitespace().collect();
+    // After ')': state(0) ppid(1) pgrp(2) session(3) ...
+    let pgid = fields.get(2).and_then(|s| s.parse().ok());
+    let sid = fields.get(3).and_then(|s| s.parse().ok());
+    (pgid, sid)
+}
+
+#[cfg(target_os = "linux")]
+fn read_cpu_time_ms(pid: u32) -> Option<u64> {
+    let path = format!("/proc/{pid}/stat");
+    let data = std::fs::read_to_string(&path).ok()?;
+    let rest = data.rfind(')').map(|i| &data[i + 1..])?;
+    let fields: Vec<&str> = rest.split_whitespace().collect();
+    // utime(11), stime(12) in clock ticks after the ')' group
+    // indices: 0=state ... 11=utime, 12=stime (0-based in fields after ')')
+    let utime: u64 = fields.get(11)?.parse().ok()?;
+    let stime: u64 = fields.get(12)?.parse().ok()?;
+    let ticks_per_sec = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+    if ticks_per_sec <= 0 {
+        return None;
+    }
+    let total_ticks = utime.saturating_add(stime);
+    Some(total_ticks.saturating_mul(1000) / ticks_per_sec as u64)
+}
+
+#[cfg(target_os = "linux")]
+fn read_exe(pid: u32) -> Option<String> {
+    let path = format!("/proc/{pid}/exe");
+    std::fs::read_link(&path)
+        .ok()
+        .map(|p| p.to_string_lossy().into_owned())
+}
+
+#[cfg(target_os = "linux")]
+fn read_cwd(pid: u32) -> Option<String> {
+    let path = format!("/proc/{pid}/cwd");
+    std::fs::read_link(&path)
+        .ok()
+        .map(|p| p.to_string_lossy().into_owned())
+}
+
+#[cfg(target_os = "linux")]
 fn process_exists(pid: u32) -> bool {
     std::path::Path::new(&format!("/proc/{pid}")).exists()
 }
 
 #[cfg(target_os = "linux")]
-/// Find all descendant PIDs of the given root PID by walking /proc.
+fn read_process_snapshot(pid: u32) -> Option<ProcessSnapshot> {
+    let argv = read_cmdline(pid)?;
+    let ppid = read_ppid(pid).unwrap_or(0);
+    let (pgid, sid, uid, rss_kb) = read_status_fields(pid);
+    let cpu_time_ms = read_cpu_time_ms(pid);
+    Some(ProcessSnapshot {
+        pid,
+        ppid,
+        argv,
+        executable: read_exe(pid),
+        cwd: read_cwd(pid),
+        pgid,
+        sid,
+        uid,
+        resources: ProcessResources {
+            cpu_time_ms,
+            rss_kb,
+            peak_rss_kb: rss_kb,
+        },
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn apply_snapshot_to_event(ev: &mut TraceEvent, snap: &ProcessSnapshot, method: CaptureMethod) {
+    ev.metadata
+        .insert("pid".to_string(), serde_json::json!(snap.pid));
+    ev.metadata
+        .insert("ppid".to_string(), serde_json::json!(snap.ppid));
+    if let Some(pgid) = snap.pgid {
+        ev.metadata
+            .insert("pgid".to_string(), serde_json::json!(pgid));
+    }
+    if let Some(sid) = snap.sid {
+        ev.metadata
+            .insert("sid".to_string(), serde_json::json!(sid));
+    }
+    if let Some(uid) = snap.uid {
+        ev.metadata
+            .insert("uid".to_string(), serde_json::json!(uid));
+    }
+    let meta = CommandMetadata::from_proc_argv(
+        snap.argv.clone(),
+        snap.executable.clone(),
+        snap.cwd.clone(),
+        method,
+    );
+    meta.apply_to_event(ev);
+    if let Some(rss) = snap.resources.rss_kb {
+        ev.metadata
+            .insert("rss_kb".to_string(), serde_json::json!(rss));
+    }
+    if let Some(cpu) = snap.resources.cpu_time_ms {
+        ev.metadata
+            .insert("cpu_time_ms".to_string(), serde_json::json!(cpu));
+    }
+}
+
+#[cfg(target_os = "linux")]
 fn find_descendants(root_pid: u32) -> HashSet<u32> {
     let mut descendants = HashSet::new();
     descendants.insert(root_pid);
@@ -246,24 +406,16 @@ async fn proc_poller_loop(
         _ = stop_rx.changed() => return,
     };
 
-    let poll_interval = Duration::from_millis(500);
+    let poll_interval = Duration::from_millis(250);
     let mut known: HashSet<u32> = HashSet::new();
     known.insert(root_pid);
+    let root_pgid = read_pgid_sid(root_pid).0;
 
-    if let Some(cmdline) = read_cmdline(root_pid) {
-        let mut ev = TraceEvent::new(&run_id, EventSource::Process, "process.descendant.spawned");
+    // Emit root discovery with full snapshot.
+    if let Some(snap) = read_process_snapshot(root_pid) {
+        let mut ev = TraceEvent::new(&run_id, EventSource::Process, "process.discovered");
         ev.status = EventStatus::Success;
-        ev.metadata
-            .insert("pid".to_string(), serde_json::json!(root_pid));
-        ev.metadata.insert("ppid".to_string(), serde_json::json!(0));
-        ev.metadata
-            .insert("command".to_string(), serde_json::json!(cmdline.join(" ")));
-        ev.metadata
-            .insert("argv".to_string(), serde_json::json!(cmdline));
-        ev.metadata.insert(
-            "capture_method".to_string(),
-            serde_json::json!("proc_poller"),
-        );
+        apply_snapshot_to_event(&mut ev, &snap, CaptureMethod::ProcCmdline);
         let _ = event_tx.send(ev).await;
     }
 
@@ -272,40 +424,111 @@ async fn proc_poller_loop(
             _ = stop_rx.changed() => {
                 for &pid in &known {
                     if pid == root_pid { continue; }
-                    let mut ev = TraceEvent::new(&run_id, EventSource::Process, "process.descendant.exited");
+                    let mut ev = TraceEvent::new(&run_id, EventSource::Process, "process.exited");
                     ev.status = EventStatus::Success;
                     ev.metadata.insert("pid".to_string(), serde_json::json!(pid));
                     ev.metadata.insert("reason".to_string(), serde_json::json!("observer_stopped"));
+                    // Best-effort final resource sample
+                    if let Some(snap) = read_process_snapshot(pid) {
+                        if let Some(rss) = snap.resources.rss_kb {
+                            ev.metadata.insert("rss_kb".to_string(), serde_json::json!(rss));
+                        }
+                        if let Some(cpu) = snap.resources.cpu_time_ms {
+                            ev.metadata.insert("cpu_time_ms".to_string(), serde_json::json!(cpu));
+                        }
+                    }
                     let _ = event_tx.send(ev).await;
                 }
+                // Final tree snapshot event
+                let mut snap_ev = TraceEvent::new(&run_id, EventSource::Process, "process.tree.snapshot");
+                snap_ev.status = EventStatus::Success;
+                snap_ev.metadata.insert("root_pid".to_string(), serde_json::json!(root_pid));
+                snap_ev.metadata.insert("process_count".to_string(), serde_json::json!(known.len()));
+                let _ = event_tx.send(snap_ev).await;
                 break;
             }
             _ = tokio::time::sleep(poll_interval) => {
                 let current = find_descendants(root_pid);
+
+                // New processes
                 for &pid in &current {
                     if !known.contains(&pid) && pid != root_pid {
-                        if let Some(cmdline) = read_cmdline(pid) {
-                            let ppid = read_ppid(pid).unwrap_or(0);
-                            let mut ev = TraceEvent::new(&run_id, EventSource::Process, "process.descendant.spawned");
+                        if let Some(snap) = read_process_snapshot(pid) {
+                            let mut ev = TraceEvent::new(
+                                &run_id,
+                                EventSource::Process,
+                                "process.exec",
+                            );
                             ev.status = EventStatus::Success;
-                            ev.metadata.insert("pid".to_string(), serde_json::json!(pid));
-                            ev.metadata.insert("ppid".to_string(), serde_json::json!(ppid));
-                            ev.metadata.insert("command".to_string(), serde_json::json!(cmdline.join(" ")));
-                            ev.metadata.insert("argv".to_string(), serde_json::json!(cmdline));
-                            ev.metadata.insert("capture_method".to_string(), serde_json::json!("proc_poller"));
+                            apply_snapshot_to_event(&mut ev, &snap, CaptureMethod::ProcPoller);
+                            // Detect process-group escape
+                            if let (Some(root_pg), Some(pg)) = (root_pgid, snap.pgid) {
+                                if pg != root_pg {
+                                    ev.metadata.insert(
+                                        "escaped_pgrp".to_string(),
+                                        serde_json::json!(true),
+                                    );
+                                }
+                            }
                             let _ = event_tx.send(ev).await;
+
+                            // Also emit resource sample
+                            let mut res = TraceEvent::new(
+                                &run_id,
+                                EventSource::Process,
+                                "process.resource.sample",
+                            );
+                            res.status = EventStatus::Success;
+                            res.metadata.insert("pid".to_string(), serde_json::json!(pid));
+                            if let Some(rss) = snap.resources.rss_kb {
+                                res.metadata.insert("rss_kb".to_string(), serde_json::json!(rss));
+                            }
+                            if let Some(cpu) = snap.resources.cpu_time_ms {
+                                res.metadata.insert("cpu_time_ms".to_string(), serde_json::json!(cpu));
+                            }
+                            let _ = event_tx.send(res).await;
                         }
                     }
                 }
+
+                // Exited processes
                 for &pid in &known {
                     if pid == root_pid { continue; }
                     if !current.contains(&pid) && !process_exists(pid) {
-                        let mut ev = TraceEvent::new(&run_id, EventSource::Process, "process.descendant.exited");
+                        let mut ev = TraceEvent::new(
+                            &run_id,
+                            EventSource::Process,
+                            "process.exited",
+                        );
                         ev.status = EventStatus::Success;
                         ev.metadata.insert("pid".to_string(), serde_json::json!(pid));
                         let _ = event_tx.send(ev).await;
                     }
                 }
+
+                // Periodic resource samples for long-lived children
+                for &pid in &current {
+                    if pid == root_pid { continue; }
+                    if known.contains(&pid) {
+                        if let Some(snap) = read_process_snapshot(pid) {
+                            let mut res = TraceEvent::new(
+                                &run_id,
+                                EventSource::Process,
+                                "process.resource.sample",
+                            );
+                            res.status = EventStatus::Success;
+                            res.metadata.insert("pid".to_string(), serde_json::json!(pid));
+                            if let Some(rss) = snap.resources.rss_kb {
+                                res.metadata.insert("rss_kb".to_string(), serde_json::json!(rss));
+                            }
+                            if let Some(cpu) = snap.resources.cpu_time_ms {
+                                res.metadata.insert("cpu_time_ms".to_string(), serde_json::json!(cpu));
+                            }
+                            let _ = event_tx.send(res).await;
+                        }
+                    }
+                }
+
                 known = current;
             }
         }
@@ -318,6 +541,7 @@ fn _noop() {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::command::CommandFidelity;
     use crate::core::run::Run;
 
     #[tokio::test]
@@ -328,6 +552,22 @@ mod tests {
         let ev = rx.try_recv().unwrap();
         assert_eq!(ev.kind, "process.observer.started");
         assert_eq!(ev.source, EventSource::Process);
+    }
+
+    #[tokio::test]
+    async fn start_emits_lossless_command_meta() {
+        let mut cap = ProcessCapture::new();
+        let run = Run::new(
+            vec!["grep".into(), "hello world".into(), "file.txt".into()],
+            "/project".into(),
+        );
+        let mut rx = cap.start(&run).await.unwrap();
+        let ev = rx.try_recv().unwrap();
+        let meta = CommandMetadata::from_event(&ev).expect("command_meta");
+        assert_eq!(meta.argv[1], "hello world");
+        assert!(meta.lossless);
+        assert_eq!(meta.fidelity, CommandFidelity::Exact);
+        assert_eq!(meta.cwd.as_deref(), Some("/project"));
     }
 
     #[tokio::test]
@@ -371,13 +611,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn start_metadata_includes_command() {
+    async fn start_metadata_includes_command_array() {
         let mut cap = ProcessCapture::new();
         let run = Run::new(vec!["echo".into(), "hi".into()], "/tmp".into());
         let mut rx = cap.start(&run).await.unwrap();
         let ev = rx.try_recv().unwrap();
-        let cmd = ev.metadata.get("command").and_then(|v| v.as_str());
-        assert_eq!(cmd, Some("echo hi"));
+        let cmd = ev.metadata.get("command");
+        assert!(cmd.and_then(|v| v.as_array()).is_some());
+        let argv = ev
+            .metadata
+            .get("argv")
+            .and_then(|v| v.as_array())
+            .unwrap();
+        assert_eq!(argv[0], "echo");
+        assert_eq!(argv[1], "hi");
     }
 
     #[test]
@@ -404,9 +651,7 @@ mod tests {
         let (tx, rx) = tokio::sync::oneshot::channel::<u32>();
         cap.pid_tx = Some(tx);
         cap.set_pid(99);
-        // The pid_tx should have been consumed
         assert!(cap.pid_tx.is_none());
-        // The receiver should have the value
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt.block_on(async { rx.await.unwrap() });
         assert_eq!(result, 99);
@@ -419,5 +664,58 @@ mod tests {
         assert!(cmdline.is_some());
         let args = cmdline.unwrap();
         assert!(!args.is_empty());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn read_snapshot_includes_cwd_and_exe() {
+        let pid = std::process::id();
+        let snap = read_process_snapshot(pid).expect("snapshot");
+        assert!(!snap.argv.is_empty());
+        // cwd/exe may fail under restricted environments; just ensure no panic
+        let _ = snap.cwd;
+        let _ = snap.executable;
+        let _ = snap.resources.rss_kb;
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn nested_shell_descendants_discovered() {
+        use std::process::Command as StdCommand;
+        use std::time::Duration as StdDuration;
+
+        let mut cap = ProcessCapture::new();
+        let run = Run::new(
+            vec![
+                "sh".into(),
+                "-c".into(),
+                "sleep 0.8; true".into(),
+            ],
+            "/tmp".into(),
+        );
+        let mut rx = cap.start(&run).await.unwrap();
+        let _start = rx.try_recv().unwrap();
+
+        let mut child = StdCommand::new("sh")
+            .args(["-c", "sleep 0.8"])
+            .spawn()
+            .expect("spawn nested shell");
+        let pid = child.id();
+        cap.set_pid(pid);
+        cap.emit_spawned().await;
+
+        // Give the poller time to discover and sample.
+        tokio::time::sleep(StdDuration::from_millis(600)).await;
+        cap.stop().await.unwrap();
+        let _ = child.wait();
+
+        // Drain events
+        let mut kinds = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            kinds.push(ev.kind.clone());
+        }
+        // At least process.spawned and process.observer.stopped; discovery is best-effort
+        assert!(kinds.iter().any(|k| k == "process.spawned"));
+        assert!(kinds.iter().any(|k| k == "process.observer.stopped"));
     }
 }

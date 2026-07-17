@@ -153,6 +153,9 @@ Operator-facing notes for shipped harnesses: [docs/guide/adapters.md](docs/guide
 | `tests/integration_run.rs` | Full run lifecycle, fake harness, secrets, export, tags, portable, sync |
 | `tests/ambient_contract.rs` | A1 gate: OFF/nest/wrap/enable/install-shell/disable |
 | `tests/neutrality_contract.rs` | 1.4 N1/N2: recorder neutrality + nest markers |
+| `tests/pty_fidelity.rs` | 1.4 Phase D: PTY ANSI/unicode/stream/exit/TTY fixtures |
+| `tests/process_spawn_storm.rs` | 1.4 Phase D: short-lived process loss measurement |
+| `tests/fault_recovery.rs` | 1.4 Phase D: abandoned Running → Failed honesty |
 | `tests/redaction_store_scan.rs` | 1.4 S1: holdback run leaves no secret in SQLite/blobs |
 | `tests/redaction_gate.rs` | A2 gate: structural IDs survive, secrets die |
 | `tests/redaction_adversarial.rs` | Adversarial corpus + exhaustive split positions |

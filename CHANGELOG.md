@@ -23,6 +23,13 @@ Plan: [docs/plan/trust-proof-1.4.md](docs/plan/trust-proof-1.4.md). Epic: issue 
 - Process `complete` requires observer lifecycle signals (started / root spawned / tree snapshot / stopped / backend), not mere event count
 - Coverage JSON includes **`contributions`** (surface, status, weight, points, excluded)
 
+#### Unix runtime resilience (Phase D)
+- PTY fidelity suite: ANSI, unicode, long lines, no trailing newline, invalid UTF-8, streaming, exit codes, TTY/session markers (`tests/pty_fidelity.rs`)
+- Process spawn-storm fixture measures short-lived polling loss; root lifecycle still required (`tests/process_spawn_storm.rs`)
+- Interrupted recovery: abandoned `Running` → `Failed` with notes that final events/checkpoints may be incomplete; events preserved (`tests/fault_recovery.rs`)
+- Backpressure honesty: merge path counts **lag samples** (blocked send ≥50ms) and **send_failures** — no silent event drops; `capture.coverage` metadata includes `backpressure`
+- Coverage notes document normalized-transcript limits and backpressure policy
+
 #### Causal precision (G1 — Phase C)
 - **Command fingerprints** from argv / shell source / tool input (sha256 short key)
 - **Failure signatures** (exit, tool, error type, message digest)

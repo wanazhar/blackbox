@@ -196,14 +196,18 @@ blackbox import pack.json --passphrase '…'
 
 ## 3. Recovery procedures
 
-### Crash mid-run
+### Crash mid-run (1.4 recovery)
 
-On next store open, abandoned `Running` rows become `Failed`. No manual repair required.
+On next store open, abandoned `Running` rows become **`Failed`** (never success). Notes record that the supervisor was **interrupted** and that final events/checkpoints may be incomplete. Committed events and blobs are preserved.
 
 ```bash
-blackbox doctor
+blackbox doctor          # orphan Running count / daily-driver notes
 blackbox runs
+blackbox show <id>        # inspect partial timeline
+blackbox postmortem <id>  # will not invent a successful outcome
 ```
+
+Capture backpressure: merge lag samples and send_failures appear on `capture.coverage` metadata (`backpressure`); the merge path does **not** silently drop events under normal operation.
 
 ### Re-redact history
 

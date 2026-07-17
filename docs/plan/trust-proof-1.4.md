@@ -4,7 +4,7 @@
 |---|---|
 | **Document** | Product + technical plan for 1.4 |
 | **Date** | 2026-07-17 |
-| **Status** | **In progress** — Phases A–C landed; D/E remain |
+| **Status** | **In progress** — Phases A–D landed; E (release qualify) remains |
 | **Baseline** | 1.3.0 (trust & explain shipped) |
 | **Target tag** | **1.4.0** |
 | **Epic** | [Issue #2](https://github.com/wanazhar/blackbox/issues/2) |
@@ -120,7 +120,16 @@ Full acceptance criteria live in [issue #2](https://github.com/wanazhar/blackbox
 
 ### Phase D — Unix runtime resilience
 
-PTY matrix, spawn storm, macOS process backend, fault injection, drop accounting.
+- [x] PTY fidelity fixture suite (`tests/pty_fidelity.rs` + probe)
+- [x] Spawn-storm process loss measurement (`tests/process_spawn_storm.rs`)
+- [x] Interrupted-run recovery honesty (notes + Failed, never success)
+- [x] Backpressure policy: lag samples vs send_failures; no silent merge drops
+- [x] Coverage notes for PTY transcript limits + backpressure; coverage `backpressure` metadata
+- [ ] Full forensic process backend (eBPF/ptrace) — deferred optional
+- [ ] Full macOS process backend qualification matrix — deferred
+- [ ] Disk-full / permission fault injection matrix — partial (recovery path covered)
+
+**Exit:** Blackbox remains usable and honest under interactive, high-volume, and interrupted-supervisor conditions. **Met for core Linux CI gates.**
 
 ### Phase E — Qualification
 

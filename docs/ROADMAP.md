@@ -97,10 +97,10 @@ Full plan: [plan/trust-proof-1.4.md](plan/trust-proof-1.4.md). Epic: [issue #2](
 
 #### 1.4 implementation phases
 
-1. **A** Neutral and honest (nest markers, neutrality tests, coverage honesty)  
-2. **B** Security proof (holdback redactor)  
-3. **C** Causal precision + postmortem evidence  
-4. **D** Unix runtime resilience  
+1. **A** Neutral and honest (nest markers, neutrality tests, coverage honesty) ✅  
+2. **B** Security proof (holdback redactor) ✅  
+3. **C** Causal precision + postmortem evidence ✅  
+4. **D** Unix runtime resilience (PTY fidelity, spawn storm, fault recovery) ✅  
 5. **E** Qualification + release gate  
 
 ---

@@ -422,7 +422,11 @@ async fn ingest_file_delta(
             continue;
         }
 
-        let mut events = adapter.parse_output(writer.run_id(), trimmed.as_bytes());
+        // Redact the line before parse so tool payloads never carry raw secrets
+        // into metadata construction. JSON structure with [REDACTED] still parses.
+        let safe_line = scanner.redact(trimmed);
+
+        let mut events = adapter.parse_output(writer.run_id(), safe_line.as_bytes());
         for mut ev in events.drain(..) {
             ev.metadata.insert(
                 "native_log".to_string(),

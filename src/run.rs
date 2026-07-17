@@ -763,6 +763,35 @@ impl RunSupervisor {
                 }
             }
 
+            // Holdback flush: release remaining redacted pending before coalescer drain.
+            if let Some(ref mut stream) = stream_redactor {
+                let (tail, hits) = stream.finish();
+                if hits > 0 {
+                    total_redactions += hits;
+                }
+                if !tail.is_empty() {
+                    if line_buf.len() + tail.len() > MAX_LINE_BUF_BYTES {
+                        line_buf.clear();
+                    }
+                    line_buf.push_str(&tail.replace('\r', ""));
+                    if let Some(seg) = coalescer.push(&tail, &[], hits) {
+                        if let Err(e) = emit_terminal(
+                            &store_writer,
+                            event_writer.as_ref(),
+                            &run_id_writer,
+                            seg,
+                            insecure_raw,
+                        )
+                        .await
+                        {
+                            tracing::error!(error = %e, "failed to persist holdback terminal event");
+                        } else {
+                            event_count += 1;
+                        }
+                    }
+                }
+            }
+
             // Drain coalescer
             if let Some(seg) = coalescer.finish() {
                 if let Err(e) = emit_terminal(

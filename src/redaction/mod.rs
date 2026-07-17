@@ -1,9 +1,11 @@
 pub mod environment;
 pub mod export;
 pub mod scanner;
+pub mod store_scan;
 pub mod stream;
 
-pub use stream::{StreamRedactor, DEFAULT_STREAM_WINDOW};
+pub use store_scan::{assert_store_clean, scan_bytes, scan_store_paths, StoreScanFinding};
+pub use stream::{StreamRedactor, DEFAULT_MAX_PENDING, DEFAULT_STREAM_WINDOW};
 
 /// A record that redaction occurred at a specific location.
 #[derive(Debug, Clone)]

@@ -153,7 +153,9 @@ Operator-facing notes for shipped harnesses: [docs/guide/adapters.md](docs/guide
 | `tests/integration_run.rs` | Full run lifecycle, fake harness, secrets, export, tags, portable, sync |
 | `tests/ambient_contract.rs` | A1 gate: OFF/nest/wrap/enable/install-shell/disable |
 | `tests/neutrality_contract.rs` | 1.4 N1/N2: recorder neutrality + nest markers |
+| `tests/redaction_store_scan.rs` | 1.4 S1: holdback run leaves no secret in SQLite/blobs |
 | `tests/redaction_gate.rs` | A2 gate: structural IDs survive, secrets die |
+| `tests/redaction_adversarial.rs` | Adversarial corpus + exhaustive split positions |
 | `tests/memory_pack_quality.rs` | M2a gate: budget, shrink order, failure fields, success-WIP, redaction |
 | `tests/overhead_smoke.rs` | A6 gate: soft wall-time budget for supervising `true` |
 | `tests/shell_soak.rs` | Real bash install -> ambient record -> BLACKBOX_OFF |

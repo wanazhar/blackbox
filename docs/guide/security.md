@@ -31,8 +31,9 @@ Invariant: matching secrets are scrubbed **before** SQLite rows and blob files a
 | argv / process tree | On | Secret-like arguments |
 | Environment | On | Name denylist **and** value patterns; capture mode allowlist vs full (see config) |
 | Git diffs | On | Diff text before blob/preview |
-| Terminal (PTY) | On | Stream redaction with overlap window |
+| Terminal (PTY) | On | **Holdback** stream redaction before blob write |
 | Tool I/O | On | Nested JSON string values in metadata |
+| Native harness logs | On | Line redacted before parse + metadata re-scan |
 | Run UUIDs, blob SHA-256 keys, timestamps, event kinds | **Not** redacted | Structural IDs must survive for debugging |
 
 Replacement token: `[REDACTED]`. Events may carry a `redactions` count in metadata.
@@ -51,15 +52,28 @@ Replacement token: `[REDACTED]`. Events may carry a `redactions` count in metada
 | PEM private keys | `BEGIN … PRIVATE KEY` |
 | Nested JSON | Tool metadata string leaves |
 
-**Stream redaction:** PTY path uses an overlap window (default on the order of 256 bytes) so secrets split across chunk boundaries are still caught before write.
+### Holdback stream redaction (1.4 S1)
 
-**Structural IDs not scarred:** whole-string hex/base64 matchers are constrained so git SHAs, blob keys, and UUIDs survive. Regression: `tests/redaction_gate.rs`, `tests/redaction_adversarial.rs`.
+PTY output is **not** redacted per-chunk with immediate write. `StreamRedactor` (`src/redaction/stream.rs`):
+
+1. Appends each normalized chunk to an unredacted **pending** buffer  
+2. Scans the full pending buffer for secret spans  
+3. Emits only the prefix **older than the holdback window** (default **1024** bytes), after redaction  
+4. Pulls the emit cursor back when a span still crosses the holdback boundary  
+5. On end-of-stream, `finish()` redacts and flushes the remainder  
+
+So a secret split as `sk-abc…` / `…rest` never persists the first fragment alone. Pending is capped (`DEFAULT_MAX_PENDING`) to bound RAM; excess is force-flushed after redaction.
+
+Invalid UTF-8 is lossy-decoded (`U+FFFD`) so binary-like PTY bytes remain scannable without bypassing the redactor.
+
+**Structural IDs not scarred:** whole-string hex/base64 matchers are constrained so git SHAs, blob keys, and UUIDs survive. Regression: `tests/redaction_gate.rs`, `tests/redaction_adversarial.rs` (incl. exhaustive split positions), `tests/redaction_store_scan.rs` (SQLite/WAL/blob byte scan).
 
 ### Limitations (honest)
 
 - Novel secret formats can slip; defaults are conservative but not omniscient.
-- `--insecure-raw` stores raw PTY material by design.
-- Overlap window is finite; pathological splits can miss (scrub later; prefer coalesced storage).
+- `--insecure-raw` stores raw PTY material by design (bypasses the safe path).
+- Holdback window is finite; secrets longer than the window that never complete a match may still force-flush under the RAM cap (still redacted when patterns match).
+- **Logical redaction ≠ physical secure erase.** Scrub rewrites logical content; SQLite WAL pages, SSD wear-leveling, and COW filesystems may retain prior bytes until the OS reclaims them. Do not promise media-level wipe.
 - Old stores captured under older scanners remain hot until `blackbox scrub`.
 - Live SQLite **run/event metadata** is not column-encrypted; blob encrypt + sealed backup are the practical vault path (no live SQLCipher).
 

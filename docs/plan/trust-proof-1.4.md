@@ -4,7 +4,7 @@
 |---|---|
 | **Document** | Product + technical plan for 1.4 |
 | **Date** | 2026-07-17 |
-| **Status** | **In progress** — Phase A started |
+| **Status** | **In progress** — Phase A done; Phase B (security proof) in train |
 | **Baseline** | 1.3.0 (trust & explain shipped) |
 | **Target tag** | **1.4.0** |
 | **Epic** | [Issue #2](https://github.com/wanazhar/blackbox/issues/2) |
@@ -97,7 +97,14 @@ Full acceptance criteria live in [issue #2](https://github.com/wanazhar/blackbox
 
 ### Phase B — Security proof
 
-Holdback redactor, adversarial split corpus, store-level scan, permission hardening.
+- [x] Holdback stream redactor (no early secret fragments)
+- [x] Exhaustive split-position corpus (`tests/redaction_adversarial.rs`)
+- [x] Store-level SQLite/WAL/blob scan (`redaction::store_scan` + `tests/redaction_store_scan.rs`)
+- [x] Wire holdback flush into PTY path; native-log line redact before parse
+- [x] Security docs: holdback vs physical erase honesty
+- [ ] Broader permission/key-rotation integration hardening (remainder → WS11 / Phase E)
+
+**Exit:** No adversarial fixture or meaningful fragment survives supported persistence paths under default redaction. **Met for stream/store path on Linux.**
 
 ### Phase C — Causal precision
 

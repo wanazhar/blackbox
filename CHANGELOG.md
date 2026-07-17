@@ -23,6 +23,14 @@ Plan: [docs/plan/trust-proof-1.4.md](docs/plan/trust-proof-1.4.md). Epic: issue 
 - Process `complete` requires observer lifecycle signals (started / root spawned / tree snapshot / stopped / backend), not mere event count
 - Coverage JSON includes **`contributions`** (surface, status, weight, points, excluded)
 
+#### Holdback redaction / store scan (S1 — Phase B)
+- **Holdback** `StreamRedactor`: pending buffer + trailing window (default 1024 B); emit only redacted prefix older than the window; `finish()` flushes remainder
+- Secret spans that cross the holdback boundary are never partially persisted
+- PTY path flushes holdback before coalescer drain; native-log lines redacted before adapter parse
+- `redaction::store_scan` scans SQLite/WAL/SHM + blob bytes for scanner matches and known prefixes
+- Gates: exhaustive split-position corpus in `tests/redaction_adversarial.rs`; end-to-end store scan in `tests/redaction_store_scan.rs`
+- Security guide documents holdback vs logical scrub vs physical erase limits
+
 ### Docs
 - Dropped GitHub Pages deploy (`.github/workflows/docs.yml`); docs are in-repo under `docs/` only.
   Optional local MkDocs preview remains; no `*.github.io` site for this project.

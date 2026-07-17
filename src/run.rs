@@ -1115,6 +1115,15 @@ impl RunSupervisor {
                 "max_write_ms": health.max_write_ms,
             }),
         );
+        // Explicit backpressure honesty (1.4 Phase D): lag samples ≠ drops.
+        cov_ev.metadata.insert(
+            "backpressure".to_string(),
+            serde_json::json!({
+                "merge_lag_samples": merge_lag,
+                "merge_send_failures": merge_send_fail,
+                "policy": "no_silent_drops_on_merge; lag samples count blocked sends ≥50ms",
+            }),
+        );
         if let Some(ref a) = adapter_guess {
             cov_ev
                 .metadata

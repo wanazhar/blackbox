@@ -536,6 +536,12 @@ impl CaptureCoverage {
         notes.push(
             "quality_score: weighted average of applicable surfaces (pty 30%, process 25%, git 15%, fs 15%, env 5%, native_logs 10%); disabled and not_applicable surfaces omitted".into(),
         );
+        notes.push(
+            "pty: normalized searchable transcript is not a full-screen TUI frame replay; raw redacted blobs preserve byte stream when stored".into(),
+        );
+        notes.push(
+            "backpressure: merge path does not silently drop events; lag samples and send_failures are counted and surfaced".into(),
+        );
         if let Some(ref lag) = sig.capture_lag_note {
             notes.push(lag.clone());
         }

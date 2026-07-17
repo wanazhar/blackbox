@@ -30,28 +30,41 @@ pub trait CaptureLayer: Send + 'static {
     async fn stop(&mut self) -> anyhow::Result<()>;
 }
 
-/// Shared backpressure counters for merge_layers / PTY paths.
+/// Shared backpressure counters for merge_layers / PTY paths (1.4 Phase D).
+///
+/// Policy: **events are not silently dropped** on the merge path. Prolonged
+/// `send` waits count as **lag samples**; closed-channel failures count as
+/// **send_failures**. Consumers must treat both as honesty signals, not as
+/// free license to discard terminal/tool events.
 #[derive(Debug, Default)]
 pub struct BackpressureStats {
-    pub dropped: AtomicU64,
+    /// Times a merge `send` blocked ≥ 50ms (lag samples — not dropped events).
+    pub lag_samples: AtomicU64,
+    /// Merge channel closed / send failed (event not delivered downstream).
     pub send_failures: AtomicU64,
     pub peak_depth_hint: AtomicU64,
 }
 
 impl BackpressureStats {
+    /// `(lag_samples, send_failures)`.
     pub fn snapshot(&self) -> (u64, u64) {
         (
-            self.dropped.load(Ordering::Relaxed),
+            self.lag_samples.load(Ordering::Relaxed),
             self.send_failures.load(Ordering::Relaxed),
         )
+    }
+
+    pub fn record_lag_sample(&self) {
+        self.lag_samples.fetch_add(1, Ordering::Relaxed);
     }
 }
 
 /// Merge multiple capture layer receivers into a single event stream.
 ///
 /// Returns the merged receiver, join handles, and shared backpressure stats.
-/// Events are never dropped; prolonged `send` wait counts as lag pressure so
-/// doctor/coverage can surface capture falling behind.
+/// Events are never silently discarded under normal operation; prolonged
+/// `send` wait counts as lag pressure so doctor/coverage can surface capture
+/// falling behind. A closed downstream channel increments `send_failures`.
 pub fn merge_layers(
     receivers: Vec<tokio::sync::mpsc::Receiver<TraceEvent>>,
 ) -> (
@@ -75,10 +88,10 @@ pub fn merge_layers(
                 }
                 let waited = t0.elapsed();
                 if waited >= std::time::Duration::from_millis(50) {
-                    stats.dropped.fetch_add(1, Ordering::Relaxed); // lag samples (not drops)
+                    stats.record_lag_sample();
                     tracing::warn!(
                         wait_ms = waited.as_millis() as u64,
-                        "capture merge channel lag: event send blocked"
+                        "capture merge channel lag: event send blocked (event still delivered)"
                     );
                 }
             }

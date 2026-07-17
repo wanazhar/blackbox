@@ -155,30 +155,34 @@ impl SqliteStore {
         self
     }
 
-    /// Mark abandoned `Running` runs as `Failed`.
+    /// Mark abandoned `Running` runs as `Failed` (interrupted recovery).
     ///
     /// Called on open so a killed supervisor does not leave ghost sessions.
+    /// Never infers success: status becomes Failed and notes record that final
+    /// events/checkpoints may be incomplete (1.4 Phase D / WS9).
     fn recover_stale_runs(&self) -> anyhow::Result<()> {
         let conn = self.lock();
         let now = chrono::Utc::now().to_rfc3339();
+        let note = "recovered: interrupted (supervisor exited while status=Running); final events/checkpoints may be incomplete";
         let n = conn.execute(
             "UPDATE runs
              SET status = ?1,
                  ended_at = COALESCE(ended_at, ?2),
                  notes = CASE
-                     WHEN notes IS NULL OR notes = '' THEN 'recovered: process exited while status=Running'
+                     WHEN notes IS NULL OR notes = '' THEN ?4
                      WHEN notes LIKE '%recovered:%' THEN notes
-                     ELSE notes || '; recovered: process exited while status=Running'
+                     ELSE notes || '; ' || ?4
                  END
              WHERE status = ?3",
             params![
                 serde_json::to_string(&crate::core::run::RunStatus::Failed).unwrap_or_else(|_| "\"Failed\"".into()),
                 now,
                 serde_json::to_string(&crate::core::run::RunStatus::Running).unwrap_or_else(|_| "\"Running\"".into()),
+                note,
             ],
         )?;
         if n > 0 {
-            tracing::warn!(count = n, "recovered abandoned Running runs");
+            tracing::warn!(count = n, "recovered abandoned Running runs as Failed (interrupted)");
         }
         Ok(())
     }
@@ -1855,6 +1859,11 @@ mod tests {
         assert!(
             loaded.ended_at.is_some(),
             "recovered run should have ended_at set"
+        );
+        let notes = loaded.notes.unwrap_or_default();
+        assert!(
+            notes.contains("interrupted") || notes.contains("recovered"),
+            "recovery notes missing: {notes}"
         );
     }
 

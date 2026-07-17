@@ -4,11 +4,14 @@ All notable changes to **blackbox** are documented here.
 
 ## [Unreleased]
 
-### 1.4 Trust Proof — Phase A (in progress)
+## [1.4.0] — 2026-07-17
 
-Plan: [docs/plan/trust-proof-1.4.md](docs/plan/trust-proof-1.4.md). Epic: issue #2.
+**Trust Proof (Unix)** — recorder mode can stay on without silently changing the child or overstating causality; secrets are holdback-redacted before persist; coverage and postmortem claims stay weaker than or equal to evidence.
 
-#### Hard recorder neutrality (N1/N2)
+Plan: [docs/plan/trust-proof-1.4.md](docs/plan/trust-proof-1.4.md). Epic: [issue #2](https://github.com/wanazhar/blackbox/issues/2).  
+Qualify: `./scripts/release-qualify-unix.sh`.
+
+### Hard recorder neutrality (N1/N2)
 - Nest guard uses **supervisor PID markers** under `$XDG_RUNTIME_DIR/blackbox/supervisors/` (fallback `/tmp/blackbox-supervisors-<uid>/`) instead of injecting child-visible `BLACKBOX_ACTIVE_RUN`
 - Recorder / observe-only / ambient: strip all `BLACKBOX_*` from the supervised child environment before spawn
 - Continuity mode still strips inherited control vars, then applies intentional memory/resume inject
@@ -16,21 +19,22 @@ Plan: [docs/plan/trust-proof-1.4.md](docs/plan/trust-proof-1.4.md). Epic: issue 
 - `doctor` reports `recorder_neutrality_supported` and nest-guard implementation
 - Gate: `tests/neutrality_contract.rs` + `tests/fixtures/neutrality_probe.sh`
 
-#### Context-aware coverage (C1–C3)
+### Context-aware coverage (C1–C3)
 - Surface status **`not_applicable`** (excluded from quality-score denominator)
 - Git: `not_applicable` when `git.not_a_repo` (non-git trees can still score 100%)
 - Native logs: `not_applicable` for generic harness; `disabled` when `native_log_scope=off`
 - Process `complete` requires observer lifecycle signals (started / root spawned / tree snapshot / stopped / backend), not mere event count
 - Coverage JSON includes **`contributions`** (surface, status, weight, points, excluded)
 
-#### Unix runtime resilience (Phase D)
-- PTY fidelity suite: ANSI, unicode, long lines, no trailing newline, invalid UTF-8, streaming, exit codes, TTY/session markers (`tests/pty_fidelity.rs`)
-- Process spawn-storm fixture measures short-lived polling loss; root lifecycle still required (`tests/process_spawn_storm.rs`)
-- Interrupted recovery: abandoned `Running` → `Failed` with notes that final events/checkpoints may be incomplete; events preserved (`tests/fault_recovery.rs`)
-- Backpressure honesty: merge path counts **lag samples** (blocked send ≥50ms) and **send_failures** — no silent event drops; `capture.coverage` metadata includes `backpressure`
-- Coverage notes document normalized-transcript limits and backpressure policy
+### Holdback redaction / store scan (S1)
+- **Holdback** `StreamRedactor`: pending buffer + trailing window (default 1024 B); emit only redacted prefix older than the window; `finish()` flushes remainder
+- Secret spans that cross the holdback boundary are never partially persisted
+- PTY path flushes holdback before coalescer drain; native-log lines redacted before adapter parse
+- `redaction::store_scan` scans SQLite/WAL/SHM + blob bytes for scanner matches and known prefixes
+- Gates: exhaustive split-position corpus in `tests/redaction_adversarial.rs`; end-to-end store scan in `tests/redaction_store_scan.rs`
+- Security guide documents holdback vs logical scrub vs physical erase limits
 
-#### Causal precision (G1 — Phase C)
+### Causal precision (G1)
 - **Command fingerprints** from argv / shell source / tool input (sha256 short key)
 - **Failure signatures** (exit, tool, error type, message digest)
 - **Causal edges**: `tool_result_of`, `edited_after`, `verified_by`, `same_command_family` with reasons
@@ -39,18 +43,17 @@ Plan: [docs/plan/trust-proof-1.4.md](docs/plan/trust-proof-1.4.md). Epic: issue 
 - Fix chains carry fingerprints, reasons, evidence links, verification coverage
 - Gates: unit tests for unrelated-success trap; `tests/postmortem_golden.rs` false-positive case
 
-#### Holdback redaction / store scan (S1 — Phase B)
-- **Holdback** `StreamRedactor`: pending buffer + trailing window (default 1024 B); emit only redacted prefix older than the window; `finish()` flushes remainder
-- Secret spans that cross the holdback boundary are never partially persisted
-- PTY path flushes holdback before coalescer drain; native-log lines redacted before adapter parse
-- `redaction::store_scan` scans SQLite/WAL/SHM + blob bytes for scanner matches and known prefixes
-- Gates: exhaustive split-position corpus in `tests/redaction_adversarial.rs`; end-to-end store scan in `tests/redaction_store_scan.rs`
-- Security guide documents holdback vs logical scrub vs physical erase limits
+### Unix runtime resilience
+- PTY fidelity suite: ANSI, unicode, long lines, no trailing newline, invalid UTF-8, streaming, exit codes, TTY/session markers (`tests/pty_fidelity.rs`)
+- Process spawn-storm fixture measures short-lived polling loss; root lifecycle still required (`tests/process_spawn_storm.rs`)
+- Interrupted recovery: abandoned `Running` → `Failed` with notes that final events/checkpoints may be incomplete; events preserved (`tests/fault_recovery.rs`)
+- Backpressure honesty: merge path counts **lag samples** (blocked send ≥50ms) and **send_failures** — no silent event drops; `capture.coverage` metadata includes `backpressure`
+- Coverage notes document normalized-transcript limits and backpressure policy
 
-### Docs
-- Dropped GitHub Pages deploy (`.github/workflows/docs.yml`); docs are in-repo under `docs/` only.
-  Optional local MkDocs preview remains; no `*.github.io` site for this project.
-- 1.4 plan + roadmap bar; ambient contract nest-guard rewrite
+### Release qualification (Q1)
+- `./scripts/release-qualify-unix.sh` — rustfmt, clippy, doc links, trust gates / full tests, optional `--release` timed smoke; writes checksummed report under `release-artifacts/`
+- CI: rustfmt check; named 1.4 trust gate step; `release-qualify-unix --quick` job with artifact upload
+- Tag multi-arch binaries still via `.github/workflows/release.yml` (Linux x86_64/ARM64, macOS ARM64/x86_64)
 
 ## [1.3.0] — 2026-07-16
 

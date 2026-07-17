@@ -61,6 +61,18 @@ pub struct SummaryView {
     /// First-class anomaly markers (loops, destructive, token spike, …).
     #[serde(default)]
     pub anomalies: Vec<AnomalyView>,
+    /// Evidence-linked material claims (1.4 Phase C).
+    #[serde(default)]
+    pub claims: Vec<PostmortemClaim>,
+    /// Goal inference source: human_instruction | harness_prompt | run_name | command | unavailable
+    #[serde(default)]
+    pub goal_source: String,
+    /// Inferred goal text (never hallucinated from file changes alone).
+    #[serde(default)]
+    pub goal: String,
+    /// Overall verification coverage for the primary failure (if any).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification_coverage: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -125,7 +137,29 @@ pub struct FailureFixChainView {
     pub files_changed: Vec<String>,
     pub retry_occurred: bool,
     pub retry_successful: Option<bool>,
+    /// Snake_case confidence: confirmed | strongly_correlated | weakly_correlated | unknown
     pub confidence: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification_fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification_coverage: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reasons: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence: Vec<EvidenceLink>,
+}
+
+/// Material postmortem claim with confidence + evidence (1.4 G1).
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct PostmortemClaim {
+    pub claim: String,
+    pub confidence: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence: Vec<EvidenceLink>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reasons: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
@@ -214,7 +248,7 @@ pub async fn build_summary(
     // Cap errors for agent consumption
     errors.truncate(40);
 
-    // ── Failure-to-fix correlation ───────────────────────────────────
+    // ── Failure-to-fix correlation (evidence-based confidence) ─────
     let fix_corr = FailureFixCorrelator::new();
     let fix_chains: Vec<FailureFixChainView> = fix_corr
         .find_chains(&events)
@@ -226,7 +260,22 @@ pub async fn build_summary(
             files_changed: chain.files_changed,
             retry_occurred: chain.retry_occurred,
             retry_successful: chain.retry_successful,
-            confidence: format!("{:?}", chain.confidence),
+            confidence: chain.confidence.as_str().to_string(),
+            failure_fingerprint: chain.failure_fingerprint,
+            verification_fingerprint: chain.verification_fingerprint,
+            verification_coverage: Some(chain.verification_coverage.as_str().to_string()),
+            reasons: chain.reasons,
+            evidence: chain
+                .evidence
+                .into_iter()
+                .map(|e| EvidenceLink {
+                    role: e.role,
+                    detail: format!("seq {}", e.sequence),
+                    event_id: Some(e.event_id),
+                    sequence: Some(e.sequence),
+                    path: None,
+                })
+                .collect(),
         })
         .collect();
 
@@ -268,6 +317,15 @@ pub async fn build_summary(
         &errors,
         &anomalies,
     );
+
+    // ── Goal inference (explicit sources only — never from file diffs) ─
+    let (goal_source, goal) = infer_goal(run, &events);
+
+    // ── Evidence-linked claims from fix chains + status ───────────────
+    let claims = build_claims(run, &fix_chains, &errors);
+    let verification_coverage = fix_chains
+        .first()
+        .and_then(|c| c.verification_coverage.clone());
 
     // ── Capture coverage ─────────────────────────────────────────────
     let coverage_ev = events.iter().find(|e| e.kind == "capture.coverage");
@@ -455,7 +513,153 @@ pub async fn build_summary(
         evidence,
         headline,
         anomalies,
+        claims,
+        goal_source,
+        goal,
+        verification_coverage,
     })
+}
+
+/// Prefer explicit goal sources; never invent intent from file changes.
+fn infer_goal(run: &Run, events: &[crate::core::event::TraceEvent]) -> (String, String) {
+    // 1. Human instruction events
+    for ev in events {
+        if ev.source == crate::core::event::EventSource::Human
+            || ev.kind == "human.input"
+            || ev.kind == "user.message"
+        {
+            if let Some(text) = ev
+                .metadata
+                .get("text")
+                .or_else(|| ev.metadata.get("message"))
+                .or_else(|| ev.metadata.get("content"))
+                .and_then(|v| v.as_str())
+            {
+                let t = text.trim();
+                if !t.is_empty() {
+                    return (
+                        "human_instruction".into(),
+                        t.chars().take(200).collect(),
+                    );
+                }
+            }
+        }
+    }
+    // 2. Harness initial prompt in metadata
+    for ev in events.iter().take(20) {
+        if let Some(text) = ev
+            .metadata
+            .get("prompt")
+            .or_else(|| ev.metadata.get("initial_prompt"))
+            .and_then(|v| v.as_str())
+        {
+            let t = text.trim();
+            if !t.is_empty() {
+                return ("harness_prompt".into(), t.chars().take(200).collect());
+            }
+        }
+    }
+    // 3. Run name
+    if let Some(ref name) = run.name {
+        let t = name.trim();
+        if !t.is_empty() {
+            return ("run_name".into(), t.to_string());
+        }
+    }
+    // 4. Command line (lossy)
+    if !run.command.is_empty() {
+        return ("command".into(), run.command.join(" "));
+    }
+    ("unavailable".into(), "goal unavailable".into())
+}
+
+fn build_claims(
+    run: &Run,
+    fix_chains: &[FailureFixChainView],
+    errors: &[StructuredErrorView],
+) -> Vec<PostmortemClaim> {
+    use crate::core::run::RunStatus;
+    let mut claims = Vec::new();
+
+    for chain in fix_chains.iter().take(5) {
+        let claim = if chain.retry_successful == Some(true)
+            && chain.confidence == "confirmed"
+        {
+            format!(
+                "Verification passed for failure «{}»",
+                chain.error_message.chars().take(80).collect::<String>()
+            )
+        } else if chain.retry_successful == Some(true) {
+            format!(
+                "A later success was observed after «{}» but is not confirmed as verifying the same domain",
+                chain.error_message.chars().take(60).collect::<String>()
+            )
+        } else if chain.retry_occurred {
+            format!(
+                "Verification was attempted after «{}» but did not pass",
+                chain.error_message.chars().take(60).collect::<String>()
+            )
+        } else if !chain.files_changed.is_empty() {
+            format!(
+                "Files changed after «{}» without observed matching verification",
+                chain.error_message.chars().take(60).collect::<String>()
+            )
+        } else {
+            format!(
+                "Failure observed: {}",
+                chain.error_message.chars().take(80).collect::<String>()
+            )
+        };
+        claims.push(PostmortemClaim {
+            claim,
+            confidence: chain.confidence.clone(),
+            evidence: chain.evidence.clone(),
+            reasons: chain.reasons.clone(),
+        });
+    }
+
+    if claims.is_empty() {
+        match run.status {
+            RunStatus::Succeeded => {
+                claims.push(PostmortemClaim {
+                    claim: "Run completed successfully".into(),
+                    confidence: "confirmed".into(),
+                    evidence: vec![],
+                    reasons: vec!["run_status".into()],
+                });
+            }
+            RunStatus::Failed | RunStatus::Cancelled => {
+                let msg = errors
+                    .first()
+                    .map(|e| e.message.chars().take(80).collect::<String>())
+                    .unwrap_or_else(|| format!("{:?}", run.status));
+                claims.push(PostmortemClaim {
+                    claim: format!("Run ended in {:?}: {msg}", run.status),
+                    confidence: if errors.is_empty() {
+                        "weakly_correlated".into()
+                    } else {
+                        "strongly_correlated".into()
+                    },
+                    evidence: errors
+                        .first()
+                        .map(|e| {
+                            vec![EvidenceLink {
+                                role: "top_error".into(),
+                                detail: e.message.chars().take(120).collect(),
+                                event_id: None,
+                                sequence: Some(e.sequence),
+                                path: e.file.clone(),
+                            }]
+                        })
+                        .unwrap_or_default(),
+                    reasons: vec!["run_status".into()],
+                });
+            }
+            _ => {}
+        }
+    }
+
+    claims
 }
 
 fn build_headline(
@@ -550,19 +754,33 @@ fn recommend_next_action(
             });
         }
         if let Some(chain) = fix_chains.first() {
-            for f in chain.files_changed.iter().take(5) {
-                evidence.push(EvidenceLink {
-                    role: "edited_after_failure".into(),
-                    detail: f.clone(),
-                    event_id: Some(chain.error_event_id.clone()),
-                    sequence: None,
-                    path: Some(f.clone()),
-                });
+            for e in chain.evidence.iter().take(6) {
+                evidence.push(e.clone());
             }
-            let action = if chain.retry_successful == Some(true) {
+            for f in chain.files_changed.iter().take(5) {
+                if !evidence.iter().any(|x| x.path.as_deref() == Some(f.as_str())) {
+                    evidence.push(EvidenceLink {
+                        role: "edited_after_failure".into(),
+                        detail: f.clone(),
+                        event_id: Some(chain.error_event_id.clone()),
+                        sequence: None,
+                        path: Some(f.clone()),
+                    });
+                }
+            }
+            let action = if chain.confidence == "confirmed"
+                && chain.retry_successful == Some(true)
+            {
                 format!(
-                    "Verify the fix for «{}» still holds; then `blackbox resolve` if attention is sticky",
+                    "Confirmed verification for «{}»; then `blackbox resolve` if attention is sticky",
                     chain.error_message.chars().take(60).collect::<String>()
+                )
+            } else if chain.retry_successful == Some(true) {
+                format!(
+                    "A success followed «{}» but confidence is {} — re-run matching verification; `blackbox timeline {} --semantic`",
+                    chain.error_message.chars().take(50).collect::<String>(),
+                    chain.confidence,
+                    short
                 )
             } else if !chain.files_changed.is_empty() {
                 format!(
@@ -848,16 +1066,16 @@ fn build_narrative(data: &SummaryNarrativeData) -> String {
         ));
     }
 
-    // What remains unresolved
+    // What remains unresolved (confirmed only when confidence == confirmed)
     if data.tools_failed > 0 && !data.fix_chains.is_empty() {
         let unresolved = data
             .fix_chains
             .iter()
-            .filter(|c| c.retry_successful != Some(true))
+            .filter(|c| c.confidence != "confirmed")
             .count();
         if unresolved > 0 {
             n.push_str(&format!(
-                "Unresolved: {} failure(s) without confirmed fix\n",
+                "Unresolved: {} failure(s) without confirmed verification\n",
                 unresolved
             ));
         }
@@ -882,6 +1100,18 @@ pub fn format_summary_text(s: &SummaryView) -> String {
     }
     if !s.next_action.is_empty() {
         out.push_str(&format!("  next: {}\n", s.next_action));
+    }
+    if !s.goal.is_empty() {
+        out.push_str(&format!("  goal ({}) : {}\n", s.goal_source, s.goal));
+    }
+    if let Some(ref vc) = s.verification_coverage {
+        out.push_str(&format!("  verification_coverage: {vc}\n"));
+    }
+    if !s.claims.is_empty() {
+        out.push_str("  claims:\n");
+        for c in s.claims.iter().take(6) {
+            out.push_str(&format!("    - [{}] {}\n", c.confidence, c.claim));
+        }
     }
     if !s.evidence.is_empty() {
         out.push_str("  evidence:\n");

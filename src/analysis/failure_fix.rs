@@ -1,10 +1,16 @@
-//! Failure-to-fix correlation pass.
+//! Failure-to-fix correlation pass (1.4 G1).
 //!
-//! Connects errors with subsequent file changes and retries to identify
-//! causal repair chains in a run trace.
+//! Connects errors with subsequent file changes and **matching** verification
+//! retries. `confirmed` requires command fingerprints / tool IDs — not mere
+//! chronological proximity to an unrelated success.
 
 use std::collections::HashMap;
 
+use crate::analysis::causal::{
+    build_tool_pairing_edges, confidence_for_verification, fingerprint_from_event,
+    matching_tool_result, preceding_tool_call, tool_correlation_id, CausalEdge, CausalEvidence,
+    CausalRelation, CommandFingerprint, FailureSignature, VerificationCoverage,
+};
 use crate::analysis::AnalysisPass;
 use crate::core::event::{Confidence, EventSource, EventStatus, TraceEvent};
 
@@ -17,15 +23,36 @@ pub struct FailureFixChain {
     pub error_message: String,
     /// File changes that occurred after the error (as fix attempts).
     pub files_changed: Vec<String>,
-    /// Whether a retry occurred after the file changes.
+    /// Whether a verification retry was observed.
     pub retry_occurred: bool,
-    /// Whether the retry was successful.
+    /// Whether the verification retry succeeded.
     pub retry_successful: Option<bool>,
-    /// Confidence in the correlation.
+    /// Confidence in the correlation (never stronger than evidence).
     pub confidence: Confidence,
+    /// Failure command fingerprint key when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_fingerprint: Option<String>,
+    /// Verification command fingerprint key when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification_fingerprint: Option<String>,
+    /// Failure signature key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_signature: Option<String>,
+    /// Verification coverage classification.
+    #[serde(default)]
+    pub verification_coverage: VerificationCoverage,
+    /// Why this confidence was assigned.
+    #[serde(default)]
+    pub reasons: Vec<String>,
+    /// Evidence event links.
+    #[serde(default)]
+    pub evidence: Vec<CausalEvidence>,
+    /// Derived causal edges for this chain.
+    #[serde(default)]
+    pub edges: Vec<CausalEdge>,
 }
 
-/// Correlates errors with subsequent file modifications and retries.
+/// Correlates errors with subsequent file modifications and matching retries.
 pub struct FailureFixCorrelator;
 
 impl Default for FailureFixCorrelator {
@@ -39,16 +66,11 @@ impl FailureFixCorrelator {
         Self
     }
 
-    /// Find failure-to-fix chains in a batch of events.
-    ///
-    /// Scans for:
-    /// 1. Error events (tool failures, process errors)
-    /// 2. File changes that follow within a window
-    /// 3. Retry attempts (same tool call after file changes)
-    /// 4. Success signals after retries
+    /// Find failure-to-fix chains with evidence-based confidence.
     pub fn find_chains(&self, events: &[TraceEvent]) -> Vec<FailureFixChain> {
         let mut chains = Vec::new();
-        let error_window_ms = 30_000;
+        let error_window_ms: i64 = 30_000;
+        let pairing = build_tool_pairing_edges(events);
 
         let error_indices: Vec<usize> = events
             .iter()
@@ -67,35 +89,28 @@ impl FailureFixCorrelator {
         for &err_idx in &error_indices {
             let error_event = &events[err_idx];
             let error_time = error_event.started_at;
+            let fail_sig = FailureSignature::from_error_event(error_event);
 
-            let error_message = error_event
-                .metadata
-                .get("message")
-                .or_else(|| error_event.metadata.get("error_message"))
-                .or_else(|| error_event.metadata.get("stderr"))
-                .and_then(|v| v.as_str())
-                .map(|s| {
-                    if s.len() > 200 {
-                        format!("{}...", &s[..s.floor_char_boundary(200)])
-                    } else {
-                        s.to_string()
-                    }
-                })
-                .unwrap_or_else(|| format!("{:?}", error_event.status));
-            // Collect file changes after the error (within 30s window)
+            // Fingerprint of the failed command (prefer preceding tool.call).
+            let failure_fp: Option<CommandFingerprint> =
+                if let Some((_, call)) = preceding_tool_call(events, err_idx) {
+                    fingerprint_from_event(call).or_else(|| fingerprint_from_event(error_event))
+                } else {
+                    fingerprint_from_event(error_event)
+                };
+
             let mut files_changed: Vec<String> = Vec::new();
-            let mut retry_occurred = false;
-            let mut retry_successful: Option<bool> = None;
+            let mut file_evidence: Vec<CausalEvidence> = Vec::new();
+            let mut edges: Vec<CausalEdge> = Vec::new();
             let mut latest_fs_time = error_time;
 
-            for j in (err_idx + 1)..events.len() {
-                let ev = &events[j];
+            // Collect edits after the error within the window.
+            for ev in events.iter().skip(err_idx + 1) {
                 let gap = ev
                     .started_at
                     .signed_duration_since(error_time)
                     .num_milliseconds();
-
-                if gap > error_window_ms as i64 {
+                if gap > error_window_ms {
                     break;
                 }
 
@@ -106,51 +121,217 @@ impl FailureFixCorrelator {
                     if let Some(path) = ev.metadata.get("path").and_then(|v| v.as_str()) {
                         if !files_changed.iter().any(|f| f == path) {
                             files_changed.push(path.to_string());
+                            file_evidence.push(CausalEvidence {
+                                event_id: ev.id.clone(),
+                                sequence: ev.sequence,
+                                role: "edited_file".into(),
+                            });
+                            edges.push(CausalEdge {
+                                from_event_id: error_event.id.clone(),
+                                to_event_id: ev.id.clone(),
+                                relation: CausalRelation::EditedAfter,
+                                confidence: Confidence::WeaklyCorrelated,
+                                reasons: vec!["filesystem_after_error".into()],
+                            });
                         }
                     }
                     if ev.started_at > latest_fs_time {
                         latest_fs_time = ev.started_at;
                     }
                 }
+            }
 
-                if ev.kind == "tool.call" && !files_changed.is_empty() {
-                    let call_gap = ev
-                        .started_at
-                        .signed_duration_since(latest_fs_time)
-                        .num_milliseconds();
-                    if call_gap >= 0 && call_gap < error_window_ms as i64 {
+            // Search for verification tool.call after error (and preferably after edits).
+            let mut retry_occurred = false;
+            let mut retry_successful: Option<bool> = None;
+            let mut verification_fp: Option<CommandFingerprint> = None;
+            let mut verify_call_id: Option<String> = None;
+            let mut verify_result_id: Option<String> = None;
+            let mut result_linked_by_id = false;
+            let mut best_conf = Confidence::Unknown;
+            let mut best_cov = VerificationCoverage::None;
+            let mut best_reasons: Vec<String> = Vec::new();
+            let mut verify_evidence: Vec<CausalEvidence> = Vec::new();
+
+            for j in (err_idx + 1)..events.len() {
+                let ev = &events[j];
+                let gap = ev
+                    .started_at
+                    .signed_duration_since(error_time)
+                    .num_milliseconds();
+                if gap > error_window_ms {
+                    break;
+                }
+                if ev.kind != "tool.call" {
+                    continue;
+                }
+
+                let call_fp = fingerprint_from_event(ev);
+                let (res_idx, res) = match matching_tool_result(events, j) {
+                    Some(pair) => pair,
+                    None => continue,
+                };
+
+                let success = res.status == EventStatus::Success;
+                let linked = tool_correlation_id(ev).is_some()
+                    && tool_correlation_id(ev) == tool_correlation_id(res);
+
+                let had_edits = !files_changed.is_empty();
+                // Prefer verifications that happen after at least one edit when edits exist.
+                if had_edits && ev.started_at < latest_fs_time {
+                    // Still consider, but lower priority via reasons.
+                }
+
+                let (conf, cov, reasons) = confidence_for_verification(
+                    failure_fp.as_ref(),
+                    call_fp.as_ref(),
+                    linked,
+                    success,
+                    had_edits,
+                );
+
+                // Keep the strongest confidence candidate.
+                if conf < best_conf
+                    || best_conf == Confidence::Unknown
+                    || (conf == best_conf && success && retry_successful != Some(true))
+                {
+                    // Confidence enum: Confirmed < StronglyCorrelated < … so lower is stronger.
+                    let better = match (best_conf, conf) {
+                        (Confidence::Unknown, _) => true,
+                        (_, Confidence::Unknown) => false,
+                        (a, b) => b < a,
+                    };
+                    if better || best_reasons.is_empty() {
+                        best_conf = conf;
+                        best_cov = cov;
+                        best_reasons = reasons;
                         retry_occurred = true;
-                        for after in events.iter().skip(j + 1).take(20) {
-                            if after.kind == "tool.result" && after.status == EventStatus::Success {
-                                retry_successful = Some(true);
-                                break;
-                            }
-                            if after.kind == "tool.result" && after.status == EventStatus::Error {
-                                retry_successful = Some(false);
-                            }
-                        }
+                        retry_successful = Some(success);
+                        verification_fp = call_fp;
+                        verify_call_id = Some(ev.id.clone());
+                        verify_result_id = Some(res.id.clone());
+                        result_linked_by_id = linked;
+                        verify_evidence = vec![
+                            CausalEvidence {
+                                event_id: ev.id.clone(),
+                                sequence: ev.sequence,
+                                role: "verification_call".into(),
+                            },
+                            CausalEvidence {
+                                event_id: res.id.clone(),
+                                sequence: res.sequence,
+                                role: if success {
+                                    "verification_result".into()
+                                } else {
+                                    "verification_result_failed".into()
+                                },
+                            },
+                        ];
+                        let _ = res_idx;
                     }
                 }
             }
 
-            if !files_changed.is_empty() || retry_occurred {
-                let confidence = if retry_successful == Some(true) {
-                    Confidence::Confirmed
-                } else if retry_occurred {
-                    Confidence::StronglyCorrelated
-                } else {
-                    Confidence::WeaklyCorrelated
-                };
-
-                chains.push(FailureFixChain {
-                    error_event_id: error_event.id.clone(),
-                    error_message,
-                    files_changed,
-                    retry_occurred,
-                    retry_successful,
-                    confidence,
-                });
+            // If we only have edits, no verification:
+            if !retry_occurred && !files_changed.is_empty() {
+                best_conf = Confidence::WeaklyCorrelated;
+                best_cov = VerificationCoverage::None;
+                best_reasons = vec!["edits_after_error_no_verification".into()];
             }
+
+            if files_changed.is_empty() && !retry_occurred {
+                continue;
+            }
+
+            // Attach verified_by edge when we have a verification.
+            if let (Some(call_id), Some(res_id)) = (&verify_call_id, &verify_result_id) {
+                let mut reasons = best_reasons.clone();
+                if result_linked_by_id {
+                    reasons.push("matching_tool_result_id".into());
+                }
+                edges.push(CausalEdge {
+                    from_event_id: error_event.id.clone(),
+                    to_event_id: res_id.clone(),
+                    relation: CausalRelation::VerifiedBy,
+                    confidence: best_conf,
+                    reasons: reasons.clone(),
+                });
+                edges.push(CausalEdge {
+                    from_event_id: call_id.clone(),
+                    to_event_id: res_id.clone(),
+                    relation: CausalRelation::ToolResultOf,
+                    confidence: if result_linked_by_id {
+                        Confidence::Confirmed
+                    } else {
+                        Confidence::StronglyCorrelated
+                    },
+                    reasons: if result_linked_by_id {
+                        vec!["matching_tool_result_id".into()]
+                    } else {
+                        vec!["nearest_tool_result".into()]
+                    },
+                });
+                if let (Some(ff), Some(vf)) = (&failure_fp, &verification_fp) {
+                    if ff.key == vf.key || ff.same_family(vf) {
+                        edges.push(CausalEdge {
+                            from_event_id: error_event.id.clone(),
+                            to_event_id: call_id.clone(),
+                            relation: CausalRelation::SameCommandFamily,
+                            confidence: if ff.key == vf.key {
+                                Confidence::Confirmed
+                            } else {
+                                Confidence::StronglyCorrelated
+                            },
+                            reasons: vec![if ff.key == vf.key {
+                                "matching_command_fingerprint".into()
+                            } else {
+                                "same_command_family".into()
+                            }],
+                        });
+                    }
+                }
+            }
+
+            // Include pairing edges that touch this chain's events.
+            for pe in &pairing {
+                let touches = pe.from_event_id == error_event.id
+                    || pe.to_event_id == error_event.id
+                    || verify_call_id.as_ref() == Some(&pe.from_event_id)
+                    || verify_result_id.as_ref() == Some(&pe.to_event_id);
+                if touches
+                    && !edges.iter().any(|e| {
+                        e.from_event_id == pe.from_event_id
+                            && e.to_event_id == pe.to_event_id
+                            && e.relation == pe.relation
+                    })
+                {
+                    edges.push(pe.clone());
+                }
+            }
+
+            let mut evidence = vec![CausalEvidence {
+                event_id: error_event.id.clone(),
+                sequence: error_event.sequence,
+                role: "failure".into(),
+            }];
+            evidence.extend(file_evidence);
+            evidence.extend(verify_evidence);
+
+            chains.push(FailureFixChain {
+                error_event_id: error_event.id.clone(),
+                error_message: fail_sig.message_preview.clone(),
+                files_changed,
+                retry_occurred,
+                retry_successful,
+                confidence: best_conf,
+                failure_fingerprint: failure_fp.as_ref().map(|f| f.key.clone()),
+                verification_fingerprint: verification_fp.as_ref().map(|f| f.key.clone()),
+                failure_signature: Some(fail_sig.key),
+                verification_coverage: best_cov,
+                reasons: best_reasons,
+                evidence,
+                edges,
+            });
         }
 
         chains
@@ -193,7 +374,35 @@ impl AnalysisPass for FailureFixCorrelator {
             }
             meta.insert(
                 "confidence".to_string(),
-                serde_json::Value::String(format!("{:?}", chain.confidence)),
+                serde_json::Value::String(chain.confidence.as_str().to_string()),
+            );
+            meta.insert(
+                "verification_coverage".to_string(),
+                serde_json::Value::String(chain.verification_coverage.as_str().to_string()),
+            );
+            meta.insert(
+                "reasons".to_string(),
+                serde_json::to_value(&chain.reasons).unwrap_or_default(),
+            );
+            if let Some(ref fp) = chain.failure_fingerprint {
+                meta.insert(
+                    "failure_fingerprint".into(),
+                    serde_json::Value::String(fp.clone()),
+                );
+            }
+            if let Some(ref fp) = chain.verification_fingerprint {
+                meta.insert(
+                    "verification_fingerprint".into(),
+                    serde_json::Value::String(fp.clone()),
+                );
+            }
+            meta.insert(
+                "evidence".to_string(),
+                serde_json::to_value(&chain.evidence).unwrap_or_default(),
+            );
+            meta.insert(
+                "edges".to_string(),
+                serde_json::to_value(&chain.edges).unwrap_or_default(),
             );
 
             let mut ev = TraceEvent::new(
@@ -253,7 +462,7 @@ mod tests {
     }
 
     #[test]
-    fn error_with_file_change_creates_chain() {
+    fn error_with_file_change_creates_weak_chain() {
         let t0 = Utc::now();
         let err = make_event(
             "tool.result",
@@ -272,43 +481,160 @@ mod tests {
         let chains = FailureFixCorrelator::new().find_chains(&[err, file_change]);
         assert_eq!(chains.len(), 1);
         assert_eq!(chains[0].files_changed, vec!["src/main.rs"]);
+        assert_eq!(chains[0].confidence, Confidence::WeaklyCorrelated);
+        assert_eq!(
+            chains[0].verification_coverage,
+            VerificationCoverage::None
+        );
     }
 
     #[test]
-    fn error_with_retry_success_creates_confirmed_chain() {
+    fn matching_command_retry_is_confirmed() {
         let t0 = Utc::now();
+        let call1 = make_event(
+            "tool.call",
+            EventSource::Tool,
+            EventStatus::Running,
+            vec![
+                ("tool_name", serde_json::json!("Bash")),
+                (
+                    "input",
+                    serde_json::json!({ "command": "bun test auth" }),
+                ),
+                ("tool_use_id", serde_json::json!("tu-1")),
+            ],
+            t0,
+        );
         let err = make_event(
             "tool.result",
             EventSource::Tool,
             EventStatus::Error,
-            vec![("message", serde_json::json!("error"))],
-            t0,
+            vec![
+                ("message", serde_json::json!("TypeError: session is undefined")),
+                ("tool_use_id", serde_json::json!("tu-1")),
+            ],
+            t0 + Duration::milliseconds(100),
         );
         let file_change = make_event(
             "filesystem.modified",
             EventSource::Filesystem,
             EventStatus::Success,
-            vec![("path", serde_json::json!("src/lib.rs"))],
+            vec![("path", serde_json::json!("src/session.ts"))],
             t0 + Duration::milliseconds(500),
         );
         let retry = make_event(
             "tool.call",
             EventSource::Tool,
-            EventStatus::Success,
-            vec![("tool_name", serde_json::json!("Bash"))],
+            EventStatus::Running,
+            vec![
+                ("tool_name", serde_json::json!("Bash")),
+                (
+                    "input",
+                    serde_json::json!({ "command": "bun test auth" }),
+                ),
+                ("tool_use_id", serde_json::json!("tu-2")),
+            ],
             t0 + Duration::milliseconds(1000),
         );
         let success = make_event(
             "tool.result",
             EventSource::Tool,
             EventStatus::Success,
-            vec![],
+            vec![
+                ("message", serde_json::json!("43 passed")),
+                ("tool_use_id", serde_json::json!("tu-2")),
+            ],
             t0 + Duration::milliseconds(1500),
         );
-        let chains = FailureFixCorrelator::new().find_chains(&[err, file_change, retry, success]);
+        let chains =
+            FailureFixCorrelator::new().find_chains(&[call1, err, file_change, retry, success]);
         assert_eq!(chains.len(), 1);
         assert_eq!(chains[0].confidence, Confidence::Confirmed);
         assert_eq!(chains[0].retry_successful, Some(true));
+        assert_eq!(
+            chains[0].verification_coverage,
+            VerificationCoverage::Passed
+        );
+        assert!(chains[0]
+            .reasons
+            .iter()
+            .any(|r| r.contains("fingerprint") || r.contains("verification")));
+        assert!(!chains[0].evidence.is_empty());
+        assert!(chains[0]
+            .edges
+            .iter()
+            .any(|e| e.relation == CausalRelation::VerifiedBy));
+    }
+
+    #[test]
+    fn unrelated_success_is_not_confirmed() {
+        let t0 = Utc::now();
+        let call1 = make_event(
+            "tool.call",
+            EventSource::Tool,
+            EventStatus::Running,
+            vec![
+                ("tool_name", serde_json::json!("Bash")),
+                (
+                    "input",
+                    serde_json::json!({ "command": "bun test auth" }),
+                ),
+                ("tool_use_id", serde_json::json!("tu-1")),
+            ],
+            t0,
+        );
+        let err = make_event(
+            "tool.result",
+            EventSource::Tool,
+            EventStatus::Error,
+            vec![
+                ("message", serde_json::json!("auth failed")),
+                ("tool_use_id", serde_json::json!("tu-1")),
+            ],
+            t0 + Duration::milliseconds(100),
+        );
+        let file_change = make_event(
+            "filesystem.modified",
+            EventSource::Filesystem,
+            EventStatus::Success,
+            vec![("path", serde_json::json!("README.md"))],
+            t0 + Duration::milliseconds(500),
+        );
+        // Unrelated command succeeds — must not prove the auth fix.
+        let retry = make_event(
+            "tool.call",
+            EventSource::Tool,
+            EventStatus::Running,
+            vec![
+                ("tool_name", serde_json::json!("Bash")),
+                ("input", serde_json::json!({ "command": "echo hi" })),
+                ("tool_use_id", serde_json::json!("tu-2")),
+            ],
+            t0 + Duration::milliseconds(1000),
+        );
+        let success = make_event(
+            "tool.result",
+            EventSource::Tool,
+            EventStatus::Success,
+            vec![
+                ("message", serde_json::json!("hi")),
+                ("tool_use_id", serde_json::json!("tu-2")),
+            ],
+            t0 + Duration::milliseconds(1500),
+        );
+        let chains =
+            FailureFixCorrelator::new().find_chains(&[call1, err, file_change, retry, success]);
+        assert_eq!(chains.len(), 1);
+        assert_ne!(
+            chains[0].confidence,
+            Confidence::Confirmed,
+            "unrelated success must not be confirmed: reasons={:?}",
+            chains[0].reasons
+        );
+        assert_eq!(
+            chains[0].verification_coverage,
+            VerificationCoverage::PassedUnrelatedDomain
+        );
     }
 
     #[test]

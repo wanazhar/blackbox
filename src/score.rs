@@ -156,6 +156,10 @@ mod tests {
                 sequence: Some(9),
                 count: Some(5),
             }],
+            claims: vec![],
+            goal_source: "unavailable".into(),
+            goal: "goal unavailable".into(),
+            verification_coverage: None,
         }
     }
 

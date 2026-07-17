@@ -135,6 +135,9 @@ pub struct CaptureCoverageView {
     pub quality_score: u8,
     pub surfaces: Vec<SurfaceView>,
     pub notes: Vec<String>,
+    /// Weighted contribution math (1.4 C3); empty on older runs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub contributions: Vec<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
@@ -274,6 +277,11 @@ pub async fn build_summary(
         if let Ok(typed) =
             serde_json::from_value::<crate::capture::coverage::CaptureCoverage>(cov.clone())
         {
+            let contributions = typed
+                .contributions
+                .iter()
+                .filter_map(|c| serde_json::to_value(c).ok())
+                .collect();
             return Some(CaptureCoverageView {
                 total_events: typed.total_events,
                 quality_score: typed.quality_score,
@@ -289,6 +297,7 @@ pub async fn build_summary(
                     })
                     .collect(),
                 notes: typed.notes,
+                contributions,
             });
         }
         // Fallback for older events missing status/score.

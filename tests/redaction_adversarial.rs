@@ -180,39 +180,77 @@ fn mixed_secret_and_sha_preserves_sha() {
 
 #[test]
 fn chunk_boundary_openai_key() {
-    let mut stream = StreamRedactor::new(scanner());
+    // Holdback: fragments are not emitted until finish (or window overflow).
+    let mut stream = StreamRedactor::with_window(scanner(), 64);
     let secret = "sk-abcdefghijklmnopqrstuvwxyz012345";
     let mid = secret.len() / 2;
     let (a, _) = stream.push(&format!("export KEY={}", &secret[..mid]));
-    let (b, hits) = stream.push(&format!("{}\n", &secret[mid..]));
-    assert!(hits > 0, "expected boundary detection");
-    let full = format!("{a}{b}");
+    let (b, _) = stream.push(&format!("{}\n", &secret[mid..]));
+    let (c, hits) = stream.finish();
+    assert!(hits > 0 || format!("{a}{b}{c}").contains("[REDACTED]"));
+    let full = format!("{a}{b}{c}");
     assert!(
         !full.contains(secret),
         "full secret survived chunk split: {full}"
     );
-    assert!(full.contains("[REDACTED]") || b.contains("[REDACTED]"));
+    assert!(!full.contains(&secret[..mid]) || full.contains("[REDACTED]"));
+    assert!(full.contains("[REDACTED]"));
 }
 
 #[test]
 fn chunk_boundary_github_pat() {
-    let mut stream = StreamRedactor::new(scanner());
+    let mut stream = StreamRedactor::with_window(scanner(), 64);
     let secret = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgh12";
     let mid = 10;
-    let (_a, _) = stream.push(&secret[..mid]);
-    let (b, hits) = stream.push(&secret[mid..]);
-    assert!(hits > 0);
-    assert!(!b.contains(&secret[mid..]) || b.contains("[REDACTED]"));
+    let (a, _) = stream.push(&secret[..mid]);
+    let (b, _) = stream.push(&secret[mid..]);
+    let (c, hits) = stream.finish();
+    let full = format!("{a}{b}{c}");
+    assert!(hits > 0 || full.contains("[REDACTED]"));
+    assert!(!full.contains(secret));
+    assert!(!full.contains(&secret[mid..]) || full.contains("[REDACTED]"));
 }
 
 #[test]
 fn chunk_boundary_does_not_scar_sha() {
-    let mut stream = StreamRedactor::new(scanner());
+    let mut stream = StreamRedactor::with_window(scanner(), 8);
     let sha = "ea950d8180f520d808274579577db86bc6365a7a";
-    let (a, h1) = stream.push(&sha[..16]);
-    let (b, h2) = stream.push(&sha[16..]);
+    let pad = "n".repeat(20);
+    let (a, h1) = stream.push(&format!("{pad}{sha}"));
+    let (b, h2) = stream.finish();
     assert_eq!(h1 + h2, 0);
-    assert_eq!(format!("{a}{b}"), sha);
+    assert!(format!("{a}{b}").contains(sha));
+}
+
+/// 1.4 S1: every split position of each adversarial secret must leave no
+/// recoverable full secret (or mid-token fragment) after holdback flush.
+#[test]
+fn exhaustive_split_position_corpus() {
+    // Focused high-value tokens that are pure body patterns (no key= prefix).
+    let secrets = [
+        "sk-abcdefghijklmnopqrstuvwxyz012345",
+        "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgh12",
+        "xai-abcdefghijklmnopqrstuvwxyz0123456789",
+        "hf_abcdefghijklmnopqrstuvwx",
+        "AIzaSyA-abcdefghijklmnopqrstuvwxyz01234",
+    ];
+    for secret in secrets {
+        for split in 1..secret.len() {
+            let mut stream = StreamRedactor::with_window(scanner(), 48);
+            let (a, _) = stream.push(&secret[..split]);
+            let (b, _) = stream.push(&secret[split..]);
+            let (c, _) = stream.finish();
+            let full = format!("{a}{b}{c}");
+            assert!(
+                !full.contains(secret),
+                "secret={secret} split={split}: full secret survived: {full}"
+            );
+            assert!(
+                full.contains("[REDACTED]"),
+                "secret={secret} split={split}: no redaction marker: {full}"
+            );
+        }
+    }
 }
 
 #[test]

@@ -1,4 +1,5 @@
 pub mod anomalies;
+pub mod causal;
 pub mod classifier;
 pub mod correlator;
 pub mod error_detector;

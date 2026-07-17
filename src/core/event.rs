@@ -52,12 +52,30 @@ pub enum SideEffect {
 }
 
 /// Confidence level for causal correlations between events.
+///
+/// Policy (1.4 G1): claims must never be stronger than evidence.
+/// - `confirmed` — exact tool/command IDs or fingerprints + matching verification
+/// - `strongly_correlated` — same command family / tool, incomplete IDs
+/// - `weakly_correlated` — chronological proximity only
+/// - `unknown` — insufficient evidence
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
 pub enum Confidence {
     Confirmed,
     StronglyCorrelated,
     WeaklyCorrelated,
     Unknown,
+}
+
+impl Confidence {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Confirmed => "confirmed",
+            Self::StronglyCorrelated => "strongly_correlated",
+            Self::WeaklyCorrelated => "weakly_correlated",
+            Self::Unknown => "unknown",
+        }
+    }
 }
 
 /// A single recorded event in a run trace.

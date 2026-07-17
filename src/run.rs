@@ -170,15 +170,9 @@ impl RunSupervisor {
             .await
             .context("failed to persist run record")?;
 
-        // Nest guard for maybe-run / shell wrappers (K13)
-        std::env::set_var(crate::maybe_run::ENV_ACTIVE_RUN, &run.id);
-        struct ClearActiveRun;
-        impl Drop for ClearActiveRun {
-            fn drop(&mut self) {
-                std::env::remove_var(crate::maybe_run::ENV_ACTIVE_RUN);
-            }
-        }
-        let _clear_active = ClearActiveRun;
+        // Nest guard for maybe-run / shell wrappers (1.4 N1):
+        // PID marker in runtime dir — not child-visible BLACKBOX_ACTIVE_RUN.
+        let _active_supervisor = crate::nest::ActiveSupervisorGuard::acquire(&run.id);
 
         let writer = Arc::new(EventWriter::new(self.store.clone(), run.id.clone()));
 
@@ -361,8 +355,13 @@ impl RunSupervisor {
             cmd.arg(arg);
         }
         cmd.cwd(&run.cwd);
-        for (k, v) in &resume_env {
-            cmd.env(k, v);
+        // Recorder / observe-only: strip all BLACKBOX_* so the child is neutral.
+        // Continuity mode: still strip inherited control vars, then apply inject.
+        crate::nest::strip_blackbox_env(&mut cmd);
+        if !observe_only {
+            for (k, v) in &resume_env {
+                cmd.env(k, v);
+            }
         }
 
         let mut child = pair
@@ -377,6 +376,41 @@ impl RunSupervisor {
         // C-10: Process group isolation -- portable-pty pre_exec calls libc::setsid(),
         // making this child a session leader with PGID == child PID.
         // kill(-child_pid, signal) targets the entire group including grandchildren.
+
+        // 1.4 N1: persist run-level neutrality report (recorder contract).
+        {
+            let mut neu = TraceEvent::new(&run.id, EventSource::System, "run.neutrality");
+            neu.status = EventStatus::Success;
+            let continuity_injected = !observe_only && !resume_env.is_empty();
+            let adapter_launch_mutated = !observe_only && spawn_cmd != args.command;
+            neu.metadata.insert(
+                "mode".into(),
+                serde_json::json!(if observe_only {
+                    "recorder"
+                } else {
+                    "continuity"
+                }),
+            );
+            neu.metadata.insert(
+                "neutrality".into(),
+                serde_json::json!({
+                    "argv_unchanged": spawn_cmd == args.command,
+                    "environment_blackbox_stripped": true,
+                    "cwd_unchanged": true,
+                    "continuity_injected": continuity_injected,
+                    "adapter_launch_mutated": adapter_launch_mutated,
+                    "child_visible_blackbox_env": if observe_only {
+                        serde_json::json!([])
+                    } else {
+                        serde_json::json!(resume_env.keys().collect::<Vec<_>>())
+                    },
+                    "documented_pty_differences": crate::nest::documented_pty_differences(),
+                    "nest_guard": "supervisor_pid_marker",
+                    "supported": crate::nest::neutrality_supported(),
+                }),
+            );
+            let _ = writer.write(neu).await;
+        }
 
         process_capture.set_pid(child_pid);
         process_capture.emit_spawned().await;
@@ -973,6 +1007,38 @@ impl RunSupervisor {
                 )
             });
 
+        let git_not_a_repo = all_events.iter().any(|e| e.kind == "git.not_a_repo");
+        let process_observer_started = all_events
+            .iter()
+            .any(|e| e.kind == "process.observer.started");
+        let process_root_spawned = all_events.iter().any(|e| e.kind == "process.spawned");
+        let process_tree_snapshot = all_events
+            .iter()
+            .any(|e| e.kind == "process.tree.snapshot");
+        let process_observer_stopped = all_events
+            .iter()
+            .any(|e| e.kind == "process.observer.stopped");
+        let process_backend = all_events
+            .iter()
+            .find(|e| e.kind == "process.observer.started")
+            .and_then(|e| {
+                e.metadata
+                    .get("process_tree_backend")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            });
+        // Native logs: generic / adapters without locate roots → not_applicable.
+        // Scope off → disabled. Known structured harness with 0 logs → unavailable.
+        let native_logs_disabled = matches!(
+            self.policy.native_log_scope,
+            crate::config::NativeLogScope::Off
+        );
+        let native_logs_not_applicable = !native_logs_disabled
+            && adapter_guess
+                .as_deref()
+                .map(|id| id.eq_ignore_ascii_case("generic"))
+                .unwrap_or(false);
+
         let coverage = crate::capture::coverage::CaptureCoverage::from_run_signals(
             crate::capture::coverage::RunCoverageSignals {
                 pty_events,
@@ -991,6 +1057,14 @@ impl RunSupervisor {
                 adapter_id: adapter_guess.clone(),
                 duration_ms,
                 total_events_window: all_events.len() as u64,
+                git_not_a_repo,
+                native_logs_not_applicable,
+                native_logs_disabled,
+                process_observer_started,
+                process_root_spawned,
+                process_tree_snapshot,
+                process_observer_stopped,
+                process_backend,
             },
         );
         let mut cov_ev = TraceEvent::new(&run.id, EventSource::System, "capture.coverage");

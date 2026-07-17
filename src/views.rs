@@ -295,6 +295,12 @@ pub struct DoctorView {
     /// Last run capture quality score when available.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_capture_quality: Option<u8>,
+    /// Whether hard recorder neutrality (no child-visible BLACKBOX_* inject) is supported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recorder_neutrality_supported: Option<bool>,
+    /// Nest guard implementation note (1.4 N1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nest_guard: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

@@ -8,7 +8,8 @@ use crate::config::{discover_project, BlackboxConfig};
 
 /// Env vars controlling ambient capture.
 pub const ENV_OFF: &str = "BLACKBOX_OFF";
-pub const ENV_ACTIVE_RUN: &str = "BLACKBOX_ACTIVE_RUN";
+/// Legacy nest env (still honored if set). Prefer PID markers — see [`crate::nest`].
+pub const ENV_ACTIVE_RUN: &str = crate::nest::ENV_ACTIVE_RUN;
 
 /// Decision for maybe-run (testable without exec).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,15 +40,23 @@ pub fn decide(
             reason: "BLACKBOX_OFF",
         });
     }
-    if active_run_set {
+    // Nest: legacy env (tests/older supervisors) OR ancestor PID marker (1.4 N1).
+    let nested = active_run_set || crate::nest::nested_under_marker();
+    if nested {
         if let Ok(d) = discover_project(cwd, db_override) {
-            append_ambient_log(
-                &d.paths.root,
-                "PASSTHROUGH nested under BLACKBOX_ACTIVE_RUN",
-            );
+            let why = if active_run_set {
+                "PASSTHROUGH nested under BLACKBOX_ACTIVE_RUN (legacy)"
+            } else {
+                "PASSTHROUGH nested under active supervisor marker"
+            };
+            append_ambient_log(&d.paths.root, why);
         }
         return Ok(MaybeRunAction::Passthrough {
-            reason: "nested under BLACKBOX_ACTIVE_RUN",
+            reason: if active_run_set {
+                "nested under BLACKBOX_ACTIVE_RUN"
+            } else {
+                "nested under active supervisor"
+            },
         });
     }
     if command.is_empty() {

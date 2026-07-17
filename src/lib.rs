@@ -9,6 +9,7 @@ pub mod core;
 pub mod crypto;
 pub mod export;
 pub mod maybe_run;
+pub mod nest;
 pub mod mcp;
 pub mod memory;
 pub mod output;

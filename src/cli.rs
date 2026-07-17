@@ -3442,6 +3442,7 @@ async fn cmd_maybe_run(cli: &Cli, args: &MaybeRunArgs) -> anyhow::Result<()> {
 
     let cwd = std::env::current_dir()?;
     let off = std::env::var_os(ENV_OFF).is_some();
+    // Legacy env only here; decide() also checks supervisor PID markers (1.4 N1).
     let active = std::env::var_os(ENV_ACTIVE_RUN).is_some();
     let action = decide(&args.command, &cwd, cli.store.as_deref(), off, active)?;
 
@@ -4841,7 +4842,19 @@ async fn cmd_doctor(cli: &Cli, args: &DoctorArgs) -> anyhow::Result<()> {
                 .into(),
         );
     } else {
-        dd_notes.push("observe-only: ambient recording will not mutate launches".into());
+        dd_notes.push(
+            "observe-only: ambient recording will not mutate launches or inject BLACKBOX_* into children"
+                .into(),
+        );
+    }
+    if crate::nest::neutrality_supported() {
+        dd_notes.push(
+            "recorder neutrality: supported (supervisor PID nest guard; no child-visible BLACKBOX_ACTIVE_RUN)"
+                .into(),
+        );
+    } else {
+        dd_score = dd_score.saturating_sub(10);
+        dd_notes.push("recorder neutrality: not supported on this host".into());
     }
     if !redact_ok {
         dd_score = dd_score.saturating_sub(35);
@@ -5016,6 +5029,8 @@ async fn cmd_doctor(cli: &Cli, args: &DoctorArgs) -> anyhow::Result<()> {
             daily_driver_ready: Some(daily_driver_ready),
             daily_driver_notes: dd_notes.clone(),
             last_capture_quality,
+            recorder_neutrality_supported: Some(crate::nest::neutrality_supported()),
+            nest_guard: Some("supervisor_pid_marker".into()),
         };
         return output::emit_ok("doctor", &view);
     }
@@ -5076,6 +5091,14 @@ async fn cmd_doctor(cli: &Cli, args: &DoctorArgs) -> anyhow::Result<()> {
     for n in dd_notes.iter().take(6) {
         println!("  note: {n}");
     }
+    println!(
+        "neutrality: recorder contract {} (nest=supervisor_pid_marker)",
+        if crate::nest::neutrality_supported() {
+            "supported"
+        } else {
+            "unsupported on this host"
+        }
+    );
     if let Some(n) = run_count {
         println!(
             "runs:       {} (running/orphan: {})",

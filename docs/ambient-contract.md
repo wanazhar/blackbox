@@ -17,10 +17,19 @@ Evaluated in order; first match wins. **Passthrough never opens the store.**
 | # | Condition | Action |
 |---|---|---|
 | 1 | `BLACKBOX_OFF` set | Passthrough bare command |
-| 2 | `BLACKBOX_ACTIVE_RUN` set | Passthrough (nested under supervised run) |
+| 2 | Nested under an active supervisor | Passthrough — see Nest guard below |
 | 3 | No enabled project config via shared discovery | Passthrough |
 | 4 | Basename of argv[0] ∉ `[capture].wrap` | Passthrough |
-| 5 | else | Record under discovered project store; set `BLACKBOX_ACTIVE_RUN` |
+| 5 | else | Record under discovered project store; register supervisor PID marker |
+
+## Nest guard (1.4 N1)
+
+Recorder mode must not inject child-visible `BLACKBOX_*` variables. Nest prevention therefore uses:
+
+1. **Supervisor PID marker** (preferred): while a run is supervised, blackbox writes `$XDG_RUNTIME_DIR/blackbox/supervisors/<pid>` (or `/tmp/blackbox-supervisors-<uid>/<pid>`). Nested `maybe-run` walks the PPID chain; if any ancestor has a marker, it passthroughs.
+2. **Legacy env** (compat): if `BLACKBOX_ACTIVE_RUN` is set in the process environment, passthrough. New supervisors no longer set this for the child; tests and older parents may still set it.
+
+Hard recorder neutrality: observe-only / ambient children have **all** inherited `BLACKBOX_*` keys stripped before spawn. Continuity mode may re-inject only intentional memory/resume keys after the strip.
 
 ## Shell wrappers
 

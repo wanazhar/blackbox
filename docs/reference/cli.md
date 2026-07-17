@@ -202,10 +202,10 @@ Evaluates: `BLACKBOX_OFF` → nest check → project enabled → wrap list → r
 | # | Condition | Action |
 |---|---|---|
 | 1 | `BLACKBOX_OFF` set | Passthrough bare command |
-| 2 | `BLACKBOX_ACTIVE_RUN` set | Passthrough (nested) |
+| 2 | Nested under active supervisor (PID marker or legacy `BLACKBOX_ACTIVE_RUN`) | Passthrough (nested) |
 | 3 | No enabled project | Passthrough |
 | 4 | Basename not in wrap list | Passthrough |
-| 5 | Else | Record under project store |
+| 5 | Else | Record under project store; register supervisor PID marker |
 
 Operator guide: [leave-it-on](../guide/leave-it-on.md). Normative: [ambient-contract](../ambient-contract.md).
 

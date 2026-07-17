@@ -44,12 +44,14 @@ First match wins:
 | # | Condition | Action |
 |---|---|---|
 | 1 | `BLACKBOX_OFF` set | Passthrough |
-| 2 | `BLACKBOX_ACTIVE_RUN` set | Passthrough (nested under an active supervised run) |
+| 2 | Nested under an active supervisor | Passthrough (PID marker or legacy `BLACKBOX_ACTIVE_RUN`) |
 | 3 | No enabled project via discovery | Passthrough |
 | 4 | Basename of argv[0] ∉ wrap list | Passthrough |
-| 5 | else | **Record** into discovered project store; set `BLACKBOX_ACTIVE_RUN` |
+| 5 | else | **Record** into discovered project store; register supervisor PID marker |
 
 Wrappers themselves: if `blackbox` is missing from `PATH`, invoke the bare harness—**never hard-fail** the developer’s tool.
+
+**Recorder neutrality (1.4):** ambient recording is hard observe-only. The supervised child does **not** see injected `BLACKBOX_*` variables; nest prevention uses a runtime supervisor PID marker (not a child-visible env var). See [ambient-contract.md](../ambient-contract.md).
 
 ---
 
@@ -82,7 +84,7 @@ blackbox disable
 blackbox enable --uninstall-shell
 ```
 
-Nesting: if you are already inside `blackbox run`, child harness invocations see `BLACKBOX_ACTIVE_RUN` and will not open a second recording session.
+Nesting: if you are already inside `blackbox run` / ambient record, nested wrap invocations detect the active supervisor via the process-tree PID marker (or legacy `BLACKBOX_ACTIVE_RUN` if set) and will not open a second recording session.
 
 ---
 

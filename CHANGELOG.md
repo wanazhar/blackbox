@@ -4,9 +4,29 @@ All notable changes to **blackbox** are documented here.
 
 ## [Unreleased]
 
+### 1.4 Trust Proof — Phase A (in progress)
+
+Plan: [docs/plan/trust-proof-1.4.md](docs/plan/trust-proof-1.4.md). Epic: issue #2.
+
+#### Hard recorder neutrality (N1/N2)
+- Nest guard uses **supervisor PID markers** under `$XDG_RUNTIME_DIR/blackbox/supervisors/` (fallback `/tmp/blackbox-supervisors-<uid>/`) instead of injecting child-visible `BLACKBOX_ACTIVE_RUN`
+- Recorder / observe-only / ambient: strip all `BLACKBOX_*` from the supervised child environment before spawn
+- Continuity mode still strips inherited control vars, then applies intentional memory/resume inject
+- `run.neutrality` event records argv/env/cwd/continuity/adapter-mutation status + documented PTY differences
+- `doctor` reports `recorder_neutrality_supported` and nest-guard implementation
+- Gate: `tests/neutrality_contract.rs` + `tests/fixtures/neutrality_probe.sh`
+
+#### Context-aware coverage (C1–C3)
+- Surface status **`not_applicable`** (excluded from quality-score denominator)
+- Git: `not_applicable` when `git.not_a_repo` (non-git trees can still score 100%)
+- Native logs: `not_applicable` for generic harness; `disabled` when `native_log_scope=off`
+- Process `complete` requires observer lifecycle signals (started / root spawned / tree snapshot / stopped / backend), not mere event count
+- Coverage JSON includes **`contributions`** (surface, status, weight, points, excluded)
+
 ### Docs
 - Dropped GitHub Pages deploy (`.github/workflows/docs.yml`); docs are in-repo under `docs/` only.
   Optional local MkDocs preview remains; no `*.github.io` site for this project.
+- 1.4 plan + roadmap bar; ambient contract nest-guard rewrite
 
 ## [1.3.0] — 2026-07-16
 

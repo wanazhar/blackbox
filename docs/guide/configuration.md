@@ -96,7 +96,7 @@ Do not conflate **recording** with **memory inject**.
 
 | Product mode | Meaning |
 |---|---|
-| **recorder** | Hard observe-only: no prompt mutation, no MEMORY/RESUME inject, no adapter `prepare_launch` rewrites |
+| **recorder** | Hard observe-only: no prompt mutation, no MEMORY/RESUME inject, no adapter `prepare_launch` rewrites, **no child-visible `BLACKBOX_*` inject** (1.4 neutrality) |
 | **continuity** | Memory plane may inject on **explicit** `blackbox run` only |
 
 Derived roughly from `observe_only` + effective continuity (`capture.product_mode()` in code).
@@ -236,7 +236,7 @@ Manual: `blackbox purge`, `blackbox rm`, `blackbox scrub --gc`, `blackbox gc`.
 | Variable | Purpose |
 |---|---|
 | `BLACKBOX_OFF` | Disable ambient capture for this environment |
-| `BLACKBOX_ACTIVE_RUN` | Set while inside supervised run (nest → passthrough) |
+| `BLACKBOX_ACTIVE_RUN` | **Legacy** nest signal (still honored). New supervisors use a PID marker under `$XDG_RUNTIME_DIR/blackbox/supervisors/` and do **not** inject this into recorder children |
 | `BLACKBOX_ACK` | Satisfy `require_ack` gate |
 
 ### Process capture

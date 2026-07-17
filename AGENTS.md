@@ -54,6 +54,8 @@ AnalysisPass   Export/Import    Serve/SSE      UI / CLI
 | `src/export/` | Export formats | JSONL, HTML, Portable (v1/v2) |
 | `src/ui/` | TUI | ratatui event/run/timeline views |
 | `src/run.rs` | PTY supervision orchestrator | `RunSupervisor` |
+| `src/nest.rs` | Nest guard without child-visible env (1.4) | `ActiveSupervisorGuard`, `strip_blackbox_env` |
+| `src/maybe_run.rs` | Ambient wrap decision table | `MaybeRunAction`, `decide` |
 | `src/config.rs` | Store path + capture policy | `BlackboxPaths`, `BlackboxConfig`, `ContinuityMode` |
 | `src/state.rs` | Sticky project state | `ProjectState`, `apply_run_outcome`, `AttentionLevel`, claims |
 | `src/memory.rs` | Project memory pack | `ProjectMemoryPack`, `build_project_memory`, `shrink_pack` |
@@ -150,6 +152,7 @@ Operator-facing notes for shipped harnesses: [docs/guide/adapters.md](docs/guide
 |---|---|
 | `tests/integration_run.rs` | Full run lifecycle, fake harness, secrets, export, tags, portable, sync |
 | `tests/ambient_contract.rs` | A1 gate: OFF/nest/wrap/enable/install-shell/disable |
+| `tests/neutrality_contract.rs` | 1.4 N1/N2: recorder neutrality + nest markers |
 | `tests/redaction_gate.rs` | A2 gate: structural IDs survive, secrets die |
 | `tests/memory_pack_quality.rs` | M2a gate: budget, shrink order, failure fields, success-WIP, redaction |
 | `tests/overhead_smoke.rs` | A6 gate: soft wall-time budget for supervising `true` |
@@ -224,5 +227,7 @@ No Makefile or justfile -- use cargo directly. Stable Rust, edition 2021.
 - **1.0** = capability daily-driver
 - **1.1** = adoption proof (leave ambient on)
 - **1.2** = Agent Memory Bus (project memory on launch)
+- **1.3** = trust & explain (shipped)
+- **1.4** = Trust Proof (Unix neutrality, causal proof, security) — in progress
 
-See `docs/ROADMAP.md` for quality bar and remaining work.
+See `docs/ROADMAP.md` and `docs/plan/trust-proof-1.4.md` for quality bar and remaining work.

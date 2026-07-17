@@ -1,9 +1,10 @@
 # Roadmap and quality bar
 
-**Answers:** What “good” means for blackbox, what each major version promised, what **1.3** will add, and what remains out of scope.
+**Answers:** What “good” means for blackbox, what each major version promised, what **1.4** will add, and what remains out of scope.
 
 This is **product direction**, not a how-to. Operators: [guide/README.md](guide/README.md).  
-**1.3 plan (active):** [plan/trust-explain-1.3.md](plan/trust-explain-1.3.md).
+**1.4 plan (active):** [plan/trust-proof-1.4.md](plan/trust-proof-1.4.md).  
+**1.3 plan (shipped):** [plan/trust-explain-1.3.md](plan/trust-explain-1.3.md).
 
 ---
 
@@ -35,7 +36,8 @@ If a change weakens a bar, it needs an explicit docs + test story.
 | **1.0** | Capability daily-driver | Shipped |
 | **1.1** | Adoption (“leave it on”) | Shipped |
 | **1.2** | Continuity / project memory | Shipped **1.2.0** |
-| **1.3** | **Trust, explain, agent-native depth** | **In progress — do not tag yet** |
+| **1.3** | Trust, explain, agent-native depth | Shipped **1.3.0** |
+| **1.4** | **Trust Proof (Unix 10/10)** | **In progress — do not tag yet** |
 
 ### 1.1 adoption bar (permanent)
 
@@ -76,27 +78,39 @@ Full plan: [plan/trust-explain-1.3.md](plan/trust-explain-1.3.md).
 | **T7** | Optional **ambient notice** | ✅ `ambient_notice` default off; A1 quiet |
 | **T8** | **Release gate** | ✅ **1.3.0** published (crates.io; local tag) |
 
-#### Already counted toward 1.3 (landed on master, unreleased)
+---
 
-Trust/vault, serve Bearer-only, postmortem/anomalies/TUI jump/dashboard badges, `--eval` artifacts, capture quality + daily-driver score, path claims, human docs revamp (in-repo; no GitHub Pages).
+## 1.4 bar (must pass before tag)
 
-#### 1.3 implementation phases
+Full plan: [plan/trust-proof-1.4.md](plan/trust-proof-1.4.md). Epic: [issue #2](https://github.com/wanazhar/blackbox/issues/2).
 
-1. T1 fail + T2 setup  
-2. T3 MCP tools  
-3. T4 score.json + Action  
-4. T5 harden + T6 drought + T7 notice  
-5. Docs + goldens  
-6. **T8 release only when green**
+| Id | Criterion | Intent |
+|---|---|---|
+| **N1** | Hard recorder neutrality | No child-visible nest-guard env; argv/cwd/user env unchanged |
+| **N2** | Neutrality contract | `tests/neutrality_contract.rs` direct vs recorded |
+| **C1** | Coverage `not_applicable` | Non-git / inapplicable native logs excluded from score |
+| **C2** | Process completeness | Lifecycle signals required for `complete` |
+| **C3** | Score contributions | Coverage JSON exposes weighted math |
+| **S1** | Holdback redaction | Split-stream corpus + store scan (Phase B) |
+| **G1** | Causal confidence | `confirmed` needs exact verification evidence (Phase C) |
+| **Q1** | Unix release qualify | `scripts/release-qualify-unix.sh` + matrix (Phase E) |
+
+#### 1.4 implementation phases
+
+1. **A** Neutral and honest (nest markers, neutrality tests, coverage honesty)  
+2. **B** Security proof (holdback redactor)  
+3. **C** Causal precision + postmortem evidence  
+4. **D** Unix runtime resilience  
+5. **E** Qualification + release gate  
 
 ---
 
-## After 1.3 (direction)
+## After 1.4 (direction)
 
 | Theme | Notes |
 |---|---|
-| **1.4 Agent-native** | Marketplace plugins, require-memory-read experiments, richer MCP (diff/search UX) |
 | **1.5 Eval suite** | Multi-run report CLI, regression tables, public scorer recipes |
+| Agent-native depth | Marketplace plugins, require-memory-read experiments, richer MCP |
 | Distribution | Homebrew/Nix formulas |
 | Scale | SSE push, huge-run paging polish |
 | Windows | TUI/PTY parity (non-blocking) |
@@ -117,7 +131,8 @@ Trust/vault, serve Bearer-only, postmortem/anomalies/TUI jump/dashboard badges, 
 
 ## Related
 
-- [plan/trust-explain-1.3.md](plan/trust-explain-1.3.md) — full 1.3 design  
+- [plan/trust-proof-1.4.md](plan/trust-proof-1.4.md) — full 1.4 design  
+- [plan/trust-explain-1.3.md](plan/trust-explain-1.3.md) — 1.3 design (shipped)  
 - [CHANGELOG.md](https://github.com/wanazhar/blackbox/blob/master/CHANGELOG.md)  
 - [guide/concepts.md](guide/concepts.md)  
 - [WRITING.md](WRITING.md)  

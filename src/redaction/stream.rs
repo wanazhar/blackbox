@@ -268,12 +268,15 @@ mod tests {
         let (tail, hits) = s.finish();
         let combined = format!("{a}{b}{tail}");
         assert!(hits > 0 || combined.contains("[REDACTED]"));
+        assert!(!combined.contains(secret), "full secret leaked: {combined}");
         assert!(
-            !combined.contains(secret),
-            "full secret leaked: {combined}"
+            !combined.contains(&secret[..mid]),
+            "prefix leaked: {combined}"
         );
-        assert!(!combined.contains(&secret[..mid]), "prefix leaked: {combined}");
-        assert!(!combined.contains(&secret[mid..]), "suffix leaked: {combined}");
+        assert!(
+            !combined.contains(&secret[mid..]),
+            "suffix leaked: {combined}"
+        );
     }
 
     #[test]
@@ -314,7 +317,10 @@ mod tests {
         let combined = format!("{a}{b}{c}");
         assert!(hits > 0 || combined.contains("[REDACTED]"));
         assert!(!combined.contains(secret));
-        assert!(!combined.contains("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgh12") || combined.contains("[REDACTED]"));
+        assert!(
+            !combined.contains("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgh12")
+                || combined.contains("[REDACTED]")
+        );
     }
 
     #[test]
@@ -333,8 +339,7 @@ mod tests {
     #[test]
     fn ansi_adjacent_secret() {
         let mut s = stream_window(32);
-        let (_a, _) =
-            s.push("status=\x1b[32mok\x1b[0m key=sk-abcdefghijklmnopqrstuvwxyz012345");
+        let (_a, _) = s.push("status=\x1b[32mok\x1b[0m key=sk-abcdefghijklmnopqrstuvwxyz012345");
         let (out, hits) = s.finish();
         assert!(hits > 0);
         assert!(out.contains("[REDACTED]"));

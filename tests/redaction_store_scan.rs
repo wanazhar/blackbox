@@ -50,8 +50,7 @@ async fn holdback_run_leaves_no_secret_in_store_bytes() {
     let db = ws.join(".blackbox/blackbox.db");
     let blobs = ws.join(".blackbox/blobs");
 
-    let store: Arc<dyn TraceStore> =
-        Arc::new(SqliteStore::open_with_blobs(&db, &blobs).unwrap());
+    let store: Arc<dyn TraceStore> = Arc::new(SqliteStore::open_with_blobs(&db, &blobs).unwrap());
     let supervisor = RunSupervisor::new(store.clone());
 
     let args = RunArgs {
@@ -78,8 +77,7 @@ async fn holdback_run_leaves_no_secret_in_store_bytes() {
     // Checkpoint SQLite so WAL content is in the main DB when possible.
     // Best-effort: open a connection via re-open.
     drop(store);
-    let store2: Arc<dyn TraceStore> =
-        Arc::new(SqliteStore::open_with_blobs(&db, &blobs).unwrap());
+    let store2: Arc<dyn TraceStore> = Arc::new(SqliteStore::open_with_blobs(&db, &blobs).unwrap());
     let events = store2.get_events(&run.id).await.unwrap();
     assert!(
         events.iter().any(|e| e.kind == "terminal.output"),
@@ -116,10 +114,7 @@ async fn holdback_run_leaves_no_secret_in_store_bytes() {
     // Filter: argv might still appear in redacted form; raw prefixes must not.
     let leaks: Vec<_> = findings
         .iter()
-        .filter(|f| {
-            f.detail.contains("raw prefix")
-                || f.detail.contains("scanner span match")
-        })
+        .filter(|f| f.detail.contains("raw prefix") || f.detail.contains("scanner span match"))
         .collect();
 
     // Allow findings only if they are false positives on structural data —
@@ -138,11 +133,12 @@ fn store_scan_detects_planted_secret_in_blob_file() {
     let blob = dir.join(".blackbox/blobs/planted");
     std::fs::write(&blob, b"planted sk-abcdefghijklmnopqrstuvwxyz012345 end").unwrap();
     let scanner = SecretScanner::new(RedactionConfig::default());
-    let findings = scan_store_paths(&scanner, &dir.join(".blackbox/none.db"), &dir.join(".blackbox/blobs"));
-    assert!(
-        !findings.is_empty(),
-        "expected to detect planted secret"
+    let findings = scan_store_paths(
+        &scanner,
+        &dir.join(".blackbox/none.db"),
+        &dir.join(".blackbox/blobs"),
     );
+    assert!(!findings.is_empty(), "expected to detect planted secret");
     let hits = scan_bytes(&scanner, b"sk-abcdefghijklmnopqrstuvwxyz012345", "x");
     assert!(!hits.is_empty());
     let _ = std::fs::remove_dir_all(&dir);

@@ -537,10 +537,7 @@ fn infer_goal(run: &Run, events: &[crate::core::event::TraceEvent]) -> (String, 
             {
                 let t = text.trim();
                 if !t.is_empty() {
-                    return (
-                        "human_instruction".into(),
-                        t.chars().take(200).collect(),
-                    );
+                    return ("human_instruction".into(), t.chars().take(200).collect());
                 }
             }
         }
@@ -582,9 +579,7 @@ fn build_claims(
     let mut claims = Vec::new();
 
     for chain in fix_chains.iter().take(5) {
-        let claim = if chain.retry_successful == Some(true)
-            && chain.confidence == "confirmed"
-        {
+        let claim = if chain.retry_successful == Some(true) && chain.confidence == "confirmed" {
             format!(
                 "Verification passed for failure «{}»",
                 chain.error_message.chars().take(80).collect::<String>()
@@ -758,7 +753,10 @@ fn recommend_next_action(
                 evidence.push(e.clone());
             }
             for f in chain.files_changed.iter().take(5) {
-                if !evidence.iter().any(|x| x.path.as_deref() == Some(f.as_str())) {
+                if !evidence
+                    .iter()
+                    .any(|x| x.path.as_deref() == Some(f.as_str()))
+                {
                     evidence.push(EvidenceLink {
                         role: "edited_after_failure".into(),
                         detail: f.clone(),
@@ -768,8 +766,7 @@ fn recommend_next_action(
                     });
                 }
             }
-            let action = if chain.confidence == "confirmed"
-                && chain.retry_successful == Some(true)
+            let action = if chain.confidence == "confirmed" && chain.retry_successful == Some(true)
             {
                 format!(
                     "Confirmed verification for «{}»; then `blackbox resolve` if attention is sticky",

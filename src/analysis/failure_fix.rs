@@ -482,10 +482,7 @@ mod tests {
         assert_eq!(chains.len(), 1);
         assert_eq!(chains[0].files_changed, vec!["src/main.rs"]);
         assert_eq!(chains[0].confidence, Confidence::WeaklyCorrelated);
-        assert_eq!(
-            chains[0].verification_coverage,
-            VerificationCoverage::None
-        );
+        assert_eq!(chains[0].verification_coverage, VerificationCoverage::None);
     }
 
     #[test]
@@ -497,10 +494,7 @@ mod tests {
             EventStatus::Running,
             vec![
                 ("tool_name", serde_json::json!("Bash")),
-                (
-                    "input",
-                    serde_json::json!({ "command": "bun test auth" }),
-                ),
+                ("input", serde_json::json!({ "command": "bun test auth" })),
                 ("tool_use_id", serde_json::json!("tu-1")),
             ],
             t0,
@@ -510,7 +504,10 @@ mod tests {
             EventSource::Tool,
             EventStatus::Error,
             vec![
-                ("message", serde_json::json!("TypeError: session is undefined")),
+                (
+                    "message",
+                    serde_json::json!("TypeError: session is undefined"),
+                ),
                 ("tool_use_id", serde_json::json!("tu-1")),
             ],
             t0 + Duration::milliseconds(100),
@@ -528,10 +525,7 @@ mod tests {
             EventStatus::Running,
             vec![
                 ("tool_name", serde_json::json!("Bash")),
-                (
-                    "input",
-                    serde_json::json!({ "command": "bun test auth" }),
-                ),
+                ("input", serde_json::json!({ "command": "bun test auth" })),
                 ("tool_use_id", serde_json::json!("tu-2")),
             ],
             t0 + Duration::milliseconds(1000),
@@ -575,10 +569,7 @@ mod tests {
             EventStatus::Running,
             vec![
                 ("tool_name", serde_json::json!("Bash")),
-                (
-                    "input",
-                    serde_json::json!({ "command": "bun test auth" }),
-                ),
+                ("input", serde_json::json!({ "command": "bun test auth" })),
                 ("tool_use_id", serde_json::json!("tu-1")),
             ],
             t0,

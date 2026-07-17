@@ -120,16 +120,16 @@ async fn recorder_mode_strips_blackbox_env_from_child() {
         events.iter().any(|e| e.kind == "run.neutrality"),
         "expected run.neutrality event"
     );
-    let neu = events
-        .iter()
-        .find(|e| e.kind == "run.neutrality")
-        .unwrap();
+    let neu = events.iter().find(|e| e.kind == "run.neutrality").unwrap();
     assert_eq!(
         neu.metadata.get("mode").and_then(|v| v.as_str()),
         Some("recorder")
     );
     let n = neu.metadata.get("neutrality").expect("neutrality object");
-    assert_eq!(n.get("argv_unchanged").and_then(|v| v.as_bool()), Some(true));
+    assert_eq!(
+        n.get("argv_unchanged").and_then(|v| v.as_bool()),
+        Some(true)
+    );
     assert_eq!(
         n.get("environment_blackbox_stripped")
             .and_then(|v| v.as_bool()),
@@ -151,10 +151,7 @@ async fn recorder_mode_strips_blackbox_env_from_child() {
     let parsed = parse_probe(&stdout);
     assert_eq!(parsed.get("ARGC").map(String::as_str), Some("2"));
     assert_eq!(parsed.get("ARGV_0").map(String::as_str), Some("alpha"));
-    assert_eq!(
-        parsed.get("ARGV_1").map(String::as_str),
-        Some("beta gamma")
-    );
+    assert_eq!(parsed.get("ARGV_1").map(String::as_str), Some("beta gamma"));
     assert_eq!(
         parsed.get("BLACKBOX_ENV_COUNT").map(String::as_str),
         Some("0"),
@@ -163,10 +160,7 @@ async fn recorder_mode_strips_blackbox_env_from_child() {
     );
     if let Some(block) = parsed.get("ENV_BLOCK") {
         let keys = blackbox_keys_from_env_block(block);
-        assert!(
-            keys.is_empty(),
-            "child env leaked BLACKBOX_*: {keys:?}"
-        );
+        assert!(keys.is_empty(), "child env leaked BLACKBOX_*: {keys:?}");
     }
 
     // Restore env

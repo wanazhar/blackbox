@@ -29,12 +29,18 @@ fn temp_ws() -> PathBuf {
     dir
 }
 
-async fn run_probe(mode: &str) -> (PathBuf, blackbox::core::run::Run, String, Vec<blackbox::core::event::TraceEvent>) {
+async fn run_probe(
+    mode: &str,
+) -> (
+    PathBuf,
+    blackbox::core::run::Run,
+    String,
+    Vec<blackbox::core::event::TraceEvent>,
+) {
     let ws = temp_ws();
     let db = ws.join(".blackbox/blackbox.db");
     let blobs = ws.join(".blackbox/blobs");
-    let store: Arc<dyn TraceStore> =
-        Arc::new(SqliteStore::open_with_blobs(&db, &blobs).unwrap());
+    let store: Arc<dyn TraceStore> = Arc::new(SqliteStore::open_with_blobs(&db, &blobs).unwrap());
     let supervisor = RunSupervisor::new(store.clone());
     let p = probe();
     let args = RunArgs {
@@ -66,7 +72,10 @@ async fn run_probe(mode: &str) -> (PathBuf, blackbox::core::run::Run, String, Ve
 async fn exit_code_propagates() {
     let (ws, run, text, _) = run_probe("exit42").await;
     assert_eq!(run.exit_code, Some(42), "exit code must propagate");
-    assert!(text.contains("exit_marker=42") || text.contains("ready"), "{text}");
+    assert!(
+        text.contains("exit_marker=42") || text.contains("ready"),
+        "{text}"
+    );
     let _ = std::fs::remove_dir_all(ws);
 }
 
@@ -75,8 +84,14 @@ async fn ansi_colors_normalized_in_transcript() {
     let (ws, run, text, _) = run_probe("ansi").await;
     assert_eq!(run.exit_code, Some(0));
     // Visible text survives; raw CSI should not dominate searchable transcript.
-    assert!(text.contains("green") || text.contains("bold") || text.contains("cleared"), "{text}");
-    assert!(!text.contains("\u{1b}[32m"), "CSI should be stripped from normalized transcript");
+    assert!(
+        text.contains("green") || text.contains("bold") || text.contains("cleared"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("\u{1b}[32m"),
+        "CSI should be stripped from normalized transcript"
+    );
     let _ = std::fs::remove_dir_all(ws);
 }
 
@@ -96,7 +111,10 @@ async fn long_line_and_stream_complete() {
     let (ws, run, text, events) = run_probe("stream").await;
     assert_eq!(run.exit_code, Some(0));
     assert!(text.contains("line-000"), "{text}");
-    assert!(text.contains("line-199") || text.contains("line-19"), "{text}");
+    assert!(
+        text.contains("line-199") || text.contains("line-19"),
+        "{text}"
+    );
     assert!(
         events.iter().any(|e| e.kind == "terminal.output"),
         "expected terminal.output events"

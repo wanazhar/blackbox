@@ -97,11 +97,7 @@ fn db_related_paths(db_path: &Path) -> Vec<PathBuf> {
 }
 
 /// Assert helper for tests: panic with detail if any finding exists.
-pub fn assert_store_clean(
-    scanner: &SecretScanner,
-    db_path: &Path,
-    blob_dir: &Path,
-) {
+pub fn assert_store_clean(scanner: &SecretScanner, db_path: &Path, blob_dir: &Path) {
     let findings = scan_store_paths(scanner, db_path, blob_dir);
     assert!(
         findings.is_empty(),

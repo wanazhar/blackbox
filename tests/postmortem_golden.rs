@@ -258,7 +258,14 @@ async fn golden_unrelated_success_not_confirmed() {
         .metadata
         .insert("tool_use_id".into(), serde_json::json!("tu-2"));
 
-    let events = vec![call, err, file, other, other_ok, coverage(&run.id, 60, true)];
+    let events = vec![
+        call,
+        err,
+        file,
+        other,
+        other_ok,
+        coverage(&run.id, 60, true),
+    ];
     let store = store_run(&run, &events).await;
     let summary = build_summary(store.as_ref(), &run, SummaryOptions::default())
         .await
@@ -272,10 +279,8 @@ async fn golden_unrelated_success_not_confirmed() {
     }
     // Claims must not assert confirmed verification for this trap.
     assert!(
-        summary
-            .claims
-            .iter()
-            .all(|c| c.confidence != "confirmed" || !c.claim.to_lowercase().contains("verification passed")),
+        summary.claims.iter().all(|c| c.confidence != "confirmed"
+            || !c.claim.to_lowercase().contains("verification passed")),
         "claims={:?}",
         summary.claims
     );

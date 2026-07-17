@@ -1041,9 +1041,7 @@ impl RunSupervisor {
             .iter()
             .any(|e| e.kind == "process.observer.started");
         let process_root_spawned = all_events.iter().any(|e| e.kind == "process.spawned");
-        let process_tree_snapshot = all_events
-            .iter()
-            .any(|e| e.kind == "process.tree.snapshot");
+        let process_tree_snapshot = all_events.iter().any(|e| e.kind == "process.tree.snapshot");
         let process_observer_stopped = all_events
             .iter()
             .any(|e| e.kind == "process.observer.stopped");

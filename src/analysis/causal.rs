@@ -154,8 +154,10 @@ impl CommandFingerprint {
                 // Same tool — compare first token of display when present.
                 first_token(&self.display) == first_token(&other.display)
             }
-            _ => first_token(&self.display) == first_token(&other.display)
-                && !first_token(&self.display).is_empty(),
+            _ => {
+                first_token(&self.display) == first_token(&other.display)
+                    && !first_token(&self.display).is_empty()
+            }
         }
     }
 }
@@ -275,10 +277,7 @@ pub fn tool_correlation_id(ev: &TraceEvent) -> Option<String> {
 
 /// Extract a command fingerprint from a tool/process event when possible.
 pub fn fingerprint_from_event(ev: &TraceEvent) -> Option<CommandFingerprint> {
-    let tool_name = ev
-        .metadata
-        .get("tool_name")
-        .and_then(|v| v.as_str());
+    let tool_name = ev.metadata.get("tool_name").and_then(|v| v.as_str());
 
     if let Some(meta) = CommandMetadata::from_event(ev) {
         return Some(CommandFingerprint::from_command_meta(&meta, tool_name));
@@ -450,26 +449,23 @@ pub fn confidence_for_verification(
         reasons.push("relevant_file_edits".into());
     }
 
-    if fps_match && (result_linked_by_id || had_relevant_edits || verification_fp.map(|f| f.exact) == Some(true) || fps_match) {
+    if fps_match
+        && (result_linked_by_id
+            || had_relevant_edits
+            || verification_fp.map(|f| f.exact) == Some(true)
+            || fps_match)
+    {
         // Exact fingerprint match + successful result is enough for confirmed
         // when the verification command is the same domain as the failure.
         if fps_match {
             reasons.push("successful_verification".into());
-            return (
-                Confidence::Confirmed,
-                VerificationCoverage::Passed,
-                reasons,
-            );
+            return (Confidence::Confirmed, VerificationCoverage::Passed, reasons);
         }
     }
 
     if fps_match {
         reasons.push("successful_verification".into());
-        return (
-            Confidence::Confirmed,
-            VerificationCoverage::Passed,
-            reasons,
-        );
+        return (Confidence::Confirmed, VerificationCoverage::Passed, reasons);
     }
 
     if reasons.iter().any(|r| r == "same_command_family") && result_success {
@@ -497,11 +493,7 @@ pub fn confidence_for_verification(
         );
     }
 
-    (
-        Confidence::Unknown,
-        VerificationCoverage::Unknown,
-        reasons,
-    )
+    (Confidence::Unknown, VerificationCoverage::Unknown, reasons)
 }
 
 fn short_digest(s: &str) -> String {
@@ -573,13 +565,8 @@ mod tests {
             None,
             true,
         );
-        let b = CommandFingerprint::from_parts(
-            None,
-            &["echo".into(), "hi".into()],
-            None,
-            None,
-            true,
-        );
+        let b =
+            CommandFingerprint::from_parts(None, &["echo".into(), "hi".into()], None, None, true);
         assert_ne!(a.key, b.key);
         assert!(!a.same_family(&b));
     }
@@ -617,8 +604,7 @@ mod tests {
             Some("Bash"),
             true,
         );
-        let (c, cov, _) =
-            confidence_for_verification(Some(&fail), Some(&other), true, true, true);
+        let (c, cov, _) = confidence_for_verification(Some(&fail), Some(&other), true, true, true);
         assert_ne!(c, Confidence::Confirmed);
         assert_eq!(cov, VerificationCoverage::PassedUnrelatedDomain);
     }

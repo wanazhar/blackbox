@@ -20,7 +20,10 @@ async fn abandoned_running_recovers_to_failed_not_success() {
     // Create store, insert Running run + some events, drop without finalize.
     {
         let store = SqliteStore::open_with_blobs(&db, &blobs).unwrap();
-        let mut run = Run::new(vec!["sleep".into(), "999".into()], dir.display().to_string());
+        let mut run = Run::new(
+            vec!["sleep".into(), "999".into()],
+            dir.display().to_string(),
+        );
         run.status = RunStatus::Running;
         run.name = Some("abandoned".into());
         store.insert_run(&run).await.unwrap();
@@ -28,8 +31,10 @@ async fn abandoned_running_recovers_to_failed_not_success() {
         let mut ev = TraceEvent::new(&run.id, EventSource::Terminal, "terminal.output");
         ev.sequence = 1;
         ev.status = EventStatus::Success;
-        ev.metadata
-            .insert("preview".into(), serde_json::json!("partial output before kill"));
+        ev.metadata.insert(
+            "preview".into(),
+            serde_json::json!("partial output before kill"),
+        );
         store.insert_event(&ev).await.unwrap();
 
         let mut ev2 = TraceEvent::new(&run.id, EventSource::Process, "process.spawned");
@@ -43,8 +48,7 @@ async fn abandoned_running_recovers_to_failed_not_success() {
     }
 
     // Re-open triggers recover_stale_runs.
-    let store2: Arc<dyn TraceStore> =
-        Arc::new(SqliteStore::open_with_blobs(&db, &blobs).unwrap());
+    let store2: Arc<dyn TraceStore> = Arc::new(SqliteStore::open_with_blobs(&db, &blobs).unwrap());
     let runs = store2.list_runs().await.unwrap();
     assert_eq!(runs.len(), 1);
     let run = &runs[0];
@@ -54,10 +58,7 @@ async fn abandoned_running_recovers_to_failed_not_success() {
         "abandoned Running must become Failed, not Succeeded/Running"
     );
     assert_ne!(run.status, RunStatus::Succeeded);
-    assert!(
-        run.ended_at.is_some(),
-        "recovered run must have ended_at"
-    );
+    assert!(run.ended_at.is_some(), "recovered run must have ended_at");
     let notes = run.notes.as_deref().unwrap_or("");
     assert!(
         notes.contains("recovered") || notes.contains("interrupted"),

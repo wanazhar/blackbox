@@ -29,8 +29,7 @@ async fn spawn_storm_reports_lifecycle_and_measures_loss() {
     std::fs::create_dir_all(ws.join(".blackbox/blobs")).unwrap();
     let db = ws.join(".blackbox/blackbox.db");
     let blobs = ws.join(".blackbox/blobs");
-    let store: Arc<dyn TraceStore> =
-        Arc::new(SqliteStore::open_with_blobs(&db, &blobs).unwrap());
+    let store: Arc<dyn TraceStore> = Arc::new(SqliteStore::open_with_blobs(&db, &blobs).unwrap());
     let supervisor = RunSupervisor::new(store.clone());
 
     let storm_n = 80u64;
@@ -50,11 +49,7 @@ async fn spawn_storm_reports_lifecycle_and_measures_loss() {
         resume_injection: None,
         claim_id_note: None,
         ambient: false,
-        command: vec![
-            p.display().to_string(),
-            "storm".into(),
-            storm_n.to_string(),
-        ],
+        command: vec![p.display().to_string(), "storm".into(), storm_n.to_string()],
     };
 
     let run = supervisor.execute(&args).await.expect("run");

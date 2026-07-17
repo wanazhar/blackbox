@@ -175,14 +175,19 @@ impl SqliteStore {
                  END
              WHERE status = ?3",
             params![
-                serde_json::to_string(&crate::core::run::RunStatus::Failed).unwrap_or_else(|_| "\"Failed\"".into()),
+                serde_json::to_string(&crate::core::run::RunStatus::Failed)
+                    .unwrap_or_else(|_| "\"Failed\"".into()),
                 now,
-                serde_json::to_string(&crate::core::run::RunStatus::Running).unwrap_or_else(|_| "\"Running\"".into()),
+                serde_json::to_string(&crate::core::run::RunStatus::Running)
+                    .unwrap_or_else(|_| "\"Running\"".into()),
                 note,
             ],
         )?;
         if n > 0 {
-            tracing::warn!(count = n, "recovered abandoned Running runs as Failed (interrupted)");
+            tracing::warn!(
+                count = n,
+                "recovered abandoned Running runs as Failed (interrupted)"
+            );
         }
         Ok(())
     }

@@ -25,6 +25,12 @@ export CARGO_REGISTRY_TOKEN=cio_...
 # Clean workspace of local run artifacts (never ship these)
 rm -rf .blackbox blackbox.db blackbox.db-wal blackbox.db-shm
 
+# 1.4+ preferred: one Unix qualification command (checksummed report → release-artifacts/)
+./scripts/release-qualify-unix.sh
+# optional release-mode timed smoke:
+# ./scripts/release-qualify-unix.sh --release
+
+# Equivalent manual steps (still valid):
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 python3 scripts/check_doc_links.py
@@ -35,7 +41,9 @@ cargo test --test docs_first_run
 cargo publish --dry-run
 ```
 
-`cargo publish --dry-run` packs the crate the same way a real publish does. Skim the file list: no `.blackbox/`, no `*.db`, no secrets.
+Do **not** tag a 10/10 Trust Proof release while any mandatory qualify gate is RED.
+
+`cargo publish --dry-run` packs the crate the same way a real publish does. Skim the file list: no `.blackbox/`, no `*.db`, no secrets, no `release-artifacts/`.
 
 ## Publish
 

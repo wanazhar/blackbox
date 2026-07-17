@@ -223,6 +223,7 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt
 cargo check
 cargo publish --dry-run
+./scripts/release-qualify-unix.sh    # 1.4+ Unix release gate
 ```
 
 No Makefile or justfile -- use cargo directly. Stable Rust, edition 2021.
@@ -233,6 +234,6 @@ No Makefile or justfile -- use cargo directly. Stable Rust, edition 2021.
 - **1.1** = adoption proof (leave ambient on)
 - **1.2** = Agent Memory Bus (project memory on launch)
 - **1.3** = trust & explain (shipped)
-- **1.4** = Trust Proof (Unix neutrality, causal proof, security) — in progress
+- **1.4** = Trust Proof (Unix neutrality, causal proof, security) — **1.4.0**
 
-See `docs/ROADMAP.md` and `docs/plan/trust-proof-1.4.md` for quality bar and remaining work.
+Qualify before tag: `./scripts/release-qualify-unix.sh`. See `docs/ROADMAP.md` and `docs/plan/trust-proof-1.4.md`.

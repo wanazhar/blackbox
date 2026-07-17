@@ -4,7 +4,7 @@
 |---|---|
 | **Document** | Product + technical plan for 1.4 |
 | **Date** | 2026-07-17 |
-| **Status** | **In progress** — Phases A–D landed; E (release qualify) remains |
+| **Status** | **Ready for 1.4.0 tag** — Phases A–E landed; run qualify script before publish |
 | **Baseline** | 1.3.0 (trust & explain shipped) |
 | **Target tag** | **1.4.0** |
 | **Epic** | [Issue #2](https://github.com/wanazhar/blackbox/issues/2) |
@@ -133,7 +133,14 @@ Full acceptance criteria live in [issue #2](https://github.com/wanazhar/blackbox
 
 ### Phase E — Qualification
 
-Release benchmarks, harness matrix, Linux/macOS CI, `release-qualify-unix.sh`.
+- [x] `./scripts/release-qualify-unix.sh` (fmt, clippy, doc links, trust gates / full tests, optional `--release`)
+- [x] Checksummed report under `release-artifacts/`
+- [x] CI: rustfmt + named trust gates + qualify-quick job + artifact upload
+- [x] Multi-arch release binaries already via `release.yml` (Linux x86_64/ARM64, macOS ARM64/x86_64)
+- [x] Cargo version **1.4.0** + CHANGELOG section
+- [ ] crates.io publish + git tag (maintainer action after GREEN qualify)
+
+**Exit:** Performance/compatibility/trust claims backed by a reproducible Unix qualify report. **Script + CI ready; publish is manual.**
 
 ---
 

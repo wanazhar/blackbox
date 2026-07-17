@@ -21,6 +21,15 @@ cargo test --test overhead_bench event_write
 
 These use multi-second budgets suitable for debug builds.
 
+### Release qualification (1.4 Q1)
+
+```bash
+./scripts/release-qualify-unix.sh           # full gates + report
+./scripts/release-qualify-unix.sh --release  # + release binary timed smoke
+```
+
+Writes a checksummed report under `release-artifacts/`. CI runs a `--quick` variant and uploads the report artifact. Multi-arch release binaries still build on tag via `.github/workflows/release.yml`.
+
 ---
 
 ## 2. Full local suite (ignored by default)

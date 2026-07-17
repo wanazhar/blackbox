@@ -37,7 +37,7 @@ If a change weakens a bar, it needs an explicit docs + test story.
 | **1.1** | Adoption (“leave it on”) | Shipped |
 | **1.2** | Continuity / project memory | Shipped **1.2.0** |
 | **1.3** | Trust, explain, agent-native depth | Shipped **1.3.0** |
-| **1.4** | **Trust Proof (Unix 10/10)** | **In progress — do not tag yet** |
+| **1.4** | **Trust Proof (Unix 10/10)** | **1.4.0 ready — qualify then tag** |
 
 ### 1.1 adoption bar (permanent)
 
@@ -93,7 +93,7 @@ Full plan: [plan/trust-proof-1.4.md](plan/trust-proof-1.4.md). Epic: [issue #2](
 | **C3** | Score contributions | Coverage JSON exposes weighted math |
 | **S1** | Holdback redaction | ✅ Holdback stream + split corpus + store scan (Phase B) |
 | **G1** | Causal confidence | ✅ fingerprints + edges; `confirmed` needs matching verification (Phase C) |
-| **Q1** | Unix release qualify | `scripts/release-qualify-unix.sh` + matrix (Phase E) |
+| **Q1** | Unix release qualify | ✅ `scripts/release-qualify-unix.sh` + CI trust gates + release.yml matrix |
 
 #### 1.4 implementation phases
 
@@ -101,7 +101,7 @@ Full plan: [plan/trust-proof-1.4.md](plan/trust-proof-1.4.md). Epic: [issue #2](
 2. **B** Security proof (holdback redactor) ✅  
 3. **C** Causal precision + postmortem evidence ✅  
 4. **D** Unix runtime resilience (PTY fidelity, spawn storm, fault recovery) ✅  
-5. **E** Qualification + release gate  
+5. **E** Qualification + release gate ✅ script/CI; tag after GREEN `./scripts/release-qualify-unix.sh`
 
 ---
 

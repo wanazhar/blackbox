@@ -92,7 +92,7 @@ Full plan: [plan/trust-proof-1.4.md](plan/trust-proof-1.4.md). Epic: [issue #2](
 | **C2** | Process completeness | Lifecycle signals required for `complete` |
 | **C3** | Score contributions | Coverage JSON exposes weighted math |
 | **S1** | Holdback redaction | ✅ Holdback stream + split corpus + store scan (Phase B) |
-| **G1** | Causal confidence | `confirmed` needs exact verification evidence (Phase C) |
+| **G1** | Causal confidence | ✅ fingerprints + edges; `confirmed` needs matching verification (Phase C) |
 | **Q1** | Unix release qualify | `scripts/release-qualify-unix.sh` + matrix (Phase E) |
 
 #### 1.4 implementation phases

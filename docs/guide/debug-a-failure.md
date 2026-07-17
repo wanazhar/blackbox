@@ -40,7 +40,7 @@ What you are looking for:
 |---|---|
 | `fail` | Focused story + anomalies + next commands |
 | `status` | `attention` level, unresolved failure, active claim |
-| `postmortem` | `headline`, `next_action`, `evidence[]`, `anomalies[]` |
+| `postmortem` | `headline`, `next_action`, `evidence[]`, `claims[]`, `verification_coverage`, `anomalies[]` |
 | `timeline` | Concrete seq / tool events behind evidence |
 | `handoff --json` | Packaged memory + resume context for the next session |
 
@@ -101,11 +101,16 @@ Deterministic analysis (not an LLM). Typical payload:
 | `headline` | One-line story |
 | `next_action` | Recommended follow-up |
 | `evidence` | Anchors: role, detail, optional `event_id` / `sequence` |
+| `claims` | Material conclusions with `confidence` + evidence links (1.4) |
+| `goal` / `goal_source` | Explicit goal inference only (never from file diffs alone) |
+| `verification_coverage` | `none` / `attempted_failed` / `passed` / `passed_unrelated_domain` / … |
 | `anomalies` | Structured markers (see below) |
 | `turning_points` | Story beats in the run |
-| `failure_fix_chains` | Error → subsequent file edits when correlatable |
+| `failure_fix_chains` | Error → edits → matching verification; **`confirmed` only with fingerprint/ID match** |
 | `narrative` | Longer prose summary |
 | `errors_top` / tool failures | Classic failure rollups |
+
+**Confidence policy:** `confirmed` means the same command fingerprint (or tool ID linkage) was re-run successfully after the failure. A nearby unrelated success is at most `weakly_correlated` / `passed_unrelated_domain` — blackbox will not claim the fix is proven.
 
 CI artifacts (when the run used `--artifact-dir`): `postmortem.json`, `anomalies.json`, `summary.txt`, `run.json`.
 

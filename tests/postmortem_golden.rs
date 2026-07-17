@@ -232,6 +232,55 @@ async fn golden_repeated_retries() {
     }
 }
 
+/// False-positive trap: an unrelated success must not become a confirmed fix.
+#[tokio::test]
+async fn golden_unrelated_success_not_confirmed() {
+    let run = base_run(RunStatus::Failed, Some(1));
+    let t0 = Utc::now() - Duration::minutes(5);
+    let mut call = tool_call(&run.id, 1, "Bash", Some("bun test auth"));
+    call.started_at = t0;
+    call.metadata
+        .insert("tool_use_id".into(), serde_json::json!("tu-1"));
+    let mut err = tool_result(&run.id, 2, false, "auth failed");
+    err.started_at = t0 + Duration::seconds(1);
+    err.metadata
+        .insert("tool_use_id".into(), serde_json::json!("tu-1"));
+    let mut file = fs_mod(&run.id, 3, "README.md", 2000);
+    file.started_at = t0 + Duration::seconds(2);
+    let mut other = tool_call(&run.id, 4, "Bash", Some("echo hi"));
+    other.started_at = t0 + Duration::seconds(3);
+    other
+        .metadata
+        .insert("tool_use_id".into(), serde_json::json!("tu-2"));
+    let mut other_ok = tool_result(&run.id, 5, true, "hi");
+    other_ok.started_at = t0 + Duration::seconds(4);
+    other_ok
+        .metadata
+        .insert("tool_use_id".into(), serde_json::json!("tu-2"));
+
+    let events = vec![call, err, file, other, other_ok, coverage(&run.id, 60, true)];
+    let store = store_run(&run, &events).await;
+    let summary = build_summary(store.as_ref(), &run, SummaryOptions::default())
+        .await
+        .unwrap();
+
+    if let Some(chain) = summary.failure_fix_chains.first() {
+        assert_ne!(
+            chain.confidence, "confirmed",
+            "unrelated echo success must not confirm auth fix: {chain:?}"
+        );
+    }
+    // Claims must not assert confirmed verification for this trap.
+    assert!(
+        summary
+            .claims
+            .iter()
+            .all(|c| c.confidence != "confirmed" || !c.claim.to_lowercase().contains("verification passed")),
+        "claims={:?}",
+        summary.claims
+    );
+}
+
 #[tokio::test]
 async fn golden_partial_capture() {
     let run = base_run(RunStatus::Succeeded, Some(0));

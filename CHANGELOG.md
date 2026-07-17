@@ -23,6 +23,15 @@ Plan: [docs/plan/trust-proof-1.4.md](docs/plan/trust-proof-1.4.md). Epic: issue 
 - Process `complete` requires observer lifecycle signals (started / root spawned / tree snapshot / stopped / backend), not mere event count
 - Coverage JSON includes **`contributions`** (surface, status, weight, points, excluded)
 
+#### Causal precision (G1 — Phase C)
+- **Command fingerprints** from argv / shell source / tool input (sha256 short key)
+- **Failure signatures** (exit, tool, error type, message digest)
+- **Causal edges**: `tool_result_of`, `edited_after`, `verified_by`, `same_command_family` with reasons
+- Failure-to-fix **`confirmed`** only when verification matches failure domain fingerprints (or exact tool IDs) — proximity alone is at most `weakly_correlated` / `passed_unrelated_domain`
+- Postmortem adds `claims[]` (claim + confidence + evidence), `goal` / `goal_source`, `verification_coverage`
+- Fix chains carry fingerprints, reasons, evidence links, verification coverage
+- Gates: unit tests for unrelated-success trap; `tests/postmortem_golden.rs` false-positive case
+
 #### Holdback redaction / store scan (S1 — Phase B)
 - **Holdback** `StreamRedactor`: pending buffer + trailing window (default 1024 B); emit only redacted prefix older than the window; `finish()` flushes remainder
 - Secret spans that cross the holdback boundary are never partially persisted

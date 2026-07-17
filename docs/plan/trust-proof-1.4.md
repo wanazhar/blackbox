@@ -4,7 +4,7 @@
 |---|---|
 | **Document** | Product + technical plan for 1.4 |
 | **Date** | 2026-07-17 |
-| **Status** | **In progress** — Phase A done; Phase B (security proof) in train |
+| **Status** | **In progress** — Phases A–C landed; D/E remain |
 | **Baseline** | 1.3.0 (trust & explain shipped) |
 | **Target tag** | **1.4.0** |
 | **Epic** | [Issue #2](https://github.com/wanazhar/blackbox/issues/2) |
@@ -108,7 +108,15 @@ Full acceptance criteria live in [issue #2](https://github.com/wanazhar/blackbox
 
 ### Phase C — Causal precision
 
-Command fingerprints, tool call/result links, causal edges, verification coverage, postmortem confidence.
+- [x] Command fingerprints (`analysis::causal::CommandFingerprint`)
+- [x] Failure signatures + tool_use_id pairing
+- [x] Causal edges (`verified_by`, `edited_after`, `tool_result_of`, `same_command_family`)
+- [x] Confidence policy: confirmed only with matching fingerprints/IDs
+- [x] Verification coverage field on fix chains + postmortem
+- [x] Postmortem claims with evidence links; goal inference (explicit sources only)
+- [x] False-positive golden: unrelated success is not confirmed
+
+**Exit:** Postmortem `confirmed` claims require exact evidence. **Met for fix-chain path.**
 
 ### Phase D — Unix runtime resilience
 

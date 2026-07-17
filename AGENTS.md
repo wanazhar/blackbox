@@ -49,7 +49,7 @@ AnalysisPass   Export/Import    Serve/SSE      UI / CLI
 | `src/terminal/` | PTY I/O handling | `RawRecorder`, `AnsiNormalizer`, coalescing |
 | `src/redaction/` | Secret scanning + redaction | `SecretScanner`, `EnvironmentRedactor` |
 | `src/adapters/` | Harness detection + parsing | `HarnessAdapter`, claude/codex/generic/aider/gemini/cursor/opencode/grok |
-| `src/analysis/` | Event analysis passes | `ErrorDetector`, `SideEffectClassifier`, `EventCorrelator` |
+| `src/analysis/` | Event analysis passes | `ErrorDetector`, causal fingerprints/edges, `FailureFixCorrelator`, anomalies |
 | `src/replay/` | Replay engines | `Fork`, `Sandbox`, `Mock`, `Timeline` |
 | `src/export/` | Export formats | JSONL, HTML, Portable (v1/v2) |
 | `src/ui/` | TUI | ratatui event/run/timeline views |

@@ -8,7 +8,7 @@ All notable changes to **blackbox** are documented here.
 
 **Trust Proof (Unix)** — recorder mode can stay on without silently changing the child or overstating causality; secrets are holdback-redacted before persist; coverage and postmortem claims stay weaker than or equal to evidence.
 
-Plan: [docs/plan/trust-proof-1.4.md](docs/plan/trust-proof-1.4.md). Epic: [issue #2](https://github.com/wanazhar/blackbox/issues/2).  
+Plan: [docs/plan/trust-proof-1.4.md](docs/plan/trust-proof-1.4.md). Epic: [issue #2](https://github.com/wanazhar/blackbox/issues/2).
 Qualify: `./scripts/release-qualify-unix.sh`.
 
 ### Hard recorder neutrality (N1/N2)

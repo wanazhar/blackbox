@@ -56,11 +56,11 @@ Replacement token: `[REDACTED]`. Events may carry a `redactions` count in metada
 
 PTY output is **not** redacted per-chunk with immediate write. `StreamRedactor` (`src/redaction/stream.rs`):
 
-1. Appends each normalized chunk to an unredacted **pending** buffer  
-2. Scans the full pending buffer for secret spans  
-3. Emits only the prefix **older than the holdback window** (default **1024** bytes), after redaction  
-4. Pulls the emit cursor back when a span still crosses the holdback boundary  
-5. On end-of-stream, `finish()` redacts and flushes the remainder  
+1. Appends each normalized chunk to an unredacted **pending** buffer
+2. Scans the full pending buffer for secret spans
+3. Emits only the prefix **older than the holdback window** (default **1024** bytes), after redaction
+4. Pulls the emit cursor back when a span still crosses the holdback boundary
+5. On end-of-stream, `finish()` redacts and flushes the remainder
 
 So a secret split as `sk-abc…` / `…rest` never persists the first fragment alone. Pending is capped (`DEFAULT_MAX_PENDING`) to bound RAM; excess is force-flushed after redaction.
 
@@ -93,7 +93,7 @@ blackbox export latest --format portable -o trace.json
 blackbox sync push --dir /backup
 
 # Explicitly unsafe
-blackbox run --insecure-raw -- … 
+blackbox run --insecure-raw -- …
 blackbox run --no-redact -- …
 blackbox export latest -o raw.json --no-redact
 ```

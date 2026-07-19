@@ -2,8 +2,8 @@
 
 **Answers:** What “good” means for blackbox, what each major version promised, what **1.4** will add, and what remains out of scope.
 
-This is **product direction**, not a how-to. Operators: [guide/README.md](guide/README.md).  
-**1.4 plan (active):** [plan/trust-proof-1.4.md](plan/trust-proof-1.4.md).  
+This is **product direction**, not a how-to. Operators: [guide/README.md](guide/README.md).
+**1.4 plan (active):** [plan/trust-proof-1.4.md](plan/trust-proof-1.4.md).
 **1.3 plan (shipped):** [plan/trust-explain-1.3.md](plan/trust-explain-1.3.md).
 
 ---
@@ -97,10 +97,10 @@ Full plan: [plan/trust-proof-1.4.md](plan/trust-proof-1.4.md). Epic: [issue #2](
 
 #### 1.4 implementation phases
 
-1. **A** Neutral and honest (nest markers, neutrality tests, coverage honesty) ✅  
-2. **B** Security proof (holdback redactor) ✅  
-3. **C** Causal precision + postmortem evidence ✅  
-4. **D** Unix runtime resilience (PTY fidelity, spawn storm, fault recovery) ✅  
+1. **A** Neutral and honest (nest markers, neutrality tests, coverage honesty) ✅
+2. **B** Security proof (holdback redactor) ✅
+3. **C** Causal precision + postmortem evidence ✅
+4. **D** Unix runtime resilience (PTY fidelity, spawn storm, fault recovery) ✅
 5. **E** Qualification + release gate ✅ script/CI; tag after GREEN `./scripts/release-qualify-unix.sh`
 
 ---
@@ -119,21 +119,21 @@ Full plan: [plan/trust-proof-1.4.md](plan/trust-proof-1.4.md). Epic: [issue #2](
 
 ## Non-goals (standing)
 
-- Multi-tenant hosted SaaS / remote multi-user ACLs  
-- Replacing the harness’s own session UI  
-- Perfect Windows parity as a release blocker  
-- Guaranteeing every interactive TUI agent emits machine-readable tool events  
-- Inventing `estimated_cost_usd` when estimation is off or model unknown  
-- Deterministic full LLM re-execution as “replay”  
-- Live SQLCipher as default store encryption  
+- Multi-tenant hosted SaaS / remote multi-user ACLs
+- Replacing the harness’s own session UI
+- Perfect Windows parity as a release blocker
+- Guaranteeing every interactive TUI agent emits machine-readable tool events
+- Inventing `estimated_cost_usd` when estimation is off or model unknown
+- Deterministic full LLM re-execution as “replay”
+- Live SQLCipher as default store encryption
 
 ---
 
 ## Related
 
-- [plan/trust-proof-1.4.md](plan/trust-proof-1.4.md) — full 1.4 design  
-- [plan/trust-explain-1.3.md](plan/trust-explain-1.3.md) — 1.3 design (shipped)  
-- [CHANGELOG.md](https://github.com/wanazhar/blackbox/blob/master/CHANGELOG.md)  
-- [guide/concepts.md](guide/concepts.md)  
-- [WRITING.md](WRITING.md)  
-- Historical: [plan/adoption-1.1.md](plan/adoption-1.1.md), [plan/agent-memory-bus-1.2.md](plan/agent-memory-bus-1.2.md)  
+- [plan/trust-proof-1.4.md](plan/trust-proof-1.4.md) — full 1.4 design
+- [plan/trust-explain-1.3.md](plan/trust-explain-1.3.md) — 1.3 design (shipped)
+- [CHANGELOG.md](https://github.com/wanazhar/blackbox/blob/master/CHANGELOG.md)
+- [guide/concepts.md](guide/concepts.md)
+- [WRITING.md](WRITING.md)
+- Historical: [plan/adoption-1.1.md](plan/adoption-1.1.md), [plan/agent-memory-bus-1.2.md](plan/agent-memory-bus-1.2.md)

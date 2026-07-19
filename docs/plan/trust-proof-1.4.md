@@ -146,17 +146,17 @@ Full acceptance criteria live in [issue #2](https://github.com/wanazhar/blackbox
 
 ## Non-goals (standing for 1.4)
 
-- Windows support  
-- Deterministic LLM replay  
-- Full TLS interception  
-- Hosted SaaS  
-- Physical secure erase on SSD/COW  
+- Windows support
+- Deterministic LLM replay
+- Full TLS interception
+- Hosted SaaS
+- Physical secure erase on SSD/COW
 
 ---
 
 ## Related
 
-- Epic: https://github.com/wanazhar/blackbox/issues/2  
-- Prior: [trust-explain-1.3.md](trust-explain-1.3.md), [agent-memory-bus-1.2.md](agent-memory-bus-1.2.md), [adoption-1.1.md](adoption-1.1.md)  
-- Ambient: [ambient-contract.md](../ambient-contract.md)  
-- Roadmap: [ROADMAP.md](../ROADMAP.md)  
+- Epic: https://github.com/wanazhar/blackbox/issues/2
+- Prior: [trust-explain-1.3.md](trust-explain-1.3.md), [agent-memory-bus-1.2.md](agent-memory-bus-1.2.md), [adoption-1.1.md](adoption-1.1.md)
+- Ambient: [ambient-contract.md](../ambient-contract.md)
+- Roadmap: [ROADMAP.md](../ROADMAP.md)

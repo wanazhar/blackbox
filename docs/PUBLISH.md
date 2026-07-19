@@ -64,8 +64,8 @@ blackbox doctor
 ## Optional: GitHub release
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v1.4.0
+git push origin v1.4.0
 # attach release binaries via CI if desired
 ```
 

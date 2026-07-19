@@ -1,9 +1,9 @@
 # Roadmap and quality bar
 
-**Answers:** What “good” means for blackbox, what each major version promised, what **1.4** will add, and what remains out of scope.
+**Answers:** What “good” means for blackbox, what each major version promised, what **1.4** added, and what remains out of scope.
 
 This is **product direction**, not a how-to. Operators: [guide/README.md](guide/README.md).
-**1.4 plan (active):** [plan/trust-proof-1.4.md](plan/trust-proof-1.4.md).
+**1.4 plan (shipped):** [plan/trust-proof-1.4.md](plan/trust-proof-1.4.md).
 **1.3 plan (shipped):** [plan/trust-explain-1.3.md](plan/trust-explain-1.3.md).
 
 ---
@@ -37,7 +37,7 @@ If a change weakens a bar, it needs an explicit docs + test story.
 | **1.1** | Adoption (“leave it on”) | Shipped |
 | **1.2** | Continuity / project memory | Shipped **1.2.0** |
 | **1.3** | Trust, explain, agent-native depth | Shipped **1.3.0** |
-| **1.4** | **Trust Proof (Unix 10/10)** | **1.4.0 ready — qualify then tag** |
+| **1.4** | **Trust Proof (Unix 10/10)** | Shipped **1.4.0** |
 
 ### 1.1 adoption bar (permanent)
 
@@ -69,8 +69,8 @@ Full plan: [plan/trust-explain-1.3.md](plan/trust-explain-1.3.md).
 
 | Id | Criterion | Intent |
 |---|---|---|
-| **T1** | One-shot **fail** path | ✅ `blackbox fail` shipped (unreleased) |
-| **T2** | One-shot **setup** path | ✅ `blackbox setup` shipped (unreleased) |
+| **T1** | One-shot **fail** path | ✅ `blackbox fail` shipped in 1.3.0 |
+| **T2** | One-shot **setup** path | ✅ `blackbox setup` shipped in 1.3.0 |
 | **T3** | MCP **timeline + anomalies** | ✅ `blackbox_timeline` / `blackbox_anomalies` / `blackbox_fail` |
 | **T4** | Eval **score.json** (`blackbox.score/v1`) + CI action shape | ✅ `score.json` + `.github/actions/blackbox-eval` |
 | **T5** | **Harden** project profile | ✅ `setup`/`enable --harden` + security docs |
@@ -101,7 +101,7 @@ Full plan: [plan/trust-proof-1.4.md](plan/trust-proof-1.4.md). Epic: [issue #2](
 2. **B** Security proof (holdback redactor) ✅
 3. **C** Causal precision + postmortem evidence ✅
 4. **D** Unix runtime resilience (PTY fidelity, spawn storm, fault recovery) ✅
-5. **E** Qualification + release gate ✅ script/CI; tag after GREEN `./scripts/release-qualify-unix.sh`
+5. **E** Qualification + release gate ✅ GREEN qualification; shipped in 1.4.0
 
 ---
 

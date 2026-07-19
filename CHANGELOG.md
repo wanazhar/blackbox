@@ -4,7 +4,7 @@ All notable changes to **blackbox** are documented here.
 
 ## [Unreleased]
 
-## [1.4.0] — 2026-07-17
+## [1.4.0] — 2026-07-19
 
 **Trust Proof (Unix)** — recorder mode can stay on without silently changing the child or overstating causality; secrets are holdback-redacted before persist; coverage and postmortem claims stay weaker than or equal to evidence.
 

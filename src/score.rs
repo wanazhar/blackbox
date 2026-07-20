@@ -160,6 +160,8 @@ mod tests {
             goal_source: "unavailable".into(),
             goal: "goal unavailable".into(),
             verification_coverage: None,
+            analysis_scope: None,
+            aggregates: None,
         }
     }
 

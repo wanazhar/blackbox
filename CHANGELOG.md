@@ -4,6 +4,17 @@ All notable changes to **blackbox** are documented here.
 
 ## [Unreleased]
 
+### 1.5.0 — Trace integrity & scale (in progress)
+
+Plan: [docs/plan/trace-integrity-1.5.md](docs/plan/trace-integrity-1.5.md). Epic: [issue #3](https://github.com/wanazhar/blackbox/issues/3).
+
+#### Phase A — Long-run truth & safe dedupe
+- Incremental recoverable run aggregates (`run_aggregates` schema) so totals are independent of summary load caps
+- Summary/postmortem expose `analysis_scope` (events_total, events_loaded, strategy, limitations)
+- Salient event load: head + tail + errors + human instructions + capture health
+- Tool dedupe only merges proven cross-source duplicates with stable tool IDs; ID-less retries are preserved
+- Age-bounded LRU fingerprint cache (no unordered half-clear)
+
 ## [1.4.0] — 2026-07-19
 
 **Trust Proof (Unix)** — recorder mode can stay on without silently changing the child or overstating causality; secrets are holdback-redacted before persist; coverage and postmortem claims stay weaker than or equal to evidence.

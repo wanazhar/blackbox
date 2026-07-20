@@ -3,16 +3,19 @@
 //! All capture paths (PTY, git, fs, process, adapters) should funnel
 //! through an `EventWriter` so sequence numbers and persistence stay consistent.
 //!
-//! Also deduplicates `tool.call` / `tool.result` when the same structured
-//! event arrives from both the PTY stream and native harness logs.
+//! Tool deduplication (1.5 D1): merge only when evidence shows the **same
+//! observation** — stable tool-use ID, matching normalized payload, and
+//! (typically) cross-source provenance within a narrow age window.
+//! **ID-less** identical calls (e.g. two `cargo test` runs) are **never**
+//! collapsed; both are stored so retry analysis sees every real attempt.
 //!
 //! Tracks soft capture-health signals (write latency / lag) for daily-driver
 //! trust: slow SQLite inserts surface as warnings rather than silent stall.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::core::event::TraceEvent;
 use crate::storage::TraceStore;
@@ -22,8 +25,10 @@ use crate::storage::TraceStore;
 const SLOW_WRITE_MS: u128 = 150;
 /// Soft threshold: many slow writes imply capture is falling behind.
 const LAG_WARN_COUNT: u64 = 12;
-/// Cap tool-event fingerprint set so long tool-heavy runs don't grow unbounded.
+/// Cap tool-event fingerprint LRU so long tool-heavy runs stay bounded.
 const MAX_TOOL_FINGERPRINTS: usize = 50_000;
+/// Only merge duplicates observed within this window.
+const DUPLICATE_WINDOW: Duration = Duration::from_secs(30);
 
 /// Snapshot of writer health for coverage / doctor.
 #[derive(Debug, Clone, Default)]
@@ -64,13 +69,90 @@ impl WriterHealth {
     }
 }
 
+/// Age-bounded LRU of tool fingerprints already written this run.
+struct ToolDedupeCache {
+    /// Fingerprint → entry; order tracked separately for true LRU eviction.
+    map: HashMap<String, DedupeEntry>,
+    /// Oldest-first insertion/touch order of fingerprint keys.
+    order: VecDeque<String>,
+}
+
+#[derive(Clone)]
+struct DedupeEntry {
+    event_id: String,
+    payload_hash: String,
+    provenances: Vec<String>,
+    seen_at: Instant,
+}
+
+impl ToolDedupeCache {
+    fn new() -> Self {
+        Self {
+            map: HashMap::new(),
+            order: VecDeque::new(),
+        }
+    }
+
+    fn get(&self, fp: &str) -> Option<&DedupeEntry> {
+        self.map.get(fp)
+    }
+
+    fn insert(&mut self, fp: String, entry: DedupeEntry) {
+        if self.map.contains_key(&fp) {
+            // Move to back (most recent).
+            if let Some(pos) = self.order.iter().position(|k| k == &fp) {
+                self.order.remove(pos);
+            }
+        }
+        self.order.push_back(fp.clone());
+        self.map.insert(fp, entry);
+        self.evict_if_needed();
+    }
+
+    fn touch_update(&mut self, fp: &str, entry: DedupeEntry) {
+        if self.map.contains_key(fp) {
+            if let Some(pos) = self.order.iter().position(|k| k == fp) {
+                self.order.remove(pos);
+            }
+            self.order.push_back(fp.to_string());
+            self.map.insert(fp.to_string(), entry);
+        }
+    }
+
+    fn evict_if_needed(&mut self) {
+        while self.map.len() > MAX_TOOL_FINGERPRINTS {
+            if let Some(old) = self.order.pop_front() {
+                self.map.remove(&old);
+            } else {
+                break;
+            }
+        }
+        // Age-based eviction of very old entries (keep map tight).
+        let now = Instant::now();
+        while let Some(front) = self.order.front() {
+            let expired = self
+                .map
+                .get(front)
+                .map(|e| now.duration_since(e.seen_at) > DUPLICATE_WINDOW * 4)
+                .unwrap_or(true);
+            if expired {
+                if let Some(k) = self.order.pop_front() {
+                    self.map.remove(&k);
+                }
+            } else {
+                break;
+            }
+        }
+    }
+}
+
 /// Owns the per-run sequence counter and persists events.
 pub struct EventWriter {
     store: Arc<dyn TraceStore>,
     seq: AtomicU64,
     run_id: String,
-    /// Fingerprints of tool.call / tool.result already written this run.
-    tool_seen: Mutex<HashSet<String>>,
+    /// Age-bounded LRU of tool fingerprints already written this run.
+    tool_seen: Mutex<ToolDedupeCache>,
     /// Soft health counters.
     health: Mutex<WriterHealth>,
 }
@@ -87,7 +169,7 @@ impl EventWriter {
             store,
             seq: AtomicU64::new(start.max(1)),
             run_id: run_id.into(),
-            tool_seen: Mutex::new(HashSet::new()),
+            tool_seen: Mutex::new(ToolDedupeCache::new()),
             health: Mutex::new(WriterHealth::default()),
         }
     }
@@ -116,44 +198,59 @@ impl EventWriter {
 
     /// Persist an event, assigning a sequence if `event.sequence == 0`.
     ///
-    /// Duplicate tool.call/tool.result (same fingerprint) are skipped so
-    /// PTY + native-log double delivery does not bloat the timeline.
+    /// Tool dedupe (1.5 D1): only skip insert when a stable tool-use ID matches
+    /// a prior event with the same kind + payload hash inside the duplicate
+    /// window. ID-less tool calls always persist (legitimate retries).
     pub async fn write(&self, mut event: TraceEvent) -> anyhow::Result<TraceEvent> {
         if event.run_id.is_empty() {
             event.run_id = self.run_id.clone();
         }
 
-        if let Some(fp) = tool_fingerprint(&event) {
-            // M-09: Recover from mutex poison rather than propagating the error.
-            let mut seen = self.tool_seen.lock().unwrap_or_else(|e| e.into_inner());
-            if seen.contains(&fp) {
-                tracing::debug!(
-                    kind = %event.kind,
-                    fingerprint = %fp,
-                    "dedupe: skipping duplicate tool event"
-                );
-                event
-                    .metadata
-                    .insert("deduped".to_string(), serde_json::json!(true));
-                if let Ok(mut h) = self.health.lock() {
-                    h.events_deduped = h.events_deduped.saturating_add(1);
+        if let Some(decision) = self.dedupe_decision(&event) {
+            match decision {
+                DedupeDecision::Skip {
+                    original_id,
+                    reason,
+                    provenances,
+                } => {
+                    tracing::debug!(
+                        kind = %event.kind,
+                        original = %original_id,
+                        reason = %reason,
+                        "dedupe: skipping proven duplicate tool event"
+                    );
+                    event
+                        .metadata
+                        .insert("deduped".to_string(), serde_json::json!(true));
+                    event
+                        .metadata
+                        .insert("duplicate_of".to_string(), serde_json::json!(original_id));
+                    event.metadata.insert(
+                        "duplicate_reason".to_string(),
+                        serde_json::json!(reason),
+                    );
+                    event.metadata.insert(
+                        "capture_provenance".to_string(),
+                        serde_json::json!(provenances),
+                    );
+                    // Annotate the kept event with merged provenance (best-effort).
+                    if let Ok(Some(mut kept)) = self.store.get_event(&original_id).await {
+                        kept.metadata.insert(
+                            "capture_provenance".to_string(),
+                            serde_json::json!(provenances),
+                        );
+                        kept.metadata.insert(
+                            "duplicate_reason".to_string(),
+                            serde_json::json!(reason),
+                        );
+                        let _ = self.store.update_event(&kept).await;
+                    }
+                    if let Ok(mut h) = self.health.lock() {
+                        h.events_deduped = h.events_deduped.saturating_add(1);
+                    }
+                    return Ok(event);
                 }
-                return Ok(event);
             }
-            // Soft cap: if full, clear half (rare re-dupes acceptable after eviction).
-            if seen.len() >= MAX_TOOL_FINGERPRINTS {
-                let drop_n = seen.len() / 2;
-                let to_drop: Vec<String> = seen.iter().take(drop_n).cloned().collect();
-                for k in to_drop {
-                    seen.remove(&k);
-                }
-                tracing::debug!(
-                    dropped = drop_n,
-                    remaining = seen.len(),
-                    "tool fingerprint set capped; evicted oldest half"
-                );
-            }
-            seen.insert(fp);
         }
 
         if event.sequence == 0 {
@@ -163,6 +260,20 @@ impl EventWriter {
         let t0 = Instant::now();
         self.store.insert_event(&event).await?;
         let ms = t0.elapsed().as_millis();
+
+        // Record fingerprint only after a successful write (ID-bearing tools).
+        if let Some((fp, payload_hash, prov)) = tool_dedupe_key(&event) {
+            let mut cache = self.tool_seen.lock().unwrap_or_else(|e| e.into_inner());
+            cache.insert(
+                fp,
+                DedupeEntry {
+                    event_id: event.id.clone(),
+                    payload_hash,
+                    provenances: vec![prov],
+                    seen_at: Instant::now(),
+                },
+            );
+        }
 
         if let Ok(mut h) = self.health.lock() {
             h.events_written = h.events_written.saturating_add(1);
@@ -183,14 +294,67 @@ impl EventWriter {
         Ok(event)
     }
 
+    fn dedupe_decision(&self, event: &TraceEvent) -> Option<DedupeDecision> {
+        let (fp, payload_hash, prov) = tool_dedupe_key(event)?;
+        let mut cache = self.tool_seen.lock().unwrap_or_else(|e| e.into_inner());
+        let entry = cache.get(&fp)?.clone();
+
+        // Outside the duplicate window → treat as a new attempt (e.g. reused id after long gap).
+        if entry.seen_at.elapsed() > DUPLICATE_WINDOW {
+            return None;
+        }
+        // Payload mismatch → do not merge (different observation).
+        if entry.payload_hash != payload_hash {
+            return None;
+        }
+
+        let mut provenances = entry.provenances.clone();
+        if !provenances.iter().any(|p| p == &prov) {
+            provenances.push(prov);
+        }
+        let reason = if provenances.len() > 1 {
+            "same_tool_use_id_cross_source"
+        } else {
+            "same_tool_use_id_redeelivery"
+        };
+
+        // Touch LRU and update provenance list for subsequent merges.
+        cache.touch_update(
+            &fp,
+            DedupeEntry {
+                event_id: entry.event_id.clone(),
+                payload_hash: entry.payload_hash.clone(),
+                provenances: provenances.clone(),
+                seen_at: entry.seen_at,
+            },
+        );
+
+        Some(DedupeDecision::Skip {
+            original_id: entry.event_id,
+            reason: reason.to_string(),
+            provenances,
+        })
+    }
+
     /// Clone for sharing across tasks (store is Arc; seq is shared via Arc\<EventWriter\>).
     pub fn store(&self) -> Arc<dyn TraceStore> {
         self.store.clone()
     }
 }
 
-/// Stable fingerprint for tool events used for cross-channel dedupe.
-fn tool_fingerprint(event: &TraceEvent) -> Option<String> {
+enum DedupeDecision {
+    Skip {
+        original_id: String,
+        reason: String,
+        provenances: Vec<String>,
+    },
+}
+
+/// Build a dedupe key only for tool events that carry a stable tool-use ID.
+///
+/// Returns `(fingerprint, payload_hash, provenance)`.
+/// Returns `None` for non-tool events and for ID-less tool calls (must not merge).
+fn tool_dedupe_key(event: &TraceEvent) -> Option<(String, String, String)> {
     if event.kind != "tool.call" && event.kind != "tool.result" {
         return None;
     }
@@ -198,28 +362,63 @@ fn tool_fingerprint(event: &TraceEvent) -> Option<String> {
         .metadata
         .get("tool_use_id")
         .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let tool_name = event
-        .metadata
-        .get("tool_name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-
-    if !tool_use_id.is_empty() {
-        return Some(format!("{}:{}", event.kind, tool_use_id));
-    }
-
-    // Fallback: kind + name + compact input (UTF-8 safe truncate)
-    let input = event
-        .metadata
-        .get("input")
-        .map(|v| v.to_string())
-        .unwrap_or_default();
-    let input_key = crate::util::truncate(&input, 120);
-    if tool_name.is_empty() && input_key.is_empty() {
+        .unwrap_or("")
+        .trim();
+    if tool_use_id.is_empty() {
+        // 1.5 D1: no stable ID → never dedupe (preserve legitimate retries).
         return None;
     }
-    Some(format!("{}:{}:{}", event.kind, tool_name, input_key))
+    let payload_hash = normalized_payload_hash(event);
+    let provenance = capture_provenance(event);
+    let fp = format!("{}:{}", event.kind, tool_use_id);
+    Some((fp, payload_hash, provenance))
+}
+
+fn capture_provenance(event: &TraceEvent) -> String {
+    if event.metadata.contains_key("native_log")
+        || event
+            .metadata
+            .get("from_native_log")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    {
+        return "native_log".into();
+    }
+    if event
+        .metadata
+        .get("from_pty")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+        || event.metadata.contains_key("pty")
+    {
+        return "pty".into();
+    }
+    // Fall back to source layer name.
+    format!("{:?}", event.source).to_ascii_lowercase()
+}
+
+fn normalized_payload_hash(event: &TraceEvent) -> String {
+    use std::collections::BTreeMap;
+    // Stable subset: tool_name + input/output (exclude provenance-only keys).
+    let mut parts: BTreeMap<&str, String> = BTreeMap::new();
+    for key in ["tool_name", "name", "input", "output", "result", "is_error"] {
+        if let Some(v) = event.metadata.get(key) {
+            parts.insert(key, v.to_string());
+        }
+    }
+    let blob = serde_json::to_string(&parts).unwrap_or_default();
+    // Cheap non-crypto digest is fine for in-process dedupe equality.
+    format!("{:x}", simple_hash(&blob))
+}
+
+fn simple_hash(s: &str) -> u64 {
+    // FNV-1a 64-bit
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in s.as_bytes() {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
 }
 
 #[cfg(test)]
@@ -229,7 +428,7 @@ mod tests {
     use crate::storage::sqlite::SqliteStore;
 
     #[tokio::test]
-    async fn dedupes_tool_call_by_use_id() {
+    async fn dedupes_tool_call_by_use_id_cross_source() {
         let store = Arc::new(SqliteStore::open_memory().unwrap());
         let run = crate::core::run::Run::new(vec!["x".into()], "/tmp".into());
         store.insert_run(&run).await.unwrap();
@@ -241,9 +440,14 @@ mod tests {
             .insert("tool_use_id".into(), serde_json::json!("tu-1"));
         a.metadata
             .insert("tool_name".into(), serde_json::json!("Bash"));
+        a.metadata
+            .insert("input".into(), serde_json::json!({"cmd": "ls"}));
+        a.metadata
+            .insert("from_pty".into(), serde_json::json!(true));
 
         let mut b = a.clone();
         b.id = uuid::Uuid::new_v4().to_string();
+        b.metadata.remove("from_pty");
         b.metadata
             .insert("native_log".into(), serde_json::json!("/tmp/x.jsonl"));
 
@@ -255,12 +459,71 @@ mod tests {
             w2.metadata.get("deduped").and_then(|v| v.as_bool()),
             Some(true)
         );
+        assert_eq!(
+            w2.metadata.get("duplicate_reason").and_then(|v| v.as_str()),
+            Some("same_tool_use_id_cross_source")
+        );
 
         let events = store.get_events(&run.id).await.unwrap();
         assert_eq!(events.iter().filter(|e| e.kind == "tool.call").count(), 1);
         let h = writer.health_snapshot();
         assert_eq!(h.events_written, 1);
         assert_eq!(h.events_deduped, 1);
+    }
+
+    #[tokio::test]
+    async fn preserves_idless_identical_tool_calls() {
+        let store = Arc::new(SqliteStore::open_memory().unwrap());
+        let run = crate::core::run::Run::new(vec!["x".into()], "/tmp".into());
+        store.insert_run(&run).await.unwrap();
+        let writer = EventWriter::new(store.clone(), run.id.clone());
+
+        for _ in 0..2 {
+            let mut a = TraceEvent::new(&run.id, EventSource::Tool, "tool.call");
+            a.metadata
+                .insert("tool_name".into(), serde_json::json!("Bash"));
+            a.metadata
+                .insert("input".into(), serde_json::json!({"cmd": "cargo test"}));
+            // no tool_use_id
+            writer.write(a).await.unwrap();
+        }
+
+        let events = store.get_events(&run.id).await.unwrap();
+        assert_eq!(
+            events.iter().filter(|e| e.kind == "tool.call").count(),
+            2,
+            "ID-less retries must both be stored"
+        );
+        let h = writer.health_snapshot();
+        assert_eq!(h.events_written, 2);
+        assert_eq!(h.events_deduped, 0);
+    }
+
+    #[tokio::test]
+    async fn payload_mismatch_prevents_dedupe() {
+        let store = Arc::new(SqliteStore::open_memory().unwrap());
+        let run = crate::core::run::Run::new(vec!["x".into()], "/tmp".into());
+        store.insert_run(&run).await.unwrap();
+        let writer = EventWriter::new(store.clone(), run.id.clone());
+
+        let mut a = TraceEvent::new(&run.id, EventSource::Tool, "tool.call");
+        a.metadata
+            .insert("tool_use_id".into(), serde_json::json!("tu-same"));
+        a.metadata
+            .insert("tool_name".into(), serde_json::json!("Bash"));
+        a.metadata
+            .insert("input".into(), serde_json::json!({"cmd": "ls"}));
+
+        let mut b = a.clone();
+        b.id = uuid::Uuid::new_v4().to_string();
+        b.metadata
+            .insert("input".into(), serde_json::json!({"cmd": "pwd"}));
+
+        writer.write(a).await.unwrap();
+        writer.write(b).await.unwrap();
+
+        let events = store.get_events(&run.id).await.unwrap();
+        assert_eq!(events.iter().filter(|e| e.kind == "tool.call").count(), 2);
     }
 
     #[test]

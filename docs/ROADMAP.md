@@ -1,8 +1,9 @@
 # Roadmap and quality bar
 
-**Answers:** What “good” means for blackbox, what each major version promised, what **1.4** added, and what remains out of scope.
+What “good” means for blackbox, what each major version promised, what **1.4** shipped, and what **1.5** targets.
 
 This is **product direction**, not a how-to. Operators: [guide/README.md](guide/README.md).
+**1.5 plan (in progress):** [plan/trace-integrity-1.5.md](plan/trace-integrity-1.5.md). Epic: [issue #3](https://github.com/wanazhar/blackbox/issues/3).
 **1.4 plan (shipped):** [plan/trust-proof-1.4.md](plan/trust-proof-1.4.md).
 **1.3 plan (shipped):** [plan/trust-explain-1.3.md](plan/trust-explain-1.3.md).
 
@@ -38,6 +39,7 @@ If a change weakens a bar, it needs an explicit docs + test story.
 | **1.2** | Continuity / project memory | Shipped **1.2.0** |
 | **1.3** | Trust, explain, agent-native depth | Shipped **1.3.0** |
 | **1.4** | **Trust Proof (Unix 10/10)** | Shipped **1.4.0** |
+| **1.5** | **Trace integrity & scale** | In progress — [issue #3](https://github.com/wanazhar/blackbox/issues/3) |
 
 ### 1.1 adoption bar (permanent)
 
@@ -105,14 +107,42 @@ Full plan: [plan/trust-proof-1.4.md](plan/trust-proof-1.4.md). Epic: [issue #2](
 
 ---
 
-## After 1.4 (direction)
+## 1.5 bar (must pass before tag)
+
+Full plan: [plan/trace-integrity-1.5.md](plan/trace-integrity-1.5.md). Epic: [issue #3](https://github.com/wanazhar/blackbox/issues/3).
+
+| Id | Criterion | Intent |
+|---|---|---|
+| **L1** | Long-run aggregates | Totals and first/last anchors independent of load caps |
+| **L2** | Explicit analysis scope | `analysis_scope` on summary/postmortem |
+| **D1** | Safe tool dedupe | ID-less retries preserved; merge only proven duplicates |
+| **R1** | Replay honesty | Workspace vs contained; capability preflight |
+| **W1** | Workspace checkpoints | Binary/untracked restore + completeness |
+| **A1** | Archive atomicity | Hash-validated import; no partial permanent state |
+| **S1** | Batched ingest | Bounded queue + dedicated writer |
+| **C1** | Capture boundaries | Bounded FS/native-log; symlink scope |
+| **H1** | Dashboard auth | Browser session + bearer + optional UDS |
+| **P1** | Scale APIs | Cursor pagination, compression, streaming portable |
+| **Q1** | Tier-1 qualification | Linux + macOS runtime gates |
+| **X1** | Docs truth | Inventory, one source of truth, verified examples |
+
+#### 1.5 implementation phases
+
+1. **A** Correct long-run truth (aggregates, analysis_scope, safe dedupe) — in progress
+2. **B** Reproducible / contained replay
+3. **C** Durable storage / imports
+4. **D** Capture / platform operations
+5. **E** Documentation rewrite + release
+
+---
+
+## After 1.5 (direction)
 
 | Theme | Notes |
 |---|---|
-| **1.5 Eval suite** | Multi-run report CLI, regression tables, public scorer recipes |
+| Eval suite | Multi-run report CLI, regression tables, public scorer recipes |
 | Agent-native depth | Marketplace plugins, require-memory-read experiments, richer MCP |
 | Distribution | Homebrew/Nix formulas |
-| Scale | SSE push, huge-run paging polish |
 | Windows | TUI/PTY parity (non-blocking) |
 
 ---
@@ -131,7 +161,8 @@ Full plan: [plan/trust-proof-1.4.md](plan/trust-proof-1.4.md). Epic: [issue #2](
 
 ## Related
 
-- [plan/trust-proof-1.4.md](plan/trust-proof-1.4.md) — full 1.4 design
+- [plan/trace-integrity-1.5.md](plan/trace-integrity-1.5.md) — full 1.5 design
+- [plan/trust-proof-1.4.md](plan/trust-proof-1.4.md) — 1.4 design (shipped)
 - [plan/trust-explain-1.3.md](plan/trust-explain-1.3.md) — 1.3 design (shipped)
 - [CHANGELOG.md](https://github.com/wanazhar/blackbox/blob/master/CHANGELOG.md)
 - [guide/concepts.md](guide/concepts.md)

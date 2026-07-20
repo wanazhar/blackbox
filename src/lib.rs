@@ -1,4 +1,5 @@
 pub mod adapters;
+pub mod aggregates;
 pub mod analysis;
 pub mod backup;
 pub mod capture;

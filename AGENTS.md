@@ -67,6 +67,7 @@ AnalysisPass   Export/Import    Serve/SSE      UI / CLI
 | `src/sync.rs` | Dir/HTTP/S3 sync | Push/pull backends |
 | `src/search.rs` | FTS search | Search runner |
 | `src/scrub.rs` | Re-redaction + GC | Scrub + blob GC |
+| `src/aggregates.rs` | Incremental run aggregates + analysis scope (1.5) | `RunAggregates`, `AnalysisScope` |
 | `src/summary.rs` | Run summary builder | `build_summary` |
 | `src/transcript.rs` | Transcript rebuild | Transcript from store |
 | `src/views.rs` | JSON view types | All `*View` structs for `--json` |
@@ -171,6 +172,8 @@ Operator-facing notes for shipped harnesses: [docs/guide/adapters.md](docs/guide
 | `.github/workflows/ci.yml` | test + clippy + doc link check (docs stay in-repo; no Pages) |
 | `tests/security.rs` | Security invariants |
 | `tests/test_critical.rs` | Critical path smoke tests |
+| `tests/long_run_integrity.rs` | 1.5 L1/L2: aggregates + analysis_scope beyond load caps |
+| `tests/tool_dedup.rs` | 1.5 D1: ID-less retries preserved; cross-source merge |
 
 ## Docs map
 

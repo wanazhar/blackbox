@@ -1,6 +1,7 @@
 pub mod sqlite;
 pub mod store;
 
+use crate::aggregates::RunAggregates;
 use crate::core::blob::BlobReference;
 use crate::core::checkpoint::Checkpoint;
 use crate::core::event::TraceEvent;
@@ -160,5 +161,87 @@ pub trait TraceStore: Send + Sync + 'static {
     /// rows deleted. Default is a no-op.
     async fn delete_blob_keys(&self, _keys: &[String]) -> anyhow::Result<usize> {
         Ok(0)
+    }
+
+    // ── Aggregates / salient queries (1.5 L1) ──
+
+    /// Load incremental run aggregates when the backend stores them.
+    ///
+    /// Default: `None` (caller may recompute from events).
+    async fn get_run_aggregates(&self, _run_id: &str) -> anyhow::Result<Option<RunAggregates>> {
+        Ok(None)
+    }
+
+    /// Persist run aggregates (upsert). Default: no-op.
+    async fn put_run_aggregates(&self, _agg: &RunAggregates) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Recompute aggregates from the full event table and store them.
+    ///
+    /// Default: load all events, recompute, put.
+    async fn recompute_run_aggregates(
+        &self,
+        run_id: &str,
+    ) -> anyhow::Result<RunAggregates> {
+        let events = self.get_events(run_id).await?;
+        let agg = RunAggregates::recompute(run_id, &events);
+        self.put_run_aggregates(&agg).await?;
+        Ok(agg)
+    }
+
+    /// Load first `limit` events by ascending sequence (run head).
+    async fn get_events_head(
+        &self,
+        run_id: &str,
+        limit: usize,
+    ) -> anyhow::Result<Vec<TraceEvent>> {
+        let all = self.get_events(run_id).await?;
+        Ok(all.into_iter().take(limit).collect())
+    }
+
+    /// Load last `limit` events by ascending sequence (run tail).
+    async fn get_events_tail(
+        &self,
+        run_id: &str,
+        limit: usize,
+    ) -> anyhow::Result<Vec<TraceEvent>> {
+        let (events, _) = self.get_events_limited(run_id, limit).await?;
+        Ok(events)
+    }
+
+    /// Load events matching any of the given kinds (ascending), up to `limit`.
+    async fn get_events_by_kinds(
+        &self,
+        run_id: &str,
+        kinds: &[&str],
+        limit: usize,
+    ) -> anyhow::Result<Vec<TraceEvent>> {
+        if kinds.is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+        let all = self.get_events(run_id).await?;
+        Ok(all
+            .into_iter()
+            .filter(|e| kinds.iter().any(|k| e.kind == *k))
+            .take(limit)
+            .collect())
+    }
+
+    /// Load events with Error status (ascending), up to `limit`.
+    async fn get_error_events(
+        &self,
+        run_id: &str,
+        limit: usize,
+    ) -> anyhow::Result<Vec<TraceEvent>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let all = self.get_events(run_id).await?;
+        Ok(all
+            .into_iter()
+            .filter(|e| matches!(e.status, crate::core::event::EventStatus::Error))
+            .take(limit)
+            .collect())
     }
 }

@@ -276,6 +276,8 @@ fn memory_to_context_pack(
             goal_source: "unavailable".into(),
             goal: "goal unavailable".into(),
             verification_coverage: None,
+            analysis_scope: None,
+            aggregates: None,
         }),
         failed_tools: pack.failed_tools.clone(),
         errors_top: pack.errors_top.clone(),

@@ -9,6 +9,7 @@ use anyhow::Context;
 use rusqlite::{params, Connection};
 use tokio::task;
 
+use crate::aggregates::RunAggregates;
 use crate::core::blob::BlobReference;
 use crate::core::checkpoint::Checkpoint;
 use crate::core::event::TraceEvent;
@@ -17,7 +18,7 @@ use crate::storage::TraceStore;
 
 /// Current schema version. Bump when migrations change.
 /// Current on-disk schema version (also reported by `doctor --json`).
-pub const SCHEMA_VERSION: i32 = 6;
+pub const SCHEMA_VERSION: i32 = 7;
 
 /// Default scanner for redacting secrets in FTS index content.
 static FTS_SCANNER: LazyLock<SecretScanner> =
@@ -303,6 +304,15 @@ impl SqliteStore {
                 .context("failed to record v6 version")?;
             tx.commit().context("failed to commit v6 migration")?;
         }
+        if current < 7 {
+            let tx = conn
+                .unchecked_transaction()
+                .context("failed to start transaction for v7 migration")?;
+            Self::migrate_v7(&tx)?;
+            tx.execute("INSERT INTO schema_version (version) VALUES (7)", [])
+                .context("failed to record v7 version")?;
+            tx.commit().context("failed to commit v7 migration")?;
+        }
 
         // Ensure we never claim a higher version than we support
         let applied: i32 = conn
@@ -533,6 +543,27 @@ impl SqliteStore {
             [],
         );
         tracing::info!("v6: runs metrics columns (duration/adapter/tokens/model)");
+        Ok(())
+    }
+
+    /// V7: incremental run aggregates + indexes for salient event queries (1.5 L1).
+    fn migrate_v7(conn: &Connection) -> anyhow::Result<()> {
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS run_aggregates (
+                run_id               TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
+                payload              TEXT NOT NULL,
+                events_total         INTEGER NOT NULL DEFAULT 0,
+                last_sequence        INTEGER NOT NULL DEFAULT 0,
+                aggregates_complete  INTEGER NOT NULL DEFAULT 1,
+                updated_at           TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_events_run_status ON events(run_id, status);
+            CREATE INDEX IF NOT EXISTS idx_events_run_kind ON events(run_id, kind);
+            ",
+        )
+        .context("failed to create v7 run_aggregates / indexes")?;
+        tracing::info!("v7: run_aggregates table + event status/kind indexes");
         Ok(())
     }
 
@@ -875,6 +906,10 @@ impl TraceStore for SqliteStore {
             // FTS upsert within the same transaction (best-effort: table may be
             // missing on ancient DBs mid-migrate)
             let _ = fts_upsert_in_tx(&tx, &event);
+            // Incremental aggregates (1.5 L1) — best-effort; recompute recovers.
+            if let Err(e) = apply_event_to_aggregates_in_tx(&tx, &event) {
+                tracing::warn!(error = %e, run_id = %event.run_id, "aggregate update failed");
+            }
             tx.commit()
                 .context("failed to commit insert_event transaction")?;
         }
@@ -1306,6 +1341,9 @@ impl TraceStore for SqliteStore {
             let tx = conn
                 .unchecked_transaction()
                 .context("failed to start transaction for insert_events_batch")?;
+            // Per-run aggregate state loaded once for the batch (1.5 L1).
+            let mut agg_cache: std::collections::HashMap<String, RunAggregates> =
+                std::collections::HashMap::new();
             for (i, event) in events.iter().enumerate() {
                 let s = &prepared[i];
                 tx.execute(
@@ -1331,6 +1369,18 @@ impl TraceStore for SqliteStore {
                 )
                 .context("failed to insert event in batch")?;
                 let _ = fts_upsert_in_tx(&tx, event);
+                let agg = agg_cache.entry(event.run_id.clone()).or_insert_with(|| {
+                    load_aggregates(&tx, &event.run_id)
+                        .ok()
+                        .flatten()
+                        .unwrap_or_else(|| RunAggregates::new(event.run_id.clone()))
+                });
+                agg.observe(event);
+            }
+            for agg in agg_cache.values() {
+                if let Err(e) = upsert_aggregates(&tx, agg) {
+                    tracing::warn!(error = %e, run_id = %agg.run_id, "batch aggregate upsert failed");
+                }
             }
             tx.commit()
                 .context("failed to commit insert_events_batch transaction")?;
@@ -1371,6 +1421,203 @@ impl TraceStore for SqliteStore {
         tx.commit().context("failed to commit delete_blob_keys")?;
         Ok(deleted)
     }
+
+    async fn get_run_aggregates(
+        &self,
+        run_id: &str,
+    ) -> anyhow::Result<Option<RunAggregates>> {
+        let run_id = run_id.to_string();
+        let result = {
+            let conn = self.lock();
+            load_aggregates(&conn, &run_id)
+        };
+        tokio::task::yield_now().await;
+        result
+    }
+
+    async fn put_run_aggregates(&self, agg: &RunAggregates) -> anyhow::Result<()> {
+        let agg = agg.clone();
+        {
+            let conn = self.lock();
+            upsert_aggregates(&conn, &agg)?;
+        }
+        tokio::task::yield_now().await;
+        Ok(())
+    }
+
+    async fn recompute_run_aggregates(
+        &self,
+        run_id: &str,
+    ) -> anyhow::Result<RunAggregates> {
+        let events = self.get_events(run_id).await?;
+        let agg = RunAggregates::recompute(run_id, &events);
+        self.put_run_aggregates(&agg).await?;
+        Ok(agg)
+    }
+
+    async fn get_events_head(
+        &self,
+        run_id: &str,
+        limit: usize,
+    ) -> anyhow::Result<Vec<TraceEvent>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let run_id = run_id.to_string();
+        let result = {
+            let conn = self.lock();
+            let mut stmt = conn.prepare(
+                "SELECT id, run_id, parent_event_id, sequence, source, kind, started_at, ended_at, duration_ms, status, side_effect, input_blob, output_blob, error_blob, metadata
+                 FROM events WHERE run_id = ?1 ORDER BY sequence ASC LIMIT ?2",
+            )?;
+            let events = stmt
+                .query_map(params![run_id, limit as i64], event_from_row)?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(events)
+        };
+        tokio::task::yield_now().await;
+        result
+    }
+
+    async fn get_events_tail(
+        &self,
+        run_id: &str,
+        limit: usize,
+    ) -> anyhow::Result<Vec<TraceEvent>> {
+        let (events, _) = self.get_events_limited(run_id, limit).await?;
+        Ok(events)
+    }
+
+    async fn get_events_by_kinds(
+        &self,
+        run_id: &str,
+        kinds: &[&str],
+        limit: usize,
+    ) -> anyhow::Result<Vec<TraceEvent>> {
+        if kinds.is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+        let run_id = run_id.to_string();
+        let kinds_owned: Vec<String> = kinds.iter().map(|s| (*s).to_string()).collect();
+        let result = {
+            let conn = self.lock();
+            // Build IN clause placeholders.
+            let placeholders: String = (0..kinds_owned.len())
+                .map(|i| format!("?{}", i + 2))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql = format!(
+                "SELECT id, run_id, parent_event_id, sequence, source, kind, started_at, ended_at, duration_ms, status, side_effect, input_blob, output_blob, error_blob, metadata
+                 FROM events WHERE run_id = ?1 AND kind IN ({placeholders})
+                 ORDER BY sequence ASC LIMIT ?{lim}",
+                lim = kinds_owned.len() + 2
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            let mut values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+            values.push(Box::new(run_id));
+            for k in &kinds_owned {
+                values.push(Box::new(k.clone()));
+            }
+            values.push(Box::new(limit as i64));
+            let params_refs: Vec<&dyn rusqlite::types::ToSql> =
+                values.iter().map(|v| v.as_ref()).collect();
+            let events = stmt
+                .query_map(params_refs.as_slice(), event_from_row)?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(events)
+        };
+        tokio::task::yield_now().await;
+        result
+    }
+
+    async fn get_error_events(
+        &self,
+        run_id: &str,
+        limit: usize,
+    ) -> anyhow::Result<Vec<TraceEvent>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let run_id = run_id.to_string();
+        // EventStatus::Error serializes as `"Error"` (with quotes in JSON form stored).
+        let status_json = serde_json::to_string(&crate::core::event::EventStatus::Error)
+            .unwrap_or_else(|_| "\"Error\"".into());
+        let result = {
+            let conn = self.lock();
+            let mut stmt = conn.prepare(
+                "SELECT id, run_id, parent_event_id, sequence, source, kind, started_at, ended_at, duration_ms, status, side_effect, input_blob, output_blob, error_blob, metadata
+                 FROM events WHERE run_id = ?1 AND status = ?2
+                 ORDER BY sequence ASC LIMIT ?3",
+            )?;
+            let events = stmt
+                .query_map(params![run_id, status_json, limit as i64], event_from_row)?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(events)
+        };
+        tokio::task::yield_now().await;
+        result
+    }
+}
+
+/// Load aggregates payload for a run, if present.
+fn load_aggregates(conn: &Connection, run_id: &str) -> anyhow::Result<Option<RunAggregates>> {
+    let mut stmt = conn.prepare(
+        "SELECT payload FROM run_aggregates WHERE run_id = ?1",
+    )?;
+    match stmt.query_row(params![run_id], |row| row.get::<_, String>(0)) {
+        Ok(payload) => {
+            let agg: RunAggregates = serde_json::from_str(&payload)
+                .context("failed to deserialize run_aggregates payload")?;
+            Ok(Some(agg))
+        }
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => {
+            // Table may be missing mid-migration on ancient DBs.
+            if e.to_string().contains("no such table") {
+                return Ok(None);
+            }
+            Err(e.into())
+        }
+    }
+}
+
+fn upsert_aggregates(conn: &Connection, agg: &RunAggregates) -> anyhow::Result<()> {
+    let payload =
+        serde_json::to_string(agg).context("failed to serialize run_aggregates payload")?;
+    conn.execute(
+        "INSERT INTO run_aggregates (run_id, payload, events_total, last_sequence, aggregates_complete, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(run_id) DO UPDATE SET
+           payload = excluded.payload,
+           events_total = excluded.events_total,
+           last_sequence = excluded.last_sequence,
+           aggregates_complete = excluded.aggregates_complete,
+           updated_at = excluded.updated_at",
+        params![
+            agg.run_id,
+            payload,
+            agg.events_total as i64,
+            agg.last_sequence as i64,
+            if agg.aggregates_complete { 1i64 } else { 0i64 },
+            agg.updated_at.to_rfc3339(),
+        ],
+    )
+    .context("failed to upsert run_aggregates")?;
+    Ok(())
+}
+
+fn apply_event_to_aggregates_in_tx(
+    tx: &rusqlite::Transaction<'_>,
+    event: &TraceEvent,
+) -> anyhow::Result<()> {
+    // Ensure table exists (fresh DBs always have it after migrate).
+    let mut agg = match load_aggregates(tx, &event.run_id)? {
+        Some(a) => a,
+        None => RunAggregates::new(event.run_id.clone()),
+    };
+    agg.observe(event);
+    upsert_aggregates(tx, &agg)?;
+    Ok(())
 }
 
 fn event_search_body(event: &TraceEvent) -> String {

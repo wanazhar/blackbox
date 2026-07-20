@@ -3,18 +3,28 @@
 use chrono::Utc;
 use serde::Serialize;
 
+use std::collections::HashMap;
+
+use crate::aggregates::{AnalysisScope, RunAggregates};
 use crate::analysis::anomalies::{detect_anomalies, Anomaly};
 use crate::analysis::error_detector::ErrorDetector;
 use crate::analysis::failure_fix::FailureFixCorrelator;
 use crate::analysis::retry_waste::RetryWasteDetector;
 use crate::analysis::turning_points::{detect_turning_points, TurningPoint};
-use crate::core::event::EventStatus;
+use crate::core::event::{EventStatus, TraceEvent};
 use crate::core::run::Run;
 use crate::storage::TraceStore;
 use crate::views::{ResumeView, StructuredErrorView};
 
-const DEFAULT_LIMIT: usize = 10_000;
-const SHORT_LIMIT: usize = 500;
+/// Tail window for default postmortem event evidence.
+const DEFAULT_TAIL: usize = 4_000;
+const DEFAULT_HEAD: usize = 200;
+const SHORT_TAIL: usize = 250;
+const SHORT_HEAD: usize = 50;
+const FULL_TAIL: usize = 8_000;
+const FULL_HEAD: usize = 500;
+const SALIENT_ERROR_CAP: usize = 200;
+const SALIENT_KIND_CAP: usize = 100;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SummaryView {
@@ -73,6 +83,12 @@ pub struct SummaryView {
     /// Overall verification coverage for the primary failure (if any).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verification_coverage: Option<String>,
+    /// Explicit analysis load scope (1.5 L2) — facts vs evidence windows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analysis_scope: Option<AnalysisScope>,
+    /// Incremental run aggregates when available (1.5 L1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aggregates: Option<RunAggregates>,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -210,24 +226,76 @@ pub struct SummaryOptions {
     pub full: bool,
 }
 
-/// Build a SummaryView using SQL-limited event fetch.
+/// Build a SummaryView using aggregates + salient event load (1.5 L1/L2).
+///
+/// Factual totals come from run aggregates (or a recompute). Event evidence
+/// uses a head+tail+salient strategy so early instructions/failures survive
+/// large later windows. `--short` / `--full` change detail, not aggregate facts.
 pub async fn build_summary(
     store: &dyn TraceStore,
     run: &Run,
     opts: SummaryOptions,
 ) -> anyhow::Result<SummaryView> {
-    let limit = if opts.short {
-        SHORT_LIMIT
+    let (head_n, tail_n) = if opts.short {
+        (SHORT_HEAD, SHORT_TAIL)
     } else if opts.full {
-        DEFAULT_LIMIT * 2
+        (FULL_HEAD, FULL_TAIL)
     } else {
-        DEFAULT_LIMIT
+        (DEFAULT_HEAD, DEFAULT_TAIL)
     };
 
-    let total = store.count_events(&run.id).await.ok();
-    let (events, truncated) = store.get_events_limited(&run.id, limit).await?;
+    let count = store.count_events(&run.id).await.unwrap_or(0) as u64;
+    let mut aggregates = match store.get_run_aggregates(&run.id).await? {
+        Some(a)
+            if a.aggregates_complete
+                && (a.events_total == count || (count == 0 && a.events_total == 0)) =>
+        {
+            a
+        }
+        Some(a) if a.events_total == count && count > 0 => a,
+        _ => {
+            // Missing, incomplete, or out of sync — recompute from events.
+            store.recompute_run_aggregates(&run.id).await.unwrap_or_else(|_| {
+                let mut a = RunAggregates::new(run.id.clone());
+                a.events_total = count;
+                a.aggregates_complete = false;
+                a
+            })
+        }
+    };
+    // Prefer store count when aggregates lag a concurrent writer.
+    if aggregates.events_total < count {
+        aggregates.events_total = count;
+        aggregates.aggregates_complete = false;
+    }
+
+    let events = load_salient_events(store, &run.id, head_n, tail_n).await?;
     let events_scanned = events.len();
-    let truncated = truncated || total.map(|t| t > events_scanned).unwrap_or(false);
+    let events_total = aggregates.events_total.max(count);
+    let truncated = (events_scanned as u64) < events_total;
+    let event_evidence_complete = !truncated;
+    let mut limitations = Vec::new();
+    if truncated {
+        limitations.push(format!(
+            "loaded {events_scanned} of {events_total} events via head_tail_salient; totals from aggregates"
+        ));
+    }
+    if !aggregates.aggregates_complete {
+        limitations.push("aggregates marked incomplete; totals may need recompute".into());
+    }
+    let analysis_scope = AnalysisScope {
+        events_total,
+        events_loaded: events_scanned,
+        strategy: if event_evidence_complete {
+            "full".into()
+        } else {
+            "head_tail_salient".into()
+        },
+        aggregates_complete: aggregates.aggregates_complete,
+        event_evidence_complete,
+        limitations,
+    };
+    let total = Some(events_total as usize);
 
     let detector = ErrorDetector::new();
     let mut errors = Vec::new();
@@ -319,7 +387,24 @@ pub async fn build_summary(
     );
 
     // ── Goal inference (explicit sources only — never from file diffs) ─
-    let (goal_source, goal) = infer_goal(run, &events);
+    // Prefer aggregate first-human-instruction when head window might miss it
+    // (should not with head_tail_salient, but aggregates are authoritative).
+    let (goal_source, goal) = {
+        let (gs, g) = infer_goal(run, &events);
+        if gs == "unavailable" || gs == "command" || gs == "run_name" {
+            if let Some(ref human) = aggregates.first_human_instruction {
+                if !human.detail.is_empty() {
+                    ("human_instruction".into(), human.detail.clone())
+                } else {
+                    (gs, g)
+                }
+            } else {
+                (gs, g)
+            }
+        } else {
+            (gs, g)
+        }
+    };
 
     // ── Evidence-linked claims from fix chains + status ───────────────
     let claims = build_claims(run, &fix_chains, &errors);
@@ -362,25 +447,19 @@ pub async fn build_summary(
         serde_json::from_value::<CaptureCoverageView>(cov.clone()).ok()
     });
 
+    // Tool facts from aggregates (independent of display window).
     let mut tool_names = Vec::new();
-    let mut tools_failed = 0usize;
-    let mut tools_total = 0usize;
     for ev in &events {
         if ev.kind == "tool.call" {
-            tools_total += 1;
             if let Some(name) = ev.metadata.get("tool_name").and_then(|v| v.as_str()) {
                 if !tool_names.iter().any(|n| n == name) {
                     tool_names.push(name.to_string());
                 }
             }
-            if matches!(ev.status, EventStatus::Error) {
-                tools_failed += 1;
-            }
-        }
-        if ev.kind == "tool.result" && matches!(ev.status, EventStatus::Error) {
-            tools_failed += 1;
         }
     }
+    let tools_total = aggregates.tool_calls as usize;
+    let tools_failed = aggregates.tool_failures as usize;
 
     let mut side_effects = Vec::new();
     if !opts.short {
@@ -517,7 +596,53 @@ pub async fn build_summary(
         goal_source,
         goal,
         verification_coverage,
+        analysis_scope: Some(analysis_scope),
+        aggregates: Some(aggregates),
     })
+}
+
+/// Merge head, tail, errors, human instructions, and capture-health events.
+async fn load_salient_events(
+    store: &dyn TraceStore,
+    run_id: &str,
+    head_n: usize,
+    tail_n: usize,
+) -> anyhow::Result<Vec<TraceEvent>> {
+    let mut by_id: HashMap<String, TraceEvent> = HashMap::new();
+
+    for ev in store.get_events_head(run_id, head_n).await? {
+        by_id.insert(ev.id.clone(), ev);
+    }
+    for ev in store.get_events_tail(run_id, tail_n).await? {
+        by_id.insert(ev.id.clone(), ev);
+    }
+    for ev in store.get_error_events(run_id, SALIENT_ERROR_CAP).await? {
+        by_id.insert(ev.id.clone(), ev);
+    }
+    for ev in store
+        .get_events_by_kinds(
+            run_id,
+            &[
+                "human.input",
+                "user.message",
+                "human.instruction",
+                "capture.coverage",
+                "capture.layer.failed",
+                "capture.warning",
+                "run.started",
+                "run.completed",
+                "run.neutrality",
+            ],
+            SALIENT_KIND_CAP,
+        )
+        .await?
+    {
+        by_id.insert(ev.id.clone(), ev);
+    }
+
+    let mut events: Vec<TraceEvent> = by_id.into_values().collect();
+    events.sort_by_key(|e| e.sequence);
+    Ok(events)
 }
 
 /// Prefer explicit goal sources; never invent intent from file changes.
@@ -1229,7 +1354,19 @@ pub fn format_summary_text(s: &SummaryView) -> String {
     } else if let Some(a) = &s.git.start {
         out.push_str(&format!("  git: {}\n", a));
     }
-    if s.truncated {
+    if let Some(ref scope) = s.analysis_scope {
+        out.push_str(&format!(
+            "  analysis_scope: strategy={} loaded={}/{} aggregates_complete={} evidence_complete={}\n",
+            scope.strategy,
+            scope.events_loaded,
+            scope.events_total,
+            scope.aggregates_complete,
+            scope.event_evidence_complete
+        ));
+        for lim in &scope.limitations {
+            out.push_str(&format!("    limit: {lim}\n"));
+        }
+    } else if s.truncated {
         out.push_str(&format!(
             "  (truncated: scanned {} of {:?})\n",
             s.events_scanned, s.total_events

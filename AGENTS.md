@@ -182,6 +182,7 @@ Operator-facing notes for shipped harnesses: [docs/guide/adapters.md](docs/guide
 | `tests/workspace_checkpoint.rs` | 1.5 W1: binary/untracked restore + completeness report |
 | `tests/event_ordering.rs` | 1.5 O1: source sequences, occurrence vs storage order |
 | `tests/filesystem_escape.rs` | 1.5 C1: symlink/out-of-root scope for FS capture |
+| `tests/native_log_rotation.rs` | 1.5: native-log identity, rotation, backlog |
 
 ## Docs map
 

@@ -4,18 +4,32 @@
 //! PTY alone misses that structure; this side channel recovers tool calls and
 //! session IDs. Per-harness roots + file filters prefer real session files
 //! over huge debug dumps.
+//!
+//! **1.5 C1 (native-log boundary):** files are tracked by identity (inode /
+//! size / generation), not path+offset alone. Discovery runs once at start
+//! (and rarely for new files); poll cycles do not recursively rescan large
+//! home trees every tick. Rate limits expose backlog instead of implying
+//! completeness.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use tokio::io::{AsyncBufReadExt, AsyncSeekExt, BufReader};
 use tokio::sync::watch;
 
 use crate::adapters::harness::HarnessAdapter;
+use crate::core::event::{EventSource, EventStatus, TraceEvent};
 use crate::pipeline::EventWriter;
 use crate::redaction::scanner::SecretScanner;
+
+/// Max lines emitted from a single file in one poll cycle.
+const RATE_LIMIT_LINES_PER_FILE: u32 = 500;
+/// How often to re-walk roots for *new* files (not every tick).
+const REDISCOVER_INTERVAL: Duration = Duration::from_secs(30);
+/// Max tracked files before pruning missing paths.
+const MAX_TRACKED_FILES: usize = 128;
 
 /// Where native harness logs may be read from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -324,6 +338,119 @@ fn walk_logs(adapter_id: &str, _root: &Path, dir: &Path, depth: usize, out: &mut
     }
 }
 
+/// Identity of a watched log file (1.5: not path/offset alone).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileIdentity {
+    pub inode: u64,
+    pub device: u64,
+    pub created: Option<SystemTime>,
+    pub generation: u64,
+}
+
+/// Per-file poller state.
+#[derive(Debug, Clone)]
+pub struct TrackedLogFile {
+    pub path: PathBuf,
+    pub identity: FileIdentity,
+    pub size: u64,
+    pub offset: u64,
+    /// Bytes not yet consumed after a rate-limit stop.
+    pub backlog_bytes: u64,
+    /// Lines deferred due to rate limit this cycle (best-effort counter).
+    pub deferred_lines: u64,
+    pub rotations: u64,
+}
+
+impl TrackedLogFile {
+    pub fn from_meta(path: PathBuf, meta: &std::fs::Metadata, generation: u64) -> Self {
+        let (inode, device) = file_ids(meta);
+        let created = meta.created().ok();
+        let size = meta.len();
+        Self {
+            path,
+            identity: FileIdentity {
+                inode,
+                device,
+                created,
+                generation,
+            },
+            size,
+            // Start at EOF for existing content at discovery (avoid replaying history).
+            offset: size,
+            backlog_bytes: 0,
+            deferred_lines: 0,
+            rotations: 0,
+        }
+    }
+}
+
+/// Aggregate health for native-log surface (coverage / doctor).
+#[derive(Debug, Clone, Default)]
+pub struct NativeLogHealth {
+    pub tracked_files: usize,
+    pub backlog_bytes: u64,
+    pub deferred_lines: u64,
+    pub rotations: u64,
+    pub poll_errors: u64,
+    pub last_discovery_files: usize,
+}
+
+/// Extract stable file IDs when the OS provides them.
+pub fn file_ids(meta: &std::fs::Metadata) -> (u64, u64) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        (meta.ino(), meta.dev())
+    }
+    #[cfg(not(unix))]
+    {
+        // Fallback: size + mtime as weak identity.
+        let mtime = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
+        (meta.len() ^ mtime, 0)
+    }
+}
+
+/// Classify how metadata changed relative to tracked state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileChange {
+    Unchanged,
+    Appended,
+    Truncated,
+    /// Same path, different inode/device/created → rotation or replace.
+    RotatedOrReplaced,
+    Missing,
+}
+
+/// Detect rotation / truncate / append from identity + size.
+pub fn classify_file_change(tracked: &TrackedLogFile, meta: &std::fs::Metadata) -> FileChange {
+    let (inode, device) = file_ids(meta);
+    let created = meta.created().ok();
+    let size = meta.len();
+
+    let id_changed = inode != tracked.identity.inode
+        || device != tracked.identity.device
+        || match (created, tracked.identity.created) {
+            (Some(a), Some(b)) => a != b,
+            _ => false,
+        };
+
+    if id_changed {
+        return FileChange::RotatedOrReplaced;
+    }
+    if size < tracked.offset {
+        return FileChange::Truncated;
+    }
+    if size > tracked.offset {
+        return FileChange::Appended;
+    }
+    FileChange::Unchanged
+}
+
 /// Background poller: read new lines from native logs and emit structured events.
 pub async fn poll_native_logs(
     adapter: Arc<dyn HarnessAdapter>,
@@ -343,14 +470,34 @@ pub async fn poll_native_logs(
         "native log ingest started"
     );
 
-    let mut offsets: HashMap<PathBuf, u64> = HashMap::new();
-    for f in list_candidate_files_for(&adapter_id, &roots) {
+    // Initial discovery off the async worker (blocking tree walk).
+    let roots_for_discover = roots.clone();
+    let adapter_for_discover = adapter_id.clone();
+    let initial = tokio::task::spawn_blocking(move || {
+        list_candidate_files_for(&adapter_for_discover, &roots_for_discover)
+    })
+    .await
+    .unwrap_or_default();
+
+    let mut tracked: HashMap<PathBuf, TrackedLogFile> = HashMap::new();
+    let mut generation = 1u64;
+    for f in initial {
         if let Ok(meta) = std::fs::metadata(&f) {
-            offsets.insert(f, meta.len());
+            tracked.insert(f.clone(), TrackedLogFile::from_meta(f, &meta, generation));
         }
     }
+    generation = generation.saturating_add(1);
+
+    let mut health = NativeLogHealth {
+        tracked_files: tracked.len(),
+        last_discovery_files: tracked.len(),
+        ..Default::default()
+    };
+    emit_native_log_health(writer.as_ref(), &health, "started").await;
 
     let mut tick = tokio::time::interval(Duration::from_millis(750));
+    let mut last_rediscover = std::time::Instant::now();
+
     loop {
         tokio::select! {
             _ = stop.changed() => {
@@ -359,40 +506,159 @@ pub async fn poll_native_logs(
                 }
             }
             _ = tick.tick() => {
-                let files = list_candidate_files_for(&adapter_id, &roots);
-                if offsets.len() > 100 {
-                    offsets.retain(|path, _| path.exists());
+                // Rare rediscovery for *new* files only — not every poll cycle.
+                if last_rediscover.elapsed() >= REDISCOVER_INTERVAL {
+                    last_rediscover = std::time::Instant::now();
+                    let roots_c = roots.clone();
+                    let aid = adapter_id.clone();
+                    let found = tokio::task::spawn_blocking(move || {
+                        list_candidate_files_for(&aid, &roots_c)
+                    })
+                    .await
+                    .unwrap_or_default();
+                    health.last_discovery_files = found.len();
+                    for f in found {
+                        if tracked.contains_key(&f) {
+                            continue;
+                        }
+                        if let Ok(meta) = std::fs::metadata(&f) {
+                            tracked.insert(
+                                f.clone(),
+                                TrackedLogFile::from_meta(f, &meta, generation),
+                            );
+                            generation = generation.saturating_add(1);
+                        }
+                    }
+                    if tracked.len() > MAX_TRACKED_FILES {
+                        tracked.retain(|path, _| path.exists());
+                    }
                 }
-                for path in files {
-                    if let Err(e) = ingest_file_delta(
+
+                // Poll only tracked paths (no full tree walk each tick).
+                let paths: Vec<PathBuf> = tracked.keys().cloned().collect();
+                for path in paths {
+                    match ingest_tracked_file(
                         &path,
-                        &mut offsets,
+                        &mut tracked,
                         adapter.as_ref(),
                         writer.as_ref(),
                         &scanner,
-                    ).await {
-                        tracing::debug!(error = %e, path = %path.display(), "native log ingest error");
+                        &mut generation,
+                    )
+                    .await
+                    {
+                        Ok(()) => {}
+                        Err(e) => {
+                            health.poll_errors = health.poll_errors.saturating_add(1);
+                            tracing::debug!(
+                                error = %e,
+                                path = %path.display(),
+                                "native log ingest error (surface-local)"
+                            );
+                        }
                     }
                 }
+
+                // Refresh aggregate health gauges.
+                health.tracked_files = tracked.len();
+                health.backlog_bytes = tracked.values().map(|t| t.backlog_bytes).sum();
+                health.deferred_lines = tracked.values().map(|t| t.deferred_lines).sum();
+                health.rotations = tracked.values().map(|t| t.rotations).sum();
             }
         }
     }
-    tracing::debug!("native log ingest stopped");
+
+    emit_native_log_health(writer.as_ref(), &health, "stopped").await;
+    tracing::debug!(
+        tracked = health.tracked_files,
+        backlog = health.backlog_bytes,
+        deferred = health.deferred_lines,
+        rotations = health.rotations,
+        "native log ingest stopped"
+    );
 }
 
-async fn ingest_file_delta(
+async fn emit_native_log_health(writer: &EventWriter, health: &NativeLogHealth, phase: &str) {
+    let mut ev = TraceEvent::new(writer.run_id(), EventSource::System, "native_log.health");
+    ev.status = EventStatus::Success;
+    ev.metadata
+        .insert("phase".into(), serde_json::json!(phase));
+    ev.metadata.insert(
+        "tracked_files".into(),
+        serde_json::json!(health.tracked_files),
+    );
+    ev.metadata.insert(
+        "backlog_bytes".into(),
+        serde_json::json!(health.backlog_bytes),
+    );
+    ev.metadata.insert(
+        "deferred_lines".into(),
+        serde_json::json!(health.deferred_lines),
+    );
+    ev.metadata
+        .insert("rotations".into(), serde_json::json!(health.rotations));
+    ev.metadata.insert(
+        "poll_errors".into(),
+        serde_json::json!(health.poll_errors),
+    );
+    let _ = writer.write(ev).await;
+}
+
+async fn ingest_tracked_file(
     path: &Path,
-    offsets: &mut HashMap<PathBuf, u64>,
+    tracked: &mut HashMap<PathBuf, TrackedLogFile>,
     adapter: &dyn HarnessAdapter,
     writer: &EventWriter,
     scanner: &SecretScanner,
+    generation: &mut u64,
 ) -> anyhow::Result<()> {
-    let meta = tokio::fs::metadata(path).await?;
-    let len = meta.len();
-    let start = offsets.get(path).copied().unwrap_or(0);
+    let meta = match tokio::fs::metadata(path).await {
+        Ok(m) => m,
+        Err(_) => {
+            tracked.remove(path);
+            return Ok(());
+        }
+    };
 
-    let start = if len < start { 0 } else { start };
-    if len == start {
+    let state = tracked
+        .entry(path.to_path_buf())
+        .or_insert_with(|| TrackedLogFile::from_meta(path.to_path_buf(), &meta, *generation));
+
+    let change = classify_file_change(state, &meta);
+    match change {
+        FileChange::Unchanged => {
+            state.size = meta.len();
+            return Ok(());
+        }
+        FileChange::RotatedOrReplaced => {
+            state.rotations = state.rotations.saturating_add(1);
+            *generation = generation.saturating_add(1);
+            let gen = *generation;
+            *state = TrackedLogFile::from_meta(path.to_path_buf(), &meta, gen);
+            // After rotation, read from start of the new file (offset 0).
+            state.offset = 0;
+            emit_rotation_event(writer, path, "rotated_or_replaced", state).await;
+        }
+        FileChange::Truncated => {
+            state.rotations = state.rotations.saturating_add(1);
+            state.offset = 0;
+            state.size = meta.len();
+            emit_rotation_event(writer, path, "truncated", state).await;
+        }
+        FileChange::Appended => {
+            state.size = meta.len();
+        }
+        FileChange::Missing => {
+            tracked.remove(path);
+            return Ok(());
+        }
+    }
+
+    let start = state.offset;
+    let len = meta.len();
+    if len <= start {
+        state.backlog_bytes = 0;
+        state.deferred_lines = 0;
         return Ok(());
     }
 
@@ -404,11 +670,18 @@ async fn ingest_file_delta(
     let mut pos = start;
     let mut emitted = 0u32;
     let allow_plaintext = accepts_plaintext_native_logs(adapter.id());
+    let inode = state.identity.inode;
+    let gen = state.identity.generation;
 
     loop {
         line.clear();
         let n = reader.read_line(&mut line).await?;
         if n == 0 {
+            break;
+        }
+        // Peek: if we already hit the rate limit, do not consume further bytes
+        // into pos — leave them as backlog for the next cycle.
+        if emitted >= RATE_LIMIT_LINES_PER_FILE {
             break;
         }
         pos += n as u64;
@@ -432,6 +705,10 @@ async fn ingest_file_delta(
                 "native_log".to_string(),
                 serde_json::json!(path.display().to_string()),
             );
+            ev.metadata
+                .insert("native_log_inode".into(), serde_json::json!(inode));
+            ev.metadata
+                .insert("native_log_generation".into(), serde_json::json!(gen));
             let mut meta_val = serde_json::to_value(&ev.metadata).unwrap_or_else(|e| {
                 tracing::warn!(
                     error = %e,
@@ -447,17 +724,31 @@ async fn ingest_file_delta(
             if let Err(e) = writer.write(ev).await {
                 tracing::debug!(error = %e, "failed to persist native log event");
             } else {
-                emitted += 1;
+                emitted = emitted.saturating_add(1);
             }
-        }
-
-        if emitted > 500 {
-            tracing::warn!(path = %path.display(), "native log ingest rate-limited this cycle");
-            break;
         }
     }
 
-    offsets.insert(path.to_path_buf(), pos);
+    if let Some(st) = tracked.get_mut(path) {
+        st.offset = pos;
+        st.size = len;
+        st.backlog_bytes = len.saturating_sub(pos);
+        // Estimate deferred lines as remaining bytes / ~80 (honest backlog signal).
+        st.deferred_lines = if st.backlog_bytes > 0 {
+            (st.backlog_bytes / 80).max(1)
+        } else {
+            0
+        };
+        if st.backlog_bytes > 0 {
+            tracing::warn!(
+                path = %path.display(),
+                backlog_bytes = st.backlog_bytes,
+                deferred_lines_est = st.deferred_lines,
+                "native log ingest rate-limited; backlog remains (not complete)"
+            );
+        }
+    }
+
     if emitted > 0 {
         tracing::debug!(
             path = %path.display(),
@@ -466,6 +757,31 @@ async fn ingest_file_delta(
         );
     }
     Ok(())
+}
+
+async fn emit_rotation_event(
+    writer: &EventWriter,
+    path: &Path,
+    reason: &str,
+    state: &TrackedLogFile,
+) {
+    let mut ev = TraceEvent::new(writer.run_id(), EventSource::System, "native_log.rotation");
+    ev.status = EventStatus::Success;
+    ev.metadata
+        .insert("path".into(), serde_json::json!(path.display().to_string()));
+    ev.metadata
+        .insert("reason".into(), serde_json::json!(reason));
+    ev.metadata.insert(
+        "inode".into(),
+        serde_json::json!(state.identity.inode),
+    );
+    ev.metadata.insert(
+        "generation".into(),
+        serde_json::json!(state.identity.generation),
+    );
+    ev.metadata
+        .insert("rotations".into(), serde_json::json!(state.rotations));
+    let _ = writer.write(ev).await;
 }
 
 #[cfg(test)]
@@ -537,5 +853,54 @@ mod tests {
             Path::new("/x/image.png"),
             "image.png"
         ));
+    }
+
+    #[test]
+    fn classify_append_truncate_rotate() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(&path, b"line1\n").unwrap();
+        let meta = std::fs::metadata(&path).unwrap();
+        let mut tracked = TrackedLogFile::from_meta(path.clone(), &meta, 1);
+        tracked.offset = meta.len();
+
+        // Append
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"line2\n")
+            .unwrap();
+        let meta2 = std::fs::metadata(&path).unwrap();
+        assert_eq!(classify_file_change(&tracked, &meta2), FileChange::Appended);
+
+        // Truncate (same inode, smaller size)
+        std::fs::write(&path, b"new\n").unwrap();
+        let meta3 = std::fs::metadata(&path).unwrap();
+        // On most Unix FS, rewrite keeps inode → truncated relative to old offset
+        tracked.offset = meta2.len(); // old end
+        let ch = classify_file_change(&tracked, &meta3);
+        assert!(
+            matches!(ch, FileChange::Truncated | FileChange::RotatedOrReplaced),
+            "got {ch:?}"
+        );
+    }
+
+    #[test]
+    fn classify_same_path_replace_as_rotation_when_inode_changes() {
+        // Simulate identity change by constructing two TrackedLogFile states.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("log.jsonl");
+        std::fs::write(&path, b"a\n").unwrap();
+        let meta = std::fs::metadata(&path).unwrap();
+        let mut tracked = TrackedLogFile::from_meta(path.clone(), &meta, 1);
+        tracked.offset = 1;
+        // Force different inode in tracked identity
+        tracked.identity.inode = tracked.identity.inode.wrapping_add(99999);
+        let meta2 = std::fs::metadata(&path).unwrap();
+        assert_eq!(
+            classify_file_change(&tracked, &meta2),
+            FileChange::RotatedOrReplaced
+        );
     }
 }

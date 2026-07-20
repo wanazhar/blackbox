@@ -51,6 +51,12 @@ Plan: [docs/plan/trace-integrity-1.5.md](docs/plan/trace-integrity-1.5.md). Epic
 - Shared ignore list with workspace manifests; symlink policy (ignore / link-only / follow-within-root)
 - Bounded bridge queue with `filesystem.overflow` on pressure; per-path coalescing
 
+#### Native-log ingest boundary
+- Track log files by identity (inode/device/created + generation), not path/offset alone
+- Detect rotation, same-path replace, and truncate; emit `native_log.rotation`
+- Initial discovery + rare rediscovery; poll cycles do not rescan home trees every tick
+- Rate limits leave backlog_bytes / deferred_lines (honest incompleteness via `native_log.health`)
+
 ## [1.4.0] — 2026-07-19
 
 **Trust Proof (Unix)** — recorder mode can stay on without silently changing the child or overstating causality; secrets are holdback-redacted before persist; coverage and postmortem claims stay weaker than or equal to evidence.

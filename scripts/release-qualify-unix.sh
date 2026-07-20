@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Blackbox 1.4 — Unix release qualification gate (Phase E / Q1).
+# Blackbox Unix release qualification gate (1.4 Q1 + 1.5 integrity).
 #
-# One reproducible command for maintainers before tagging 1.4.0+.
+# One reproducible command for maintainers before tagging.
 # Outputs a checksummed report under release-artifacts/.
 #
 # Usage:
 #   ./scripts/release-qualify-unix.sh
 #   ./scripts/release-qualify-unix.sh --release    # also build --release + soft release overhead
-#   ./scripts/release-qualify-unix.sh --quick      # clippy + trust gates only (no full test)
+#   ./scripts/release-qualify-unix.sh --quick      # clippy + trust/integrity gates only
 #
 # Exit 0 only when all mandatory gates pass.
 set -euo pipefail

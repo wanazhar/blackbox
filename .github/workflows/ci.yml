@@ -44,8 +44,53 @@ jobs:
             --test postmortem_golden --test pty_fidelity --test process_spawn_storm \
             --test fault_recovery --test overhead_smoke -- --quiet
 
+      # 1.5 integrity gates
+      - name: Integrity gates (1.5)
+        run: |
+          cargo test --test long_run_integrity --test tool_dedup \
+            --test portable_import_atomicity --test patch_path_safety \
+            --test storage_batch_faults --test workspace_checkpoint \
+            --test event_ordering --test filesystem_escape \
+            --test native_log_rotation --test dashboard_auth \
+            --test pagination_scale -- --quiet
+
+  # 1.5 Q1: lightweight macOS runtime gate on every PR (not only tag-time build).
+  macos:
+    name: macOS runtime gate
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Library tests
+        run: cargo test --lib -- --quiet
+
+      - name: Trust + integrity subset
+        run: |
+          cargo test \
+            --test neutrality_contract \
+            --test ambient_contract \
+            --test pty_fidelity \
+            --test fault_recovery \
+            --test portable_import_atomicity \
+            --test redaction_gate \
+            --test tool_dedup \
+            --test event_ordering \
+            --test docs_cli_envelope \
+            -- --quiet
+
+      - name: Clippy (lib + bins)
+        run: cargo clippy --all-targets -- -D warnings
+
   # Soft matrix note: full release binaries are built on tag via release.yml
-  # (Linux x86_64/ARM64 + macOS ARM64/x86_64). PR CI stays Ubuntu for cost.
+  # (Linux x86_64/ARM64 + macOS ARM64/x86_64). Ubuntu remains primary full suite.
   qualify:
     name: release-qualify-unix (quick)
     runs-on: ubuntu-latest

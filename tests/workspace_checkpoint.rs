@@ -11,7 +11,7 @@ use blackbox::workspace_manifest::{
 async fn untracked_and_binary_restore() {
     let src = tempfile::tempdir().unwrap();
     std::fs::write(src.path().join("readme.md"), b"# hello").unwrap();
-    std::fs::write(src.path().join("data.bin"), &[0u8, 1, 2, 255, 128]).unwrap();
+    std::fs::write(src.path().join("data.bin"), [0u8, 1, 2, 255, 128]).unwrap();
     std::fs::create_dir_all(src.path().join("nested")).unwrap();
     std::fs::write(src.path().join("nested/untracked.txt"), b"side effect").unwrap();
 

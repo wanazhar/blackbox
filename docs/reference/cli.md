@@ -523,7 +523,7 @@ blackbox watch abc12345
 **When to use:** Share or archive one run. Default is **redacted**. Guide: [export-and-sync](../guide/export-and-sync.md).
 
 ```bash
-blackbox export <run-id> [--format jsonl|html|portable]
+blackbox export <run-id> [--format jsonl|html|portable|portable-dir]
                          [-o <path>]
                          [--no-redact]
                          [--encrypt] [--passphrase <phrase>]
@@ -531,31 +531,34 @@ blackbox export <run-id> [--format jsonl|html|portable]
 
 | Arg | Description |
 |---|---|
-| `--format` | `jsonl`, `html`, or `portable` |
+| `--format` | `jsonl`, `html`, `portable`, or `portable-dir` |
+| `-o` / `--output` | File path (or directory for `portable-dir`) |
 | `--no-redact` | Export unredacted (**dangerous**) |
-| `--encrypt` | Seal portable with store key |
-| `--passphrase` | Seal portable with PBKDF2 (`BLACKBOX_EXPORT_PASSPHRASE`) |
+| `--encrypt` | Seal portable JSON with store key |
+| `--passphrase` | Seal portable JSON with PBKDF2 (`BLACKBOX_EXPORT_PASSPHRASE`) |
 
 ```bash
 blackbox export latest --format html -o report.html
 blackbox export latest --format portable --passphrase '…' -o run.bbx.json
+blackbox export latest --format portable-dir -o ./trace-dir
 ```
 
-Sealed packs: `blackbox.export.sealed/v1`.
+Sealed packs: `blackbox.export.sealed/v1`. Directory layout is not sealed via `--passphrase`.
 
 ---
 
 ## 19. `import`
 
-**When to use:** Load a portable (or sealed) archive into the current store.
+**When to use:** Load a portable JSON, sealed pack, or portable directory into the current store.
 
 ```bash
-blackbox import <file> [--keep-ids] [--passphrase <phrase>]
+blackbox import <file-or-dir> [--keep-ids] [--passphrase <phrase>]
 ```
 
 ```bash
 blackbox import trace.json
 blackbox import run.bbx.json --passphrase '…'
+blackbox import ./trace-dir
 ```
 
 ---

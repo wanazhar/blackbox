@@ -53,6 +53,26 @@ blackbox export <run-id> --format portable --passphrase '…' -o sealed.bbx.json
 
 Import accepts both generations where possible.
 
+### Directory layout (streaming-friendly)
+
+For large runs, prefer a directory archive:
+
+```bash
+blackbox export <run-id> --format portable-dir -o ./trace-dir
+blackbox import ./trace-dir
+```
+
+Library: `export_portable_dir` / `import_portable_dir`.
+
+```text
+manifest.json     # format blackbox.portable.dir/v1
+run.json
+events.jsonl      # one event per line
+blobs/<sha256>    # raw bytes; filename must equal content SHA-256
+```
+
+Import validates each blob hash before permanent writes (same integrity rules as JSON v2).
+
 ---
 
 ## 2. Import

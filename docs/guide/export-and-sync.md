@@ -12,6 +12,7 @@
 |---|---|
 | Share one run with a human (browser) | `export --format html -o report.html` |
 | Share / archive one run (re-importable) | `export --format portable -o trace.json` |
+| Large run / streaming-friendly archive | `export --format portable-dir -o ./trace-dir` |
 | Stream into log tooling | `export --format jsonl -o trace.jsonl` |
 | Hide plaintext on disk while sharing | portable + `--passphrase` / `--encrypt` |
 | Copy many runs to a folder or S3 | `sync push --dir …` / `--s3 …` |
@@ -37,7 +38,7 @@ Self-contained report: metadata, filterable timeline, tools, errors, side effect
 blackbox export <run-id> --format html -o report.html
 ```
 
-### Portable
+### Portable (JSON)
 
 JSON archive re-importable into another blackbox store. Schema: [portable-format.md](../reference/portable-format.md).
 
@@ -45,12 +46,21 @@ JSON archive re-importable into another blackbox store. Schema: [portable-format
 # Redacted (default)
 blackbox export <run-id> --format portable -o trace.json
 
-# Include blob bytes inline (larger)
-blackbox export <run-id> --format portable --inline-blobs -o trace.json
-
 # Import
 blackbox import trace.json
 ```
+
+### Portable directory (streaming-friendly)
+
+For large runs, write a directory layout instead of one giant JSON string. Blob
+files are content-addressed; import validates each hash before permanent writes.
+
+```bash
+blackbox export <run-id> --format portable-dir -o ./trace-dir
+blackbox import ./trace-dir
+```
+
+Layout: `manifest.json`, `run.json`, `events.jsonl`, `blobs/<sha256>`.
 
 `latest` and short ids work where the CLI accepts run ids.
 

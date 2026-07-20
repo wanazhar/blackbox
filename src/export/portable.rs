@@ -19,6 +19,8 @@ use crate::redaction::RedactionConfig;
 use crate::storage::TraceStore;
 
 const PORTABLE_VERSION: u64 = 2;
+/// Directory layout format (streaming-friendly). Import still accepts v1/v2 JSON files.
+const PORTABLE_DIR_FORMAT: &str = "blackbox.portable.dir/v1";
 
 /// Hard limits for untrusted portable archives (1.5 import integrity).
 const MAX_ARCHIVE_BYTES: usize = 256 * 1024 * 1024; // 256 MiB JSON text
@@ -93,6 +95,172 @@ pub async fn export_portable(
     });
 
     Ok(serde_json::to_string_pretty(&output)?)
+}
+
+/// Export a run as a **directory** archive (streaming-friendly layout).
+///
+/// Layout:
+/// ```text
+/// manifest.json     # format + version + counts
+/// run.json          # single run object
+/// events.jsonl      # one TraceEvent JSON per line (sequence order)
+/// blobs/<sha256>    # raw blob bytes (content key = filename)
+/// ```
+///
+/// Does not hold the full archive as one in-memory string. Events are written
+/// line-by-line; blobs are written one file at a time.
+pub async fn export_portable_dir(
+    store: &dyn TraceStore,
+    run: &Run,
+    events: &[TraceEvent],
+    dir: &std::path::Path,
+    redact: bool,
+) -> anyhow::Result<()> {
+    use std::io::Write;
+    std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+    let blobs_dir = dir.join("blobs");
+    std::fs::create_dir_all(&blobs_dir)?;
+
+    let mut run_val = serde_json::to_value(run)?;
+    if redact {
+        redact_run(&mut run_val);
+    }
+    std::fs::write(
+        dir.join("run.json"),
+        serde_json::to_string_pretty(&run_val)?,
+    )?;
+
+    let mut events_sorted: Vec<&TraceEvent> = events.iter().collect();
+    events_sorted.sort_by_key(|e| e.sequence);
+    let mut events_file = std::fs::File::create(dir.join("events.jsonl"))?;
+    for ev in &events_sorted {
+        let mut v = serde_json::to_value(ev)?;
+        if redact {
+            redact_event(&mut v);
+        }
+        writeln!(events_file, "{}", serde_json::to_string(&v)?)?;
+    }
+
+    let keys = collect_blob_keys(events);
+    let mut blob_count = 0usize;
+    for key in keys {
+        let Some(bref) = BlobReference::try_new(key.clone(), 0) else {
+            continue;
+        };
+        match store.load_blob(&bref).await {
+            Ok(bytes) => {
+                // Integrity: filename must match content hash.
+                let computed = content_key(&bytes);
+                if computed != key {
+                    anyhow::bail!(
+                        "export blob integrity: key {key} != content hash {computed}"
+                    );
+                }
+                std::fs::write(blobs_dir.join(&key), &bytes)?;
+                blob_count += 1;
+            }
+            Err(e) => {
+                tracing::debug!(key = %key, error = %e, "portable dir export: skip missing blob");
+            }
+        }
+    }
+
+    let manifest = serde_json::json!({
+        "format": PORTABLE_DIR_FORMAT,
+        "version": PORTABLE_VERSION,
+        "exported_at": chrono::Utc::now().to_rfc3339(),
+        "events": events_sorted.len(),
+        "blobs": blob_count,
+        "run_id": run.id,
+    });
+    std::fs::write(
+        dir.join("manifest.json"),
+        serde_json::to_string_pretty(&manifest)?,
+    )?;
+    Ok(())
+}
+
+/// Import a directory archive written by [`export_portable_dir`].
+///
+/// Validates blob hashes (filename must equal SHA-256 of file bytes), then
+/// reuses the same integrity pipeline as JSON portable import.
+pub async fn import_portable_dir(
+    store: &dyn TraceStore,
+    dir: &std::path::Path,
+    new_ids: bool,
+) -> anyhow::Result<ImportResult> {
+    let manifest: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(dir.join("manifest.json"))
+            .context("read manifest.json")?,
+    )?;
+    let format = manifest
+        .get("format")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if format != PORTABLE_DIR_FORMAT {
+        anyhow::bail!("unsupported portable directory format: {format}");
+    }
+
+    let run_val: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(dir.join("run.json")).context("read run.json")?,
+    )?;
+
+    let events_path = dir.join("events.jsonl");
+    let events_text = std::fs::read_to_string(&events_path).context("read events.jsonl")?;
+    let mut events_val = Vec::new();
+    for (i, line) in events_text.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if events_val.len() >= MAX_EVENTS {
+            anyhow::bail!("portable dir has too many events (max {MAX_EVENTS})");
+        }
+        let v: serde_json::Value = serde_json::from_str(line)
+            .with_context(|| format!("events.jsonl line {}", i + 1))?;
+        events_val.push(v);
+    }
+
+    let blobs_dir = dir.join("blobs");
+    let mut blobs = serde_json::Map::new();
+    if blobs_dir.is_dir() {
+        for entry in std::fs::read_dir(&blobs_dir)? {
+            let entry = entry?;
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !is_valid_blob_key(&name) {
+                anyhow::bail!("invalid blob filename (expected sha256 hex): {name}");
+            }
+            let bytes = std::fs::read(entry.path())?;
+            if bytes.len() > MAX_SINGLE_BLOB_BYTES {
+                anyhow::bail!("blob {name} too large");
+            }
+            let computed = content_key(&bytes);
+            if computed != name {
+                anyhow::bail!(
+                    "blob hash mismatch: file {name} content SHA-256 is {computed}"
+                );
+            }
+            let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+            blobs.insert(
+                name,
+                serde_json::json!({
+                    "encoding": "base64",
+                    "size": bytes.len(),
+                    "data": b64,
+                }),
+            );
+        }
+    }
+
+    let root = serde_json::json!({
+        "version": PORTABLE_VERSION,
+        "run": run_val,
+        "events": events_val,
+        "blobs": blobs,
+        "exported_at": manifest.get("exported_at").cloned().unwrap_or(serde_json::Value::Null),
+    });
+    let json = serde_json::to_string(&root)?;
+    import_portable(store, &json, new_ids).await
 }
 
 /// Result of importing a portable archive.
@@ -619,6 +787,40 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(data, b"payload-bytes");
+    }
+
+    #[tokio::test]
+    async fn portable_dir_round_trip() {
+        let store = Arc::new(SqliteStore::open_memory().unwrap());
+        let run = make_run();
+        store.insert_run(&run).await.unwrap();
+        let blob = store.store_blob(b"dir-payload").await.unwrap();
+        let mut ev = make_event(1);
+        ev.output_blob = Some(blob.key.clone());
+        store.insert_event(&ev).await.unwrap();
+        let events = store.get_events(&run.id).await.unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        export_portable_dir(store.as_ref(), &run, &events, dir.path(), false)
+            .await
+            .unwrap();
+        assert!(dir.path().join("manifest.json").is_file());
+        assert!(dir.path().join("events.jsonl").is_file());
+        assert!(dir.path().join("blobs").join(&blob.key).is_file());
+
+        let store2 = Arc::new(SqliteStore::open_memory().unwrap());
+        let result = import_portable_dir(store2.as_ref(), dir.path(), true)
+            .await
+            .unwrap();
+        assert_eq!(result.events, 1);
+        assert_eq!(result.blobs, 1);
+        let imported = store2.get_events(&result.run_id).await.unwrap();
+        let key = imported[0].output_blob.as_ref().unwrap();
+        let data = store2
+            .load_blob(&BlobReference::try_new(key.clone(), 0).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(data, b"dir-payload");
     }
 
     #[tokio::test]

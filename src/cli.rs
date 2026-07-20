@@ -734,6 +734,9 @@ pub enum ExportFormat {
     Html,
     /// Portable archive with all blobs
     Portable,
+    /// Directory layout (streaming-friendly; requires --output)
+    #[value(name = "portable-dir")]
+    PortableDir,
 }
 
 #[derive(Args)]
@@ -745,7 +748,10 @@ pub struct ExportArgs {
     #[arg(long, default_value = "jsonl")]
     pub format: ExportFormat,
 
-    // TODO(L-20): add --output / -o flag to write to a file instead of stdout
+    /// Write to file (or directory for `--format portable-dir`) instead of stdout
+    #[arg(short = 'o', long = "output")]
+    pub output: Option<String>,
+
     /// Include secrets (disable redaction). Default is redacted.
     #[arg(long)]
     pub no_redact: bool,
@@ -761,7 +767,7 @@ pub struct ExportArgs {
 
 #[derive(Args)]
 pub struct ImportArgs {
-    /// Path to portable JSON file, or "-" for stdin
+    /// Path to portable JSON file, directory archive, or "-" for stdin
     pub path: String,
 
     /// Keep original ids (fails if run already exists). Default: assign new ids.
@@ -789,6 +795,12 @@ pub struct ReplayArgs {
     /// shell interpreters blocked unless --live. Not deterministic LLM replay.
     #[arg(long = "workspace", alias = "sandbox")]
     pub workspace: bool,
+
+    /// Linux contained re-execution via bubblewrap when available.
+    /// Best-effort namespaces (network unshare + restricted binds). Fails closed
+    /// if `bwrap` is missing. Mutually exclusive with --mock-tools and --live.
+    #[arg(long)]
+    pub contained: bool,
 
     /// Live re-execution against the current environment (dangerous).
     /// Guarantee: may change files, network, and external systems. Requires explicit opt-in.
@@ -2385,6 +2397,7 @@ async fn cmd_diff(cli: &Cli, args: &DiffArgs) -> anyhow::Result<()> {
 
 async fn cmd_export(cli: &Cli, args: &ExportArgs) -> anyhow::Result<()> {
     use crate::export::export_run;
+    use crate::export::portable::export_portable_dir;
 
     let redact = !args.no_redact;
     let want_seal = args.encrypt || args.passphrase.is_some();
@@ -2400,10 +2413,35 @@ async fn cmd_export(cli: &Cli, args: &ExportArgs) -> anyhow::Result<()> {
 
     let events = store.get_events(&run_id).await?;
 
+    if matches!(args.format, ExportFormat::PortableDir) {
+        if want_seal {
+            anyhow::bail!("--encrypt / --passphrase not supported with --format portable-dir");
+        }
+        let out = args.output.as_deref().ok_or_else(|| {
+            anyhow::anyhow!("--format portable-dir requires -o/--output <directory>")
+        })?;
+        let dir = std::path::Path::new(out);
+        export_portable_dir(&store, &run, &events, dir, redact).await?;
+        if cli.json {
+            return output::emit_ok(
+                "export",
+                &serde_json::json!({
+                    "run_id": run.id,
+                    "format": "portable.dir/v1",
+                    "path": out,
+                    "redacted": redact,
+                }),
+            );
+        }
+        println!("exported portable directory to {}", dir.display());
+        return Ok(());
+    }
+
     let format_str = match args.format {
         ExportFormat::Jsonl => "jsonl",
         ExportFormat::Html => "html",
         ExportFormat::Portable => "portable",
+        ExportFormat::PortableDir => unreachable!("handled above"),
     };
 
     if want_seal && format_str != "portable" {
@@ -2439,13 +2477,58 @@ async fn cmd_export(cli: &Cli, args: &ExportArgs) -> anyhow::Result<()> {
             store_crypto.as_ref(),
         )?;
     }
+    if let Some(path) = args.output.as_deref() {
+        std::fs::write(path, &output)
+            .map_err(|e| anyhow::anyhow!("write {}: {e}", path))?;
+        if cli.json {
+            return output::emit_ok(
+                "export",
+                &serde_json::json!({
+                    "run_id": run.id,
+                    "format": format_str,
+                    "path": path,
+                    "redacted": redact,
+                    "bytes": output.len(),
+                }),
+            );
+        }
+        eprintln!("wrote {} ({} bytes)", path, output.len());
+        return Ok(());
+    }
     print!("{}", output);
 
     Ok(())
 }
 
 async fn cmd_import(cli: &Cli, args: &ImportArgs) -> anyhow::Result<()> {
-    use crate::export::portable::import_portable;
+    use crate::export::portable::{import_portable, import_portable_dir};
+
+    // Directory layout (streaming portable) — import before reading as a single file.
+    let path_obj = std::path::Path::new(&args.path);
+    if args.path != "-" && path_obj.is_dir() {
+        let store = open_store(cli)?;
+        let result = import_portable_dir(&store, path_obj, !args.keep_ids).await?;
+        if cli.json {
+            return output::emit_ok(
+                "import",
+                &serde_json::json!({
+                    "run_id": result.run_id,
+                    "events": result.events,
+                    "blobs": result.blobs,
+                    "remapped": result.remapped,
+                    "format": "portable.dir/v1",
+                }),
+            );
+        }
+        println!(
+            "imported run {} ({} events, {} blobs{})",
+            crate::util::short_id(&result.run_id),
+            result.events,
+            result.blobs,
+            if result.remapped { ", remapped ids" } else { "" }
+        );
+        return Ok(());
+    }
 
     let mut json = if args.path == "-" {
         use std::io::Read;
@@ -2574,16 +2657,18 @@ async fn cmd_sync(cli: &Cli, args: &SyncArgs) -> anyhow::Result<()> {
 
 async fn cmd_replay(cli: &Cli, args: &ReplayArgs) -> anyhow::Result<()> {
     // Validate mutually exclusive replay mode flags.
-    let mode_count = args.mock_tools as u8 + args.workspace as u8 + args.live as u8;
+    // --contained implies workspace-style re-execution with bwrap when available.
+    let mode_count =
+        args.mock_tools as u8 + args.workspace as u8 + args.contained as u8 + args.live as u8;
     if mode_count > 1 {
         anyhow::bail!(
-            "conflicting replay flags: --mock-tools, --workspace/--sandbox, and --live are mutually exclusive"
+            "conflicting replay flags: --mock-tools, --workspace/--sandbox, --contained, and --live are mutually exclusive"
         );
     }
 
     use crate::core::command::CommandMetadata;
     use crate::replay::mock::MockReplay;
-    use crate::replay::sandbox::SandboxReplay;
+    use crate::replay::sandbox::{probe_contained_backend, SandboxReplay};
     use crate::replay::timeline::TimelineReplay;
     use crate::replay::ReplayEngine;
 
@@ -2605,6 +2690,8 @@ async fn cmd_replay(cli: &Cli, args: &ReplayArgs) -> anyhow::Result<()> {
     // Preflight: honest guarantees before any execution.
     let mode_name = if args.live {
         "Live re-execution"
+    } else if args.contained {
+        "Contained re-execution"
     } else if args.workspace {
         "Workspace re-execution"
     } else if args.mock_tools {
@@ -2666,6 +2753,22 @@ async fn cmd_replay(cli: &Cli, args: &ReplayArgs) -> anyhow::Result<()> {
                 println!("shell cmds: blocked under workspace policy ({shell_cmds} detected)");
                 println!("note:       not deterministic LLM replay");
             }
+            "Contained re-execution" => {
+                let probe = probe_contained_backend();
+                println!("executes:   yes — allowed local commands under bwrap when available");
+                println!("filesystem: temporary workspace (seeded/best-effort git restore)");
+                if probe.available {
+                    println!("isolation:  best-effort namespaces (bwrap unshare-net + binds)");
+                    println!("backend:    {}", probe.reason);
+                } else {
+                    println!("isolation:  UNAVAILABLE — will fail closed");
+                    println!("backend:    {}", probe.reason);
+                }
+                println!("destructive:blocked by default (policy)");
+                println!("lossy argv: blocked ({lossy_cmds} lossy / {executable_cmds} exact-or-inferred)");
+                println!("shell cmds: blocked under workspace policy ({shell_cmds} detected)");
+                println!("note:       not multi-tenant hardened; not deterministic LLM replay");
+            }
             "Live re-execution" => {
                 println!("executes:   yes — against the CURRENT environment");
                 println!("filesystem: MAY CHANGE");
@@ -2681,7 +2784,7 @@ async fn cmd_replay(cli: &Cli, args: &ReplayArgs) -> anyhow::Result<()> {
 
     let mut engine: Box<dyn ReplayEngine> = if args.mock_tools {
         Box::new(MockReplay)
-    } else if args.workspace || args.live {
+    } else if args.workspace || args.contained || args.live {
         let policy = if args.live {
             crate::replay::ReplayPolicy::Live
         } else {
@@ -2710,7 +2813,8 @@ async fn cmd_replay(cli: &Cli, args: &ReplayArgs) -> anyhow::Result<()> {
             SandboxReplay::new()
                 .with_policy(policy)
                 .with_git_commit(git_commit)
-                .with_git_diff(git_diff),
+                .with_git_diff(git_diff)
+                .with_contained(args.contained),
         )
     } else {
         Box::new(TimelineReplay)

@@ -81,7 +81,8 @@ mkdocs serve                           # http://127.0.0.1:8000 only on your mach
 | [internals/capture-pipeline.md](internals/capture-pipeline.md) | Layers, PTY, adapters |
 | [internals/storage.md](internals/storage.md) | SQLite, blobs, FTS5, GC |
 | [internals/continuity-plane.md](internals/continuity-plane.md) | State, memory, claims, gates |
-| [WRITING.md](WRITING.md) | How we write docs |
+| [WRITING.md](WRITING.md) | How we write docs (incl. 1.5 rewrite standard) |
+| [inventory.md](inventory.md) | Machine-readable page inventory (`inventory.json`) |
 
 ---
 

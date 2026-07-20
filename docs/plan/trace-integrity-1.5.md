@@ -127,12 +127,21 @@ Full acceptance criteria: [issue #3 comments](https://github.com/wanazhar/blackb
 - [x] Gate: `tests/native_log_rotation.rs`
 - [x] Gate: `tests/dashboard_auth.rs`
 
+### Supervisor decomposition (U1)
+
+- [x] `RunStage` / `ShutdownReason` lifecycle types
+- [x] `supervisor::rollup` — coverage recomputable without PTY
+- [x] `supervisor::checkpoint` — end checkpoint + workspace manifest builder
+- [x] `run.rs` orchestrates stages; PTY pump remains in run for now
+- [ ] Full PtyPump / EventIngestor / ShutdownCoordinator extraction (follow-up)
+
 ### Phase E — Documentation rewrite + release
 
-- [ ] Machine-readable docs inventory
+- [x] Machine-readable docs inventory (`docs/inventory.json` + `docs/inventory.md`)
+- [x] WRITING.md 1.5 rewrite standard
 - [ ] Consolidate operator navigation; archive completed plans from primary nav
 - [ ] Claim matrix; executable examples; symptom-first troubleshooting
-- [ ] Docs CI extensions
+- [ ] Docs CI extensions (duplicate/command gates)
 - [ ] Human editorial pass; release notes without marketing copy
 - [ ] Cargo **1.5.0** + qualify + tag
 

@@ -106,6 +106,45 @@ Design-doc IDs (A1, M6, …) belong in roadmap/plan docs, not in operator guides
 
 ---
 
+## 1.5 rewrite standard (Trace Integrity)
+
+Full inventory: [inventory.md](inventory.md) / [inventory.json](inventory.json).
+
+### Required
+
+- Answer first; commands before explanation when the task is command-driven
+- One idea per paragraph; concrete nouns and verbs
+- Short, task-named headings (sentence case)
+- Limitations stated where they apply
+- Product terminology only when it maps to a CLI/schema concept
+- Direct statements (“Blackbox records…”) over untestable adjectives
+
+### Remove or sharply limit
+
+- Boilerplate “why this matters” / “target experience” sections
+- Repeated slogans: trustworthy, honest, seamless, powerful, robust, best-in-class, indispensable, daily driver, agent-native, comprehensive (unless defining a gate)
+- Repeated “not X, but Y” rhetoric
+- Marketing claims without a testable definition
+- Self-congratulation about shipped milestones in evergreen guides
+- Decorative bolding and emoji
+- Long invented walkthroughs not produced by fixtures
+- Headings beginning with “Answers:”
+
+### Claim classes
+
+When documenting guarantees, classify as: `code-backed` · `test-backed` · `platform-dependent` · `best-effort` · `planned` · `historical`. Planned features must not read as shipped.
+
+### Human review method
+
+1. State the user task in one sentence.
+2. Delete text that does not help complete it.
+3. Merge duplicated explanation into the canonical page.
+4. Verify commands and claims.
+5. Rewrite only remaining necessary prose.
+6. Read the rendered page for rhythm and navigation.
+
+---
+
 ## Checklist before merging doc changes
 
 - [ ] Can a skilled stranger answer “what do I run?” from the page alone?
@@ -114,6 +153,8 @@ Design-doc IDs (A1, M6, …) belong in roadmap/plan docs, not in operator guides
 - [ ] Do links go to the right track (guide vs reference vs internals)?
 - [ ] Did we avoid inventing behavior that only exists in a plan doc?
 - [ ] Spelling of product terms matches this glossary?
+- [ ] Prose avoids slogan loops and “Answers:” framing (1.5 rewrite standard)
+- [ ] Inventory status still accurate for new/moved pages (`docs/inventory.json`)
 - [ ] `python3 scripts/check_doc_links.py` passes (files + heading anchors)
 - [ ] Getting-started contract still green: `cargo test --test docs_first_run`
 - [ ] Envelope / examples jq paths: `cargo test --test docs_cli_envelope`

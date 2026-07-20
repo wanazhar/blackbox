@@ -100,10 +100,11 @@ Full acceptance criteria: [issue #3 comments](https://github.com/wanazhar/blackb
 
 - [x] Rename workspace-only mode; do not claim kernel isolation (`--workspace`, capability report)
 - [x] Path-safe transactional patch restore (stage + promote; no `--unsafe-paths`)
-- [ ] Workspace manifest + completeness report
+- [x] Workspace manifest + completeness report (`workspace_manifest` + end checkpoint blob)
 - [ ] Optional Linux contained backend (bubblewrap/namespaces) + capability preflight
 - [x] Gate: `tests/patch_path_safety.rs`
-- [ ] Gates: `tests/workspace_checkpoint.rs`, `tests/replay_containment_linux.rs`
+- [x] Gate: `tests/workspace_checkpoint.rs`
+- [ ] Gate: `tests/replay_containment_linux.rs`
 
 ### Phase C — Durable storage / imports
 

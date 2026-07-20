@@ -68,6 +68,8 @@ AnalysisPass   Export/Import    Serve/SSE      UI / CLI
 | `src/search.rs` | FTS search | Search runner |
 | `src/scrub.rs` | Re-redaction + GC | Scrub + blob GC |
 | `src/aggregates.rs` | Incremental run aggregates + analysis scope (1.5) | `RunAggregates`, `AnalysisScope` |
+| `src/workspace_manifest.rs` | Workspace checkpoint manifests + restore (1.5) | `WorkspaceManifest`, `RestoreReport` |
+| `src/pipeline/batch_ingest.rs` | Bounded batch SQLite writer (1.5) | `BatchIngestor` |
 | `src/summary.rs` | Run summary builder | `build_summary` |
 | `src/transcript.rs` | Transcript rebuild | Transcript from store |
 | `src/views.rs` | JSON view types | All `*View` structs for `--json` |
@@ -177,6 +179,7 @@ Operator-facing notes for shipped harnesses: [docs/guide/adapters.md](docs/guide
 | `tests/portable_import_atomicity.rs` | 1.5 A1: hash validation, rollback, nested redaction |
 | `tests/patch_path_safety.rs` | 1.5 R1: absolute/traversal patch rejection; honest capabilities |
 | `tests/storage_batch_faults.rs` | 1.5 S1: batch barriers, flush/shutdown durability, backpressure |
+| `tests/workspace_checkpoint.rs` | 1.5 W1: binary/untracked restore + completeness report |
 
 ## Docs map
 

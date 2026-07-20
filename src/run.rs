@@ -1205,6 +1205,32 @@ impl RunSupervisor {
         end_checkpoint.git_commit = git_capture.after_commit_hash().map(str::to_string);
         end_checkpoint.git_diff_blob = git_capture.after_diff_blob_key().map(str::to_string);
         end_checkpoint.harness_session_id = session_id.clone();
+        // 1.5 W1: versioned workspace manifest (binary/untracked-capable).
+        match crate::workspace_manifest::capture_workspace_manifest(
+            std::path::Path::new(&run.cwd),
+            Some(self.store.as_ref()),
+            crate::workspace_manifest::ManifestLimits::default(),
+        )
+        .await
+        {
+            Ok(manifest) => match manifest.to_json() {
+                Ok(json) => match self.store.store_blob(json.as_bytes()).await {
+                    Ok(bref) => {
+                        end_checkpoint.filesystem_manifest_blob = Some(bref.key);
+                        if !manifest.capture_complete {
+                            tracing::info!(
+                                limitations = ?manifest.limitations,
+                                files = manifest.files_total,
+                                "workspace manifest captured with limitations"
+                            );
+                        }
+                    }
+                    Err(e) => tracing::warn!(error = %e, "failed to store workspace manifest blob"),
+                },
+                Err(e) => tracing::warn!(error = %e, "failed to serialize workspace manifest"),
+            },
+            Err(e) => tracing::warn!(error = %e, "workspace manifest capture failed"),
+        }
         self.store
             .insert_checkpoint(&end_checkpoint)
             .await

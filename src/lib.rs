@@ -39,3 +39,4 @@ pub mod transcript;
 pub mod ui;
 pub mod util;
 pub mod views;
+pub mod workspace_manifest;

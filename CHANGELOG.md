@@ -33,6 +33,12 @@ Plan: [docs/plan/trace-integrity-1.5.md](docs/plan/trace-integrity-1.5.md). Epic
 - No silent queue drops — full queue applies backpressure; health exposes queue high-water and write failures
 - `capture.coverage` writer_health / backpressure includes batch counters
 
+#### Workspace checkpoint completeness (W1)
+- Versioned `WorkspaceManifest` with content hashes, modes, symlinks, and capture limits
+- End-of-run checkpoint stores `filesystem_manifest_blob` when capture succeeds
+- Restore returns completeness report (expected/restored/missing/skipped/limitations)
+- Binary and untracked files restore when fully captured; large/excluded paths listed
+
 ## [1.4.0] — 2026-07-19
 
 **Trust Proof (Unix)** — recorder mode can stay on without silently changing the child or overstating causality; secrets are holdback-redacted before persist; coverage and postmortem claims stay weaker than or equal to evidence.

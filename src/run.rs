@@ -932,7 +932,7 @@ impl RunSupervisor {
         // Barrier kind: write waits for durable flush.
         let end_ev = writer.write(end_ev).await?;
 
-        // Single end-of-run event load (coverage + session + usage). Cap for RAM.
+        // ── Rollup stage (recomputable via supervisor::rollup) ─────
         const END_OF_RUN_EVENT_CAP: usize = 8_000;
         let (all_events, events_truncated) = match self
             .store
@@ -952,243 +952,24 @@ impl RunSupervisor {
             );
         }
 
-        // ── Capture coverage report (honest surface status + lag) ────
-        let pty_events = all_events
-            .iter()
-            .filter(|e| e.source == EventSource::Terminal)
-            .count() as u64;
-        let process_events = all_events
-            .iter()
-            .filter(|e| e.source == EventSource::Process)
-            .count() as u64;
-        let git_events = all_events
-            .iter()
-            .filter(|e| e.source == EventSource::Git)
-            .count() as u64;
-        let fs_events = all_events
-            .iter()
-            .filter(|e| e.source == EventSource::Filesystem)
-            .count() as u64;
-        let env_events = all_events
-            .iter()
-            .filter(|e| e.kind == "environment.captured")
-            .count() as u64;
-        let native_log_events = all_events
-            .iter()
-            .filter(|e| {
-                e.metadata.contains_key("native_log")
-                    || e.kind.starts_with("native.")
-                    || e.metadata
-                        .get("source")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.contains("native"))
-                        .unwrap_or(false)
-            })
-            .count() as u64;
-        // Prefer structured capture.layer.failed signals; fall back to Error status.
-        let structured_fails = crate::capture::health::failed_layers_from_events(&all_events);
-        let layer_failed = |name: &str| structured_fails.iter().any(|(l, _)| l == name);
-        let layer_err_src = |src: EventSource| {
-            all_events.iter().any(|e| {
-                e.source == src
-                    && (e.status == EventStatus::Error
-                        || e.kind.contains("failed")
-                        || e.kind.contains("error"))
-            })
-        };
-        // Process tree is available on all platforms (Linux /proc or sysinfo backend).
-        let process_tree_available = true;
         let health = writer.health_snapshot();
         let (merge_lag, merge_send_fail) = merge_stats.snapshot();
-        let mut capture_lag_note = health.soft_warning();
-        if merge_lag > 0 || merge_send_fail > 0 {
-            let merge_msg =
-                format!("capture merge lag samples={merge_lag} send_failures={merge_send_fail}");
-            capture_lag_note = Some(match capture_lag_note {
-                Some(w) => format!("{w}; {merge_msg}"),
-                None => merge_msg,
-            });
-        }
-
-        let tool_call_count = all_events.iter().filter(|e| e.kind == "tool.call").count() as u64;
-        // Adapter id may not be on run yet; notes / argv detection.
-        let adapter_guess = run
-            .adapter
-            .clone()
-            .or_else(|| {
-                run.notes.as_deref().and_then(|n| {
-                    n.split(';')
-                        .find_map(|p| p.trim().strip_prefix("adapter:"))
-                        .map(|s| s.to_string())
-                })
-            })
-            .or_else(|| {
-                Some(
-                    crate::adapters::detect::detect_adapter(&run.command)
-                        .id()
-                        .to_string(),
-                )
-            });
-        let duration_ms = run
-            .duration_ms
-            .or_else(|| {
-                run.ended_at
-                    .zip(Some(run.started_at))
-                    .map(|(e, s)| (e - s).num_milliseconds().max(0) as u64)
-            })
-            .or_else(|| {
-                // Not finished yet at this point in some paths — use wall clock
-                Some(
-                    (chrono::Utc::now() - run.started_at)
-                        .num_milliseconds()
-                        .max(0) as u64,
-                )
-            });
-
-        let git_not_a_repo = all_events.iter().any(|e| e.kind == "git.not_a_repo");
-        let process_observer_started = all_events
-            .iter()
-            .any(|e| e.kind == "process.observer.started");
-        let process_root_spawned = all_events.iter().any(|e| e.kind == "process.spawned");
-        let process_tree_snapshot = all_events.iter().any(|e| e.kind == "process.tree.snapshot");
-        let process_observer_stopped = all_events
-            .iter()
-            .any(|e| e.kind == "process.observer.stopped");
-        let process_backend = all_events
-            .iter()
-            .find(|e| e.kind == "process.observer.started")
-            .and_then(|e| {
-                e.metadata
-                    .get("process_tree_backend")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-            });
-        // Native logs: generic / adapters without locate roots → not_applicable.
-        // Scope off → disabled. Known structured harness with 0 logs → unavailable.
-        let native_logs_disabled = matches!(
-            self.policy.native_log_scope,
-            crate::config::NativeLogScope::Off
-        );
-        let native_logs_not_applicable = !native_logs_disabled
-            && adapter_guess
-                .as_deref()
-                .map(|id| id.eq_ignore_ascii_case("generic"))
-                .unwrap_or(false);
-
-        let coverage = crate::capture::coverage::CaptureCoverage::from_run_signals(
-            crate::capture::coverage::RunCoverageSignals {
-                pty_events,
-                process_events,
-                git_events,
-                fs_events,
-                env_events,
-                process_tree_available,
-                native_log_events: Some(native_log_events),
-                process_failed: layer_failed("process") || layer_err_src(EventSource::Process),
-                pty_failed: layer_failed("pty") || layer_err_src(EventSource::Terminal),
-                git_failed: layer_failed("git") || layer_err_src(EventSource::Git),
-                fs_failed: layer_failed("filesystem") || layer_err_src(EventSource::Filesystem),
-                capture_lag_note: capture_lag_note.clone(),
-                tool_call_count,
-                adapter_id: adapter_guess.clone(),
-                duration_ms,
-                total_events_window: all_events.len() as u64,
-                git_not_a_repo,
-                native_logs_not_applicable,
-                native_logs_disabled,
-                process_observer_started,
-                process_root_spawned,
-                process_tree_snapshot,
-                process_observer_stopped,
-                process_backend,
-            },
-        );
-        let mut cov_ev = TraceEvent::new(&run.id, EventSource::System, "capture.coverage");
-        cov_ev.status = EventStatus::Success;
-        cov_ev.metadata.insert(
-            "coverage".to_string(),
-            serde_json::to_value(&coverage).unwrap_or_default(),
-        );
-        cov_ev.metadata.insert(
-            "total_events".to_string(),
-            serde_json::json!(coverage.total_events),
-        );
-        let mut writer_health = serde_json::json!({
-            "events_written": health.events_written,
-            "events_deduped": health.events_deduped,
-            "slow_writes": health.slow_writes,
-            "max_write_ms": health.max_write_ms,
-            "batched": health.batch.is_some(),
+        let rollup = crate::supervisor::build_coverage_events(crate::supervisor::RollupInputs {
+            run,
+            events: &all_events,
+            writer_health: health,
+            merge_lag,
+            merge_send_failures: merge_send_fail,
+            native_log_scope: self.policy.native_log_scope,
         });
-        if let Some(ref b) = health.batch {
-            writer_health["batch"] = serde_json::json!({
-                "events_enqueued": b.events_enqueued,
-                "events_flushed": b.events_flushed,
-                "batches": b.batches,
-                "barriers": b.barriers,
-                "max_batch_size": b.max_batch_size,
-                "max_flush_ms": b.max_flush_ms,
-                "queue_high_water": b.queue_high_water,
-                "write_failures": b.write_failures,
-                "pending": b.pending,
-            });
-        }
-        cov_ev.metadata.insert(
-            "writer_health".to_string(),
-            writer_health,
-        );
-        // Explicit backpressure honesty (1.4 Phase D): lag samples ≠ drops.
-        let mut bp = serde_json::json!({
-            "merge_lag_samples": merge_lag,
-            "merge_send_failures": merge_send_fail,
-            "policy": "no_silent_drops_on_merge; lag samples count blocked sends ≥50ms; batch queue applies backpressure",
-        });
-        if let Some(ref b) = health.batch {
-            bp["batch_queue_high_water"] = serde_json::json!(b.queue_high_water);
-            bp["batch_write_failures"] = serde_json::json!(b.write_failures);
-        }
-        cov_ev.metadata.insert("backpressure".to_string(), bp);
-        if let Some(ref a) = adapter_guess {
-            cov_ev
-                .metadata
-                .insert("adapter".into(), serde_json::json!(a));
-        }
-        cov_ev
-            .metadata
-            .insert("tool_call_count".into(), serde_json::json!(tool_call_count));
-        let _ = writer.write(cov_ev).await;
-
-        // Adapter drought → first-class capture.warning (doctor / fail path surface it)
-        if let Some(msg) = crate::capture::coverage::adapter_tool_drought(
-            &crate::capture::coverage::RunCoverageSignals {
-                tool_call_count,
-                adapter_id: adapter_guess,
-                duration_ms,
-                total_events_window: all_events.len() as u64,
-                ..Default::default()
-            },
-        ) {
-            let mut warn = TraceEvent::new(&run.id, EventSource::System, "capture.warning");
-            warn.status = EventStatus::Error;
-            warn.metadata
-                .insert("warning".into(), serde_json::json!("adapter_drought"));
-            warn.metadata
-                .insert("message".into(), serde_json::json!(msg));
+        let _ = writer.write(rollup.coverage_event).await;
+        for warn in rollup.warning_events {
+            if warn.metadata.get("kind").and_then(|v| v.as_str()) == Some("capture_lag") {
+                if let Some(lag) = warn.metadata.get("message").and_then(|v| v.as_str()) {
+                    eprintln!("warning: {lag}");
+                }
+            }
             let _ = writer.write(warn).await;
-        }
-
-        if let Some(ref lag) = capture_lag_note {
-            let mut warn = TraceEvent::new(&run.id, EventSource::System, "capture.warning");
-            warn.status = EventStatus::Error;
-            warn.metadata
-                .insert("kind".into(), serde_json::json!("capture_lag"));
-            warn.metadata
-                .insert("message".into(), serde_json::json!(lag));
-            let _ = writer.write(warn).await;
-            // Timeline marker for when lag was observed (end-of-run summary).
-            let lag_ev = crate::capture::health::layer_lag(&run.id, "merge", lag);
-            let _ = writer.write(lag_ev).await;
-            eprintln!("warning: {lag}");
         }
         // Final durable barrier: stop batch worker after last end-of-run events.
         if let Err(e) = writer.shutdown().await {
@@ -1199,38 +980,20 @@ impl RunSupervisor {
             tracing::info!(session_id = %sid, "discovered harness session");
         }
 
-        // End checkpoint uses AFTER state (not before)
-        let mut end_checkpoint = Checkpoint::new(&run.id, &end_ev.id, &run.cwd);
-        end_checkpoint.environment_blob = Some(env_blob.key);
-        end_checkpoint.git_commit = git_capture.after_commit_hash().map(str::to_string);
-        end_checkpoint.git_diff_blob = git_capture.after_diff_blob_key().map(str::to_string);
-        end_checkpoint.harness_session_id = session_id.clone();
-        // 1.5 W1: versioned workspace manifest (binary/untracked-capable).
-        match crate::workspace_manifest::capture_workspace_manifest(
-            std::path::Path::new(&run.cwd),
-            Some(self.store.as_ref()),
-            crate::workspace_manifest::ManifestLimits::default(),
-        )
-        .await
-        {
-            Ok(manifest) => match manifest.to_json() {
-                Ok(json) => match self.store.store_blob(json.as_bytes()).await {
-                    Ok(bref) => {
-                        end_checkpoint.filesystem_manifest_blob = Some(bref.key);
-                        if !manifest.capture_complete {
-                            tracing::info!(
-                                limitations = ?manifest.limitations,
-                                files = manifest.files_total,
-                                "workspace manifest captured with limitations"
-                            );
-                        }
-                    }
-                    Err(e) => tracing::warn!(error = %e, "failed to store workspace manifest blob"),
-                },
-                Err(e) => tracing::warn!(error = %e, "failed to serialize workspace manifest"),
+        // ── Checkpoint stage ───────────────────────────────────────
+        let end_checkpoint = crate::supervisor::build_end_checkpoint(
+            self.store.as_ref(),
+            crate::supervisor::CheckpointInputs {
+                run,
+                end_event_id: &end_ev.id,
+                environment_blob_key: Some(env_blob.key),
+                git_commit: git_capture.after_commit_hash().map(str::to_string),
+                git_diff_blob: git_capture.after_diff_blob_key().map(str::to_string),
+                harness_session_id: session_id.clone(),
+                capture_workspace: true,
             },
-            Err(e) => tracing::warn!(error = %e, "workspace manifest capture failed"),
-        }
+        )
+        .await;
         self.store
             .insert_checkpoint(&end_checkpoint)
             .await

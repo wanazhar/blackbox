@@ -31,6 +31,7 @@ pub mod shell_install;
 pub mod state;
 pub mod status;
 pub mod storage;
+pub mod supervisor;
 pub mod summary;
 pub mod sync;
 pub mod terminal;

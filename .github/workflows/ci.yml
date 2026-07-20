@@ -94,7 +94,7 @@ jobs:
   qualify:
     name: release-qualify-unix (quick)
     runs-on: ubuntu-latest
-    needs: test
+    needs: [test, macos]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

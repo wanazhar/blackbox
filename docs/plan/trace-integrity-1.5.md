@@ -122,7 +122,7 @@ Full acceptance criteria: [issue #3 comments](https://github.com/wanazhar/blackb
 - [x] Bounded FS watcher + shared ignore policy + symlink scope (C1)
 - [x] Native-log rotation / identity tracking + backlog honesty
 - [x] Dashboard session auth + bearer API + optional UDS (`--unix-socket`)
-- [ ] macOS runtime PR/pre-release gate
+- [x] macOS runtime PR gate (`.github/workflows/ci.yml` job `macos`)
 - [x] Gate: `tests/filesystem_escape.rs`
 - [x] Gate: `tests/native_log_rotation.rs`
 - [x] Gate: `tests/dashboard_auth.rs`

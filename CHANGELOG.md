@@ -70,6 +70,11 @@ Plan: [docs/plan/trace-integrity-1.5.md](docs/plan/trace-integrity-1.5.md). Epic
 - CLI `runs` uses paged listing when limited
 - Optional zlib blob compression before encryption (BBZC); content key remains plaintext SHA-256
 
+#### Qualification + supervisor (Q1 / U1)
+- PR CI: lightweight **macOS runtime gate** (lib + trust/integrity subset + clippy)
+- Ubuntu CI names 1.5 integrity suites; `release-qualify-unix.sh` includes them + host metadata
+- `supervisor::{lifecycle,rollup,checkpoint}` — rollup recomputable without PTY; end checkpoint builder
+
 ## [1.4.0] — 2026-07-19
 
 **Trust Proof (Unix)** — recorder mode can stay on without silently changing the child or overstating causality; secrets are holdback-redacted before persist; coverage and postmortem claims stay weaker than or equal to evidence.

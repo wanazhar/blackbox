@@ -111,6 +111,18 @@ if [ "$QUICK" -eq 1 ]; then
   run_gate "trust: process_spawn_storm" cargo test --test process_spawn_storm -- --quiet || true
   run_gate "trust: fault_recovery" cargo test --test fault_recovery -- --quiet || true
   run_gate "trust: overhead_smoke" cargo test --test overhead_smoke -- --quiet || true
+  # 1.5 integrity subset
+  run_gate "1.5: long_run_integrity" cargo test --test long_run_integrity -- --quiet || true
+  run_gate "1.5: tool_dedup" cargo test --test tool_dedup -- --quiet || true
+  run_gate "1.5: portable_import" cargo test --test portable_import_atomicity -- --quiet || true
+  run_gate "1.5: patch_path_safety" cargo test --test patch_path_safety -- --quiet || true
+  run_gate "1.5: storage_batch" cargo test --test storage_batch_faults -- --quiet || true
+  run_gate "1.5: workspace_checkpoint" cargo test --test workspace_checkpoint -- --quiet || true
+  run_gate "1.5: event_ordering" cargo test --test event_ordering -- --quiet || true
+  run_gate "1.5: filesystem_escape" cargo test --test filesystem_escape -- --quiet || true
+  run_gate "1.5: native_log_rotation" cargo test --test native_log_rotation -- --quiet || true
+  run_gate "1.5: dashboard_auth" cargo test --test dashboard_auth -- --quiet || true
+  run_gate "1.5: pagination_scale" cargo test --test pagination_scale -- --quiet || true
 else
   run_gate "cargo test --all-targets" cargo test --all-targets -- --quiet || true
   run_gate "docs first-run + envelope" \
@@ -170,10 +182,32 @@ fi
   echo "| Phase D | PTY fidelity, spawn storm, fault recovery |"
   echo "| Q1 | This script |"
   echo
+  echo "## 1.5 Integrity bars"
+  echo
+  echo "| Id | Bar |"
+  echo "|---|---|"
+  echo "| L1/L2 | Long-run aggregates + analysis_scope |"
+  echo "| D1 | Safe tool dedupe |"
+  echo "| A1 | Portable import integrity |"
+  echo "| R1/W1 | Workspace replay + manifests |"
+  echo "| S1 | Batched ingest |"
+  echo "| O1 | Event clocks / ordering |"
+  echo "| C1 | FS / native-log bounds |"
+  echo "| H1 | Dashboard session auth |"
+  echo "| P1 | Cursor pagination + blob compression |"
+  echo "| Q1 | Linux full + macOS PR runtime gate |"
+  echo
+  echo "## Host"
+  echo
+  echo "- commit: \`$(git rev-parse HEAD 2>/dev/null || echo unknown)\`"
+  echo "- rustc: \`$(rustc --version 2>/dev/null || echo unknown)\`"
+  echo "- target: \`$(rustc -vV 2>/dev/null | awk '/^host:/{print \$2}' || uname -m)\`"
+  echo "- uname: \`$(uname -srm 2>/dev/null || echo unknown)\`"
+  echo
   if [ "$FAILS" -eq 0 ]; then
     echo "**Verdict: GREEN** — mandatory gates passed on this host."
   else
-    echo "**Verdict: RED** — ${FAILS} gate(s) failed. Do not tag 10/10 until green."
+    echo "**Verdict: RED** — ${FAILS} gate(s) failed. Do not tag until green."
   fi
   echo
 } >>"$REPORT"

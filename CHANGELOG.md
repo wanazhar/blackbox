@@ -15,6 +15,13 @@ Plan: [docs/plan/trace-integrity-1.5.md](docs/plan/trace-integrity-1.5.md). Epic
 - Tool dedupe only merges proven cross-source duplicates with stable tool IDs; ID-less retries are preserved
 - Age-bounded LRU fingerprint cache (no unordered half-clear)
 
+#### Portable import integrity (A1)
+- Declared blob keys must equal SHA-256 of decoded plaintext; hash mismatch rejects the archive (no `move_blob` rename)
+- Size limits on archive text, event count, blob count, single/total blob bytes
+- Duplicate-run check before permanent writes; events insert as a batch transaction
+- Nested metadata redaction; malformed parent/blob refs rejected
+- Failed imports roll back the run and newly created blob keys/files
+
 ## [1.4.0] — 2026-07-19
 
 **Trust Proof (Unix)** — recorder mode can stay on without silently changing the child or overstating causality; secrets are holdback-redacted before persist; coverage and postmortem claims stay weaker than or equal to evidence.

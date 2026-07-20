@@ -1,18 +1,31 @@
 //! Portable JSON archives for sharing runs offline (optionally with blobs).
+//!
+//! Import (1.5 A1) validates content hashes, applies size limits, redacts nested
+//! metadata, and rolls back permanent writes on failure. Declared blob keys must
+//! equal the computed plaintext SHA-256 — content is never renamed to an
+//! unverified caller-supplied key.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::Context;
 use base64::Engine;
 
-use crate::core::blob::BlobReference;
+use crate::core::blob::{is_valid_blob_key, BlobReference};
 use crate::core::event::TraceEvent;
 use crate::core::run::Run;
+use crate::crypto::content_key;
 use crate::redaction::scanner::SecretScanner;
 use crate::redaction::RedactionConfig;
 use crate::storage::TraceStore;
 
 const PORTABLE_VERSION: u64 = 2;
+
+/// Hard limits for untrusted portable archives (1.5 import integrity).
+const MAX_ARCHIVE_BYTES: usize = 256 * 1024 * 1024; // 256 MiB JSON text
+const MAX_EVENTS: usize = 500_000;
+const MAX_BLOBS: usize = 50_000;
+const MAX_SINGLE_BLOB_BYTES: usize = 64 * 1024 * 1024; // 64 MiB
+const MAX_TOTAL_BLOB_BYTES: usize = 200 * 1024 * 1024; // 200 MiB decoded
 
 /// Export a run and its events as a self-contained portable JSON archive.
 ///
@@ -95,11 +108,25 @@ pub struct ImportResult {
 ///
 /// If `new_ids` is true, assigns a fresh run id and regenerates event ids.
 /// If false, keeps ids and fails if the run already exists.
+///
+/// **Integrity (1.5 A1):**
+/// - Declared blob keys must equal SHA-256 of decoded plaintext (no rename).
+/// - Duplicate-run checks run before permanent writes.
+/// - Events insert as a single batch transaction.
+/// - Failures roll back the run and any newly created blob keys.
 pub async fn import_portable(
     store: &dyn TraceStore,
     json: &str,
     new_ids: bool,
 ) -> anyhow::Result<ImportResult> {
+    if json.len() > MAX_ARCHIVE_BYTES {
+        anyhow::bail!(
+            "portable archive too large: {} bytes (max {})",
+            json.len(),
+            MAX_ARCHIVE_BYTES
+        );
+    }
+
     let root: serde_json::Value = serde_json::from_str(json).context("invalid portable JSON")?;
     let version = root.get("version").and_then(|v| v.as_u64()).unwrap_or(0);
     if version != 1 && version != 2 {
@@ -113,6 +140,10 @@ pub async fn import_portable(
     )
     .context("invalid run payload")?;
 
+    if run.id.trim().is_empty() {
+        anyhow::bail!("invalid run payload: empty run id");
+    }
+
     let mut events: Vec<TraceEvent> = serde_json::from_value(
         root.get("events")
             .cloned()
@@ -120,34 +151,22 @@ pub async fn import_portable(
     )
     .context("invalid events payload")?;
 
-    // Restore blobs first so content-addressed keys remain valid
-    let mut blobs_restored = 0usize;
-    if let Some(obj) = root.get("blobs").and_then(|v| v.as_object()) {
-        for (key, entry) in obj {
-            let data = decode_blob_entry(entry).with_context(|| format!("blob {key}"))?;
-            let stored = store.store_blob(&data).await?;
-            if stored.key != *key {
-                // Blob stored under its computed hash, but events reference
-                // the expected key. Rename so load_blob(key) succeeds.
-                if let Err(e) = store.move_blob(&stored.key, key).await {
-                    tracing::warn!(
-                        expected = %key,
-                        got = %stored.key,
-                        error = %e,
-                        "failed to rename mismatched blob"
-                    );
-                } else {
-                    tracing::debug!(
-                        expected = %key,
-                        computed = %stored.key,
-                        "renamed blob to expected key"
-                    );
-                }
-            }
-            blobs_restored += 1;
-        }
+    if events.len() > MAX_EVENTS {
+        anyhow::bail!(
+            "portable archive has too many events: {} (max {})",
+            events.len(),
+            MAX_EVENTS
+        );
     }
 
+    // ── Decode + hash-verify blobs into memory (no permanent writes yet) ──
+    let verified_blobs = decode_and_verify_blobs(root.get("blobs"))?;
+
+    // ── Validate event blob references against verified keys ──
+    let blob_key_set: HashSet<&str> = verified_blobs.iter().map(|(k, _)| k.as_str()).collect();
+    validate_event_blob_refs(&events, &blob_key_set)?;
+
+    // ── ID remapping (in memory) ──
     let remapped;
     if new_ids {
         let old_id = run.id.clone();
@@ -161,58 +180,228 @@ pub async fn import_portable(
         if !run.tags.iter().any(|t| t == "imported") {
             run.tags.push("imported".into());
         }
-        // Build old→new ID map so parent_event_id references stay valid
-        let mut id_map = std::collections::HashMap::new();
+        let mut id_map = HashMap::new();
         for ev in &mut events {
             let old_ev_id = ev.id.clone();
             ev.id = uuid::Uuid::new_v4().to_string();
             ev.run_id = run.id.clone();
             id_map.insert(old_ev_id, ev.id.clone());
         }
-        // Remap parent_event_id to new IDs
         for ev in &mut events {
             if let Some(pid) = &ev.parent_event_id {
                 if let Some(new_pid) = id_map.get(pid) {
                     ev.parent_event_id = Some(new_pid.clone());
+                } else {
+                    anyhow::bail!(
+                        "malformed parent_event_id reference: {pid} not present in archive"
+                    );
                 }
             }
         }
         remapped = true;
     } else {
-        if store.get_run(&run.id).await?.is_some() {
-            anyhow::bail!(
-                "run {} already exists (omit --keep-ids or delete first)",
-                &run.id[..8.min(run.id.len())]
-            );
+        // Keep-ids: ensure every event's run_id matches the run.
+        for ev in &mut events {
+            if ev.run_id != run.id {
+                ev.run_id = run.id.clone();
+            }
+        }
+        // Parent refs must point at events in this archive (or null).
+        let event_ids: HashSet<&str> = events.iter().map(|e| e.id.as_str()).collect();
+        for ev in &events {
+            if let Some(pid) = &ev.parent_event_id {
+                if !event_ids.contains(pid.as_str()) {
+                    anyhow::bail!(
+                        "malformed parent_event_id reference: {pid} not present in archive"
+                    );
+                }
+            }
         }
         remapped = false;
     }
 
+    // ── Duplicate-run check BEFORE permanent writes ──
+    if !new_ids && store.get_run(&run.id).await?.is_some() {
+        anyhow::bail!(
+            "run {} already exists (omit --keep-ids or delete first)",
+            &run.id[..8.min(run.id.len())]
+        );
+    }
+
     events.sort_by_key(|e| e.sequence);
-    // Redact secrets in imported event metadata so untrusted portable
-    // archives cannot inject sensitive values into the local store.
+
+    // ── Recursive redaction of nested metadata ──
     let scanner = SecretScanner::new(RedactionConfig::default());
     for ev in &mut events {
-        for val in ev.metadata.values_mut() {
-            if let Some(s) = val.as_str() {
-                let redacted = scanner.redact(s);
-                if redacted != s {
-                    *val = serde_json::Value::String(redacted);
+        redact_event_metadata(&scanner, &mut ev.metadata);
+    }
+    if let Some(ref mut notes) = run.notes {
+        *notes = scanner.redact(notes);
+    }
+
+    // ── Permanent writes with rollback journal ──
+    let mut journal = ImportJournal::default();
+    match promote_import(store, &run, &events, &verified_blobs, &mut journal).await {
+        Ok(blobs_restored) => Ok(ImportResult {
+            run_id: run.id,
+            events: events.len(),
+            blobs: blobs_restored,
+            remapped,
+        }),
+        Err(e) => {
+            if let Err(rb) = journal.rollback(store).await {
+                tracing::warn!(error = %rb, "import rollback incomplete");
+            }
+            Err(e)
+        }
+    }
+}
+
+/// Tracks permanent side-effects so a failed import can clean up.
+#[derive(Default)]
+struct ImportJournal {
+    run_id: Option<String>,
+    /// Blob keys that did not exist before this import (safe to delete).
+    new_blob_keys: Vec<String>,
+}
+
+impl ImportJournal {
+    async fn rollback(&self, store: &dyn TraceStore) -> anyhow::Result<()> {
+        if let Some(ref run_id) = self.run_id {
+            let _ = store.delete_run(run_id).await;
+        }
+        if !self.new_blob_keys.is_empty() {
+            // SqliteStore also removes on-disk files for these keys.
+            let _ = store.delete_blob_keys(&self.new_blob_keys).await;
+        }
+        Ok(())
+    }
+}
+
+async fn promote_import(
+    store: &dyn TraceStore,
+    run: &Run,
+    events: &[TraceEvent],
+    verified_blobs: &[(String, Vec<u8>)],
+    journal: &mut ImportJournal,
+) -> anyhow::Result<usize> {
+    // Persist verified blobs under their content keys only.
+    let mut blobs_restored = 0usize;
+    for (key, data) in verified_blobs {
+        let existed = blob_exists(store, key).await;
+        let stored = store.store_blob(data).await?;
+        if stored.key != *key {
+            // Defensive: should be impossible after verify.
+            anyhow::bail!(
+                "blob integrity failure after store: declared key {} != computed {}",
+                key,
+                stored.key
+            );
+        }
+        if !existed {
+            journal.new_blob_keys.push(key.clone());
+        }
+        blobs_restored += 1;
+    }
+
+    store.insert_run(run).await?;
+    journal.run_id = Some(run.id.clone());
+
+    store.insert_events_batch(events).await?;
+    Ok(blobs_restored)
+}
+
+async fn blob_exists(store: &dyn TraceStore, key: &str) -> bool {
+    let Some(bref) = BlobReference::try_new(key.to_string(), 0) else {
+        return false;
+    };
+    store.load_blob(&bref).await.is_ok()
+}
+
+/// Decode blob map entries and require declared key == SHA-256(plaintext).
+fn decode_and_verify_blobs(
+    blobs_val: Option<&serde_json::Value>,
+) -> anyhow::Result<Vec<(String, Vec<u8>)>> {
+    let Some(obj) = blobs_val.and_then(|v| v.as_object()) else {
+        return Ok(Vec::new());
+    };
+    if obj.len() > MAX_BLOBS {
+        anyhow::bail!(
+            "portable archive has too many blobs: {} (max {})",
+            obj.len(),
+            MAX_BLOBS
+        );
+    }
+
+    let mut out = Vec::with_capacity(obj.len());
+    let mut total: usize = 0;
+    for (key, entry) in obj {
+        if !is_valid_blob_key(key) {
+            anyhow::bail!("invalid blob key (expected 64-char hex SHA-256): {key}");
+        }
+        let data = decode_blob_entry(entry).with_context(|| format!("blob {key}"))?;
+        if data.len() > MAX_SINGLE_BLOB_BYTES {
+            anyhow::bail!(
+                "blob {key} too large: {} bytes (max {})",
+                data.len(),
+                MAX_SINGLE_BLOB_BYTES
+            );
+        }
+        total = total.saturating_add(data.len());
+        if total > MAX_TOTAL_BLOB_BYTES {
+            anyhow::bail!(
+                "portable archive total blob size exceeds limit ({} bytes)",
+                MAX_TOTAL_BLOB_BYTES
+            );
+        }
+        let computed = content_key(&data);
+        if computed != *key {
+            anyhow::bail!(
+                "blob hash mismatch: declared key {} but content SHA-256 is {} — archive rejected",
+                key,
+                computed
+            );
+        }
+        out.push((key.clone(), data));
+    }
+    Ok(out)
+}
+
+fn validate_event_blob_refs(
+    events: &[TraceEvent],
+    known: &HashSet<&str>,
+) -> anyhow::Result<()> {
+    for ev in events {
+        for (field, key) in [
+            ("input_blob", ev.input_blob.as_deref()),
+            ("output_blob", ev.output_blob.as_deref()),
+            ("error_blob", ev.error_blob.as_deref()),
+        ] {
+            if let Some(k) = key {
+                if !is_valid_blob_key(k) {
+                    anyhow::bail!("event {} has invalid {field} key: {k}", ev.id);
+                }
+                // v1 archives may omit blobs map; v2 with refs must include them.
+                // Allow missing only when no blobs were declared at all (v1).
+                if !known.is_empty() && !known.contains(k) {
+                    anyhow::bail!(
+                        "event {} references {field}={k} not present in archive blobs",
+                        ev.id
+                    );
                 }
             }
         }
     }
-    store.insert_run(&run).await?;
-    for ev in &events {
-        store.insert_event(ev).await?;
-    }
+    Ok(())
+}
 
-    Ok(ImportResult {
-        run_id: run.id,
-        events: events.len(),
-        blobs: blobs_restored,
-        remapped,
-    })
+fn redact_event_metadata(
+    scanner: &SecretScanner,
+    metadata: &mut HashMap<String, serde_json::Value>,
+) {
+    for val in metadata.values_mut() {
+        scanner.redact_json(val);
+    }
 }
 
 fn decode_blob_entry(entry: &serde_json::Value) -> anyhow::Result<Vec<u8>> {

@@ -844,7 +844,7 @@ impl TraceStore for SqliteStore {
             let tx = conn
                 .unchecked_transaction()
                 .context("failed to start transaction for delete_run")?;
-            // FK order: events and checkpoints before runs
+            // FK order: events, checkpoints, aggregates before runs
             if let Err(e) = tx.execute("DELETE FROM events_fts WHERE run_id = ?1", params![run_id])
             {
                 tracing::warn!(error = %e, run_id = %run_id, "FTS cleanup failed during delete_run; proceeding");
@@ -853,6 +853,8 @@ impl TraceStore for SqliteStore {
                 .context("failed to delete events")?;
             tx.execute("DELETE FROM checkpoints WHERE run_id = ?1", params![run_id])
                 .context("failed to delete checkpoints")?;
+            // Best-effort: table may be missing mid-migrate.
+            let _ = tx.execute("DELETE FROM run_aggregates WHERE run_id = ?1", params![run_id]);
             let n = tx
                 .execute("DELETE FROM runs WHERE id = ?1", params![run_id])
                 .context("failed to delete run")?;
@@ -1407,18 +1409,37 @@ impl TraceStore for SqliteStore {
         if keys.is_empty() {
             return Ok(0);
         }
-        let conn = self.lock();
-        let tx = conn
-            .unchecked_transaction()
-            .context("failed to start transaction for delete_blob_keys")?;
-        let mut deleted = 0usize;
-        for key in keys {
-            let n = tx
-                .execute("DELETE FROM blobs WHERE key = ?1", params![key])
-                .with_context(|| format!("failed to delete blob metadata for {key}"))?;
-            deleted += n;
-        }
-        tx.commit().context("failed to commit delete_blob_keys")?;
+        // Remove metadata first, then best-effort delete on-disk files
+        // (1.5 import rollback must not leave permanent orphan content).
+        let deleted = {
+            let conn = self.lock();
+            let tx = conn
+                .unchecked_transaction()
+                .context("failed to start transaction for delete_blob_keys")?;
+            let mut deleted = 0usize;
+            for key in keys {
+                let n = tx
+                    .execute("DELETE FROM blobs WHERE key = ?1", params![key])
+                    .with_context(|| format!("failed to delete blob metadata for {key}"))?;
+                deleted += n;
+            }
+            tx.commit().context("failed to commit delete_blob_keys")?;
+            deleted
+        };
+        let blob_dir = self.blob_dir.clone();
+        let keys = keys.to_vec();
+        let _ = task::spawn_blocking(move || {
+            for key in keys {
+                if !crate::core::blob::is_valid_blob_key(&key) {
+                    continue;
+                }
+                let path = blob_dir.join(&key);
+                if path.exists() {
+                    let _ = std::fs::remove_file(&path);
+                }
+            }
+        })
+        .await;
         Ok(deleted)
     }
 

@@ -102,17 +102,18 @@ Full acceptance criteria: [issue #3 comments](https://github.com/wanazhar/blackb
 - [x] Rename workspace-only mode; do not claim kernel isolation (`--workspace`, capability report)
 - [x] Path-safe transactional patch restore (stage + promote; no `--unsafe-paths`)
 - [x] Workspace manifest + completeness report (`workspace_manifest` + end checkpoint blob)
-- [ ] Optional Linux contained backend (bubblewrap/namespaces) + capability preflight
+- [x] Optional Linux contained backend (bubblewrap) + capability preflight (`--contained`, fail closed)
 - [x] Gate: `tests/patch_path_safety.rs`
 - [x] Gate: `tests/workspace_checkpoint.rs`
-- [ ] Gate: `tests/replay_containment_linux.rs`
+- [x] Gate: `tests/replay_containment_linux.rs`
 
 ### Phase C — Durable storage / imports
 
 - [x] Hash-validated atomic portable import (hash match required; batch events; rollback journal)
 - [x] Batched SQLite writer + barriers + observability (`BatchIngestor` / `EventWriter::new_batched`)
 - [x] Cursor pagination APIs (`list_runs_page`, `get_events_range`, kind pages)
-- [x] Blob compression before encryption (BBZC zlib); streaming portable format deferred
+- [x] Blob compression before encryption (BBZC zlib)
+- [x] Streaming-friendly portable directory format (`export_portable_dir` / `import_portable_dir`)
 - [x] Gate: `tests/portable_import_atomicity.rs`
 - [x] Gate: `tests/storage_batch_faults.rs`
 - [x] Gate: `tests/pagination_scale.rs`
@@ -139,11 +140,11 @@ Full acceptance criteria: [issue #3 comments](https://github.com/wanazhar/blackb
 
 - [x] Machine-readable docs inventory (`docs/inventory.json` + `docs/inventory.md`)
 - [x] WRITING.md 1.5 rewrite standard
-- [ ] Consolidate operator navigation; archive completed plans from primary nav
-- [ ] Claim matrix; executable examples; symptom-first troubleshooting
-- [ ] Docs CI extensions (duplicate/command gates)
-- [ ] Human editorial pass; release notes without marketing copy
-- [ ] Cargo **1.5.0** + qualify + tag
+- [x] Consolidate operator navigation; completed plans out of primary mkdocs nav
+- [x] Claim matrix (`docs/claims.md`); symptom-first troubleshooting
+- [x] Docs CI extensions (`tests/docs_commands.rs` inventory + claim gates)
+- [x] Operator guide editorial pass for 1.5 surfaces (export/portable-dir, troubleshooting, claims)
+- [ ] Cargo **1.5.0** tag after full qualify (release step; not local commit)
 
 ---
 

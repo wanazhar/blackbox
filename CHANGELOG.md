@@ -69,15 +69,23 @@ Plan: [docs/plan/trace-integrity-1.5.md](docs/plan/trace-integrity-1.5.md). Epic
 - Dashboard `GET /api/runs?cursor=&limit=` and `GET /api/runs/{id}/events/page`
 - CLI `runs` uses paged listing when limited
 - Optional zlib blob compression before encryption (BBZC); content key remains plaintext SHA-256
+- Streaming-friendly **portable directory** layout: `export --format portable-dir -o dir` / `import dir` (`manifest.json` + `events.jsonl` + content-hashed blobs)
+
+#### Contained replay (R1 completion)
+- `blackbox replay --contained` uses bubblewrap when available (network unshare + restricted binds)
+- Capability preflight is honest; missing `bwrap` **fails closed** (no silent workspace fallback)
+- Gate: `tests/replay_containment_linux.rs`
 
 #### Qualification + supervisor (Q1 / U1)
 - PR CI: lightweight **macOS runtime gate** (lib + trust/integrity subset + clippy)
 - Ubuntu CI names 1.5 integrity suites; `release-qualify-unix.sh` includes them + host metadata
 - `supervisor::{lifecycle,rollup,checkpoint}` — rollup recomputable without PTY; end checkpoint builder
 
-#### Documentation inventory (X1 start)
+#### Documentation truth (X1)
 - `docs/inventory.json` + `docs/inventory.md` for every non-history Markdown page
 - `docs/WRITING.md` 1.5 rewrite standard (answer-first, claim classes, anti-slogan rules)
+- `docs/claims.md` high-risk claim matrix; symptom-first troubleshooting
+- Docs CI gate: `tests/docs_commands.rs`
 
 ## [1.4.0] — 2026-07-19
 

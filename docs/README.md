@@ -91,10 +91,11 @@ mkdocs serve                           # http://127.0.0.1:8000 only on your mach
 | Document | Contents |
 |---|---|
 | [ROADMAP.md](ROADMAP.md) | Quality bar and version story |
-| [plan/trust-explain-1.3.md](plan/trust-explain-1.3.md) | **Active 1.3 plan** (trust, explain, MCP, eval) — not released yet |
+| [plan/trace-integrity-1.5.md](plan/trace-integrity-1.5.md) | **Active 1.5 plan** (trace integrity & scale) |
 | [CHANGELOG.md](https://github.com/wanazhar/blackbox/blob/master/CHANGELOG.md) | Released changes |
-| [plan/](plan/) | **Historical** design docs — do not treat as current how-to |
+| [plan/](plan/) | Design plans (shipped 1.1–1.4 + active 1.5) — not operator how-to |
 | [history/](history/) | Archived plans |
+| [claims.md](claims.md) | High-risk guarantee claim matrix |
 
 ---
 

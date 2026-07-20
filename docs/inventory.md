@@ -18,6 +18,7 @@ Machine-readable: [`inventory.json`](inventory.json).
 | `docs/ROADMAP.md` | mixed | keep |
 | `docs/WRITING.md` | mixed | keep |
 | `docs/ambient-contract.md` | mixed | keep |
+| `docs/claims.md` | mixed | keep |
 | `docs/guide/README.md` | operator | keep |
 | `docs/guide/adapters.md` | operator | keep |
 | `docs/guide/cheatsheet.md` | operator | keep |
@@ -41,6 +42,7 @@ Machine-readable: [`inventory.json`](inventory.json).
 | `docs/internals/capture-pipeline.md` | contributor | keep |
 | `docs/internals/continuity-plane.md` | contributor | keep |
 | `docs/internals/storage.md` | contributor | keep |
+| `docs/inventory.md` | mixed | keep |
 | `docs/plan/adoption-1.1.md` | historical/design | archive |
 | `docs/plan/agent-memory-bus-1.2.md` | historical/design | archive |
 | `docs/plan/daily-driver-0.2.md` | historical/design | archive |

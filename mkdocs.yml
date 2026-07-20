@@ -53,6 +53,8 @@ exclude_docs: |
   plan/adoption-1.1.md
   plan/agent-memory-bus-1.2.md
   plan/daily-driver-0.2.md
+  plan/trust-explain-1.3.md
+  plan/trust-proof-1.4.md
   history/**
   AUDIT.md
 
@@ -95,7 +97,9 @@ nav:
       - Continuity plane: internals/continuity-plane.md
   - Product:
       - Roadmap: ROADMAP.md
-      - 1.3 plan (active): plan/trust-explain-1.3.md
+      - 1.5 plan (active): plan/trace-integrity-1.5.md
+      - Claim matrix: claims.md
+      - Docs inventory: inventory.md
       - Changelog: CHANGELOG.md
       - Writing docs: WRITING.md
       - Ambient contract: ambient-contract.md

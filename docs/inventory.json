@@ -34,13 +34,13 @@
       "blackbox mcp",
       "blackbox memory",
       "blackbox postmortem",
+      "blackbox replay",
       "blackbox resolve",
       "blackbox run",
       "blackbox serve",
       "blackbox setup",
       "blackbox status",
-      "blackbox stream",
-      "blackbox sync"
+      "blackbox stream"
     ],
     "schemas_referenced": [],
     "last_verified_version": "1.5.0-dev",
@@ -212,6 +212,18 @@
       "blackbox maybe-run",
       "blackbox writes"
     ],
+    "schemas_referenced": [],
+    "last_verified_version": "1.5.0-dev",
+    "status": "keep"
+  },
+  {
+    "path": "docs/claims.md",
+    "title": "Technical claim matrix",
+    "audience": "mixed",
+    "purpose": "Technical claim matrix",
+    "canonical_topic_owner": "",
+    "source_of_truth": "docs/claims.md",
+    "commands_referenced": [],
     "schemas_referenced": [],
     "last_verified_version": "1.5.0-dev",
     "status": "keep"
@@ -610,25 +622,17 @@
     "source_of_truth": "docs/guide/troubleshooting.md",
     "commands_referenced": [
       "blackbox\nblackbox",
-      "blackbox ack",
-      "blackbox claim",
-      "blackbox disable",
       "blackbox doctor",
-      "blackbox enable",
       "blackbox export",
-      "blackbox gc",
       "blackbox import",
-      "blackbox maybe-run",
       "blackbox postmortem",
-      "blackbox purge",
-      "blackbox resolve",
-      "blackbox restore",
       "blackbox run",
       "blackbox runs",
       "blackbox scrub",
       "blackbox show",
-      "blackbox slow",
-      "blackbox stats"
+      "blackbox stats",
+      "blackbox status",
+      "blackbox without"
     ],
     "schemas_referenced": [],
     "last_verified_version": "1.5.0-dev",
@@ -724,6 +728,18 @@
       "blackbox search",
       "blackbox stats"
     ],
+    "schemas_referenced": [],
+    "last_verified_version": "1.5.0-dev",
+    "status": "keep"
+  },
+  {
+    "path": "docs/inventory.md",
+    "title": "Documentation inventory (1.5)",
+    "audience": "mixed",
+    "purpose": "Documentation inventory (1.5)",
+    "canonical_topic_owner": "",
+    "source_of_truth": "docs/inventory.md",
+    "commands_referenced": [],
     "schemas_referenced": [],
     "last_verified_version": "1.5.0-dev",
     "status": "keep"

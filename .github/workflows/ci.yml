@@ -52,7 +52,8 @@ jobs:
             --test storage_batch_faults --test workspace_checkpoint \
             --test event_ordering --test filesystem_escape \
             --test native_log_rotation --test dashboard_auth \
-            --test pagination_scale -- --quiet
+            --test pagination_scale --test replay_containment_linux \
+            --test docs_commands -- --quiet
 
   # 1.5 Q1: lightweight macOS runtime gate on every PR (not only tag-time build).
   macos:

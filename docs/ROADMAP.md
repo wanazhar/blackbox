@@ -128,11 +128,11 @@ Full plan: [plan/trace-integrity-1.5.md](plan/trace-integrity-1.5.md). Epic: [is
 
 #### 1.5 implementation phases
 
-1. **A** Correct long-run truth (aggregates, analysis_scope, safe dedupe) — in progress
-2. **B** Reproducible / contained replay
-3. **C** Durable storage / imports
-4. **D** Capture / platform operations
-5. **E** Documentation rewrite + release
+1. **A** Correct long-run truth (aggregates, analysis_scope, safe dedupe) — done
+2. **B** Reproducible / contained replay — done (workspace + optional `--contained` bwrap)
+3. **C** Durable storage / imports — done (atomic portable, batch ingest, portable-dir)
+4. **D** Capture / platform operations — done (FS/native-log bounds, dashboard auth, macOS CI)
+5. **E** Documentation rewrite + release — inventory/claims/gates done; tag after full qualify
 
 ---
 

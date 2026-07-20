@@ -123,10 +123,12 @@ if [ "$QUICK" -eq 1 ]; then
   run_gate "1.5: native_log_rotation" cargo test --test native_log_rotation -- --quiet || true
   run_gate "1.5: dashboard_auth" cargo test --test dashboard_auth -- --quiet || true
   run_gate "1.5: pagination_scale" cargo test --test pagination_scale -- --quiet || true
+  run_gate "1.5: replay_containment" cargo test --test replay_containment_linux -- --quiet || true
+  run_gate "1.5: docs_commands" cargo test --test docs_commands -- --quiet || true
 else
   run_gate "cargo test --all-targets" cargo test --all-targets -- --quiet || true
-  run_gate "docs first-run + envelope" \
-    cargo test --test docs_first_run --test docs_cli_envelope -- --quiet || true
+  run_gate "docs first-run + envelope + commands" \
+    cargo test --test docs_first_run --test docs_cli_envelope --test docs_commands -- --quiet || true
 fi
 
 if [ "$DO_RELEASE_BUILD" -eq 1 ]; then

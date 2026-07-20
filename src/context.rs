@@ -71,7 +71,7 @@ fn truncate_str(s: &str, max: usize) -> String {
     if s.len() <= max {
         return s.to_string();
     }
-    let end = s.floor_char_boundary(max);
+    let end = s.floor_char_boundary(max.saturating_sub('…'.len_utf8()));
     format!("{}…", &s[..end])
 }
 
@@ -412,15 +412,61 @@ pub async fn build_context_pack(
         }
         if !pack.summary.anomalies.is_empty() && pack.approx_tokens > opts.max_tokens {
             // Keep high severity only
+            let previous_len = pack.summary.anomalies.len();
             pack.summary.anomalies.retain(|a| a.severity == "high");
             if pack.summary.anomalies.len() > 2 {
                 pack.summary.anomalies.truncate(2);
             }
+            if pack.summary.anomalies.len() != previous_len {
+                pack.truncated = true;
+                continue;
+            }
+            pack.summary.anomalies.clear();
             pack.truncated = true;
             continue;
         }
         if pack.summary.errors.len() > 3 {
             pack.summary.errors.truncate(3);
+            pack.truncated = true;
+            continue;
+        }
+        if !pack.summary.errors.is_empty() {
+            pack.summary.errors.clear();
+            pack.truncated = true;
+            continue;
+        }
+        if !pack.summary.retry_waste.is_empty() {
+            pack.summary.retry_waste.clear();
+            pack.truncated = true;
+            continue;
+        }
+        if !pack.summary.turning_points.is_empty() {
+            pack.summary.turning_points.clear();
+            pack.truncated = true;
+            continue;
+        }
+        if !pack.summary.failure_fix_chains.is_empty() {
+            pack.summary.failure_fix_chains.clear();
+            pack.truncated = true;
+            continue;
+        }
+        if !pack.summary.claims.is_empty() {
+            pack.summary.claims.clear();
+            pack.truncated = true;
+            continue;
+        }
+        if !pack.summary.hints.is_empty() {
+            pack.summary.hints.clear();
+            pack.truncated = true;
+            continue;
+        }
+        if pack.summary.aggregates.is_some() {
+            pack.summary.aggregates = None;
+            pack.truncated = true;
+            continue;
+        }
+        if pack.summary.capture_coverage.is_some() {
+            pack.summary.capture_coverage = None;
             pack.truncated = true;
             continue;
         }

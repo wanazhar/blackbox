@@ -136,7 +136,9 @@ pub async fn serve(store: Arc<SqliteStore>, opts: ServeOptions) -> anyhow::Resul
         );
     }
     if opts.token.is_some() {
-        println!("  auth:    browser → GET /login then session cookie; API → Authorization: Bearer");
+        println!(
+            "  auth:    browser → GET /login then session cookie; API → Authorization: Bearer"
+        );
         println!("  login:   http://{}/login", opts.addr);
     }
     println!("  live:    http://{}/watch", opts.addr);
@@ -227,10 +229,7 @@ async fn auth_middleware(State(state): State<AppState>, request: Request, next: 
     let headers = response.headers_mut();
     headers.insert("x-content-type-options", "nosniff".parse().unwrap());
     headers.insert("x-frame-options", "DENY".parse().unwrap());
-    headers.insert(
-        header::REFERRER_POLICY,
-        "no-referrer".parse().unwrap(),
-    );
+    headers.insert(header::REFERRER_POLICY, "no-referrer".parse().unwrap());
     headers.insert(
         header::CACHE_CONTROL,
         "no-store, no-cache, must-revalidate".parse().unwrap(),
@@ -313,8 +312,7 @@ fn session_cookie_header(session_id: &str, secure: bool, max_age_secs: u64) -> S
 }
 
 fn clear_session_cookie(secure: bool) -> String {
-    let mut c =
-        format!("{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0");
+    let mut c = format!("{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0");
     if secure {
         c.push_str("; Secure");
     }
@@ -1118,7 +1116,11 @@ async fn api_events_page(
     let limit = q.limit.unwrap_or(500).clamp(1, 5_000);
     let run_id = resolve_prefix(state.store.as_ref(), &run_id).await?;
     let page = if let Some(ref kinds) = q.kinds {
-        let kinds: Vec<&str> = kinds.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+        let kinds: Vec<&str> = kinds
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect();
         state
             .store
             .get_events_by_kind_page(&run_id, &kinds, q.cursor.as_deref(), limit)
@@ -1248,10 +1250,7 @@ async fn api_events(
 ) -> Result<Response, AppError> {
     let run_id = resolve_prefix(state.store.as_ref(), &id).await?;
     // Cap protects dashboard RAM; limit=0 no longer means unlimited.
-    let limit = q
-        .limit
-        .unwrap_or(5_000)
-        .clamp(1, API_EVENTS_HARD_CAP);
+    let limit = q.limit.unwrap_or(5_000).clamp(1, API_EVENTS_HARD_CAP);
     let events = state.store.get_events_limited(&run_id, limit).await?.0;
     Ok(Json(serde_json::to_value(events)?).into_response())
 }

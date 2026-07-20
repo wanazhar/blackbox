@@ -383,8 +383,7 @@ impl CaptureLayer for FilesystemCapture {
                                 event,
                             ) {
                                 // Per-path coalescing: keep final state under storm.
-                                if let Some(path) =
-                                    ev.metadata.get("path").and_then(|v| v.as_str())
+                                if let Some(path) = ev.metadata.get("path").and_then(|v| v.as_str())
                                 {
                                     let now = Instant::now();
                                     if let Some(prev) = last_path.get(path) {
@@ -547,11 +546,8 @@ mod tests {
         let outside = std::env::temp_dir().join(format!("bb-fs-out-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&outside).unwrap();
         fs::write(outside.join("x"), b"y").unwrap();
-        let scope = FilesystemCapture::classify_path(
-            &root,
-            &outside.join("x"),
-            SymlinkPolicy::Ignore,
-        );
+        let scope =
+            FilesystemCapture::classify_path(&root, &outside.join("x"), SymlinkPolicy::Ignore);
         assert_eq!(scope, PathScope::OutsideRoot);
         let _ = fs::remove_dir_all(&root);
         let _ = fs::remove_dir_all(&outside);
@@ -561,11 +557,8 @@ mod tests {
     fn classify_in_root() {
         let root = temp_workspace();
         fs::write(root.join("a.txt"), b"ok").unwrap();
-        let scope = FilesystemCapture::classify_path(
-            &root,
-            &root.join("a.txt"),
-            SymlinkPolicy::Ignore,
-        );
+        let scope =
+            FilesystemCapture::classify_path(&root, &root.join("a.txt"), SymlinkPolicy::Ignore);
         assert_eq!(scope, PathScope::InRoot);
         let _ = fs::remove_dir_all(&root);
     }

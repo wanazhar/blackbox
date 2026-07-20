@@ -61,7 +61,10 @@ fn claims_matrix_has_required_classes() {
         "Large-run totals",
         "Dashboard auth",
     ] {
-        assert!(text.contains(needle), "claims.md missing claim about: {needle}");
+        assert!(
+            text.contains(needle),
+            "claims.md missing claim about: {needle}"
+        );
     }
 }
 

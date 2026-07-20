@@ -216,9 +216,7 @@ pub fn install_shell(
     let mut safe = Vec::with_capacity(wrap.len());
     for name in wrap {
         if !crate::util::is_safe_wrap_name(name) {
-            anyhow::bail!(
-                "unsafe wrap name refused (must be [A-Za-z_][A-Za-z0-9_-]*): {name:?}"
-            );
+            anyhow::bail!("unsafe wrap name refused (must be [A-Za-z_][A-Za-z0-9_-]*): {name:?}");
         }
         safe.push(name.clone());
     }

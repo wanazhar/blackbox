@@ -797,7 +797,9 @@ mod tests {
         let pull = sync_pull(store.as_ref(), &dir).await.unwrap();
         assert_eq!(pull.pulled, 0);
         assert!(
-            pull.errors.iter().any(|e| e.contains("unsafe") || e.contains("refused")),
+            pull.errors
+                .iter()
+                .any(|e| e.contains("unsafe") || e.contains("refused")),
             "errors: {:?}",
             pull.errors
         );

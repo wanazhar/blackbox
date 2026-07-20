@@ -23,8 +23,7 @@ pub async fn build_end_checkpoint(
     store: &dyn TraceStore,
     input: CheckpointInputs<'_>,
 ) -> Checkpoint {
-    let mut end_checkpoint =
-        Checkpoint::new(&input.run.id, input.end_event_id, &input.run.cwd);
+    let mut end_checkpoint = Checkpoint::new(&input.run.id, input.end_event_id, &input.run.cwd);
     end_checkpoint.environment_blob = input.environment_blob_key;
     end_checkpoint.git_commit = input.git_commit;
     end_checkpoint.git_diff_blob = input.git_diff_blob;

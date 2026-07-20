@@ -979,10 +979,16 @@ pub fn write_memory_files(
 ) -> anyhow::Result<PathBuf> {
     std::fs::create_dir_all(blackbox_root)?;
     crate::privacy::restrict_dir(blackbox_root);
-    let md = format_memory_markdown(pack);
+    // Defense in depth: derived summary fields can be added without passing
+    // through the field-level redaction in `build_project_memory`. Redact both
+    // complete serialized outputs immediately before they reach disk.
+    let scanner = SecretScanner::new(RedactionConfig::default());
+    let md = scanner.redact(&format_memory_markdown(pack));
     let md_path = blackbox_root.join("MEMORY.md");
     let json_path = blackbox_root.join("MEMORY.json");
-    let json = serde_json::to_string_pretty(pack)?;
+    let mut json_value = serde_json::to_value(pack)?;
+    scanner.redact_json(&mut json_value);
+    let json = serde_json::to_string_pretty(&json_value)?;
     // Seal when store.key is present (encrypt_blobs). Agents that need plain
     // MEMORY.md for prompt inject still get plaintext markdown by design —
     // only JSON sidecars are sealed (structured pack is the high-value dump).

@@ -136,7 +136,12 @@ async fn duplicate_run_checked_before_writes() {
         store.load_blob(&bref).await.is_err(),
         "rejected import must not leave blob loadable"
     );
-    assert!(!store.all_blob_keys().await.unwrap().iter().any(|k| k == &key));
+    assert!(!store
+        .all_blob_keys()
+        .await
+        .unwrap()
+        .iter()
+        .any(|k| k == &key));
 }
 
 #[tokio::test]

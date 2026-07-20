@@ -135,14 +135,10 @@ pub fn apply_portable_blob_redaction(output: &str) -> anyhow::Result<String> {
                                 decoded
                             };
                             new_key = crate::crypto::content_key(&plain);
-                            let new_b64 =
-                                base64::engine::general_purpose::STANDARD.encode(&plain);
+                            let new_b64 = base64::engine::general_purpose::STANDARD.encode(&plain);
                             if let Some(obj) = new_entry.as_object_mut() {
                                 obj.insert("data".into(), serde_json::Value::String(new_b64));
-                                obj.insert(
-                                    "size".into(),
-                                    serde_json::json!(plain.len()),
-                                );
+                                obj.insert("size".into(), serde_json::json!(plain.len()));
                             } else {
                                 new_entry = serde_json::Value::String(new_b64);
                             }

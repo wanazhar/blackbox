@@ -170,9 +170,13 @@ pub fn relate_occurrence(a: &TraceEvent, b: &TraceEvent) -> OrderingRelation {
     match (wa, wb) {
         (Some(ta_wall), Some(tb_wall)) => {
             // If either clock is ingest-only, occurrence is weak.
-            if matches!(ta.clock_source, ClockSource::IngestOnly | ClockSource::Unknown)
-                && matches!(tb.clock_source, ClockSource::IngestOnly | ClockSource::Unknown)
-            {
+            if matches!(
+                ta.clock_source,
+                ClockSource::IngestOnly | ClockSource::Unknown
+            ) && matches!(
+                tb.clock_source,
+                ClockSource::IngestOnly | ClockSource::Unknown
+            ) {
                 // Fall back to storage order only as uncertain proximity.
                 return OrderingRelation::Unknown;
             }
@@ -297,7 +301,11 @@ mod tests {
         // B occurred first, but was ingested later (higher sequence).
         let mut early = ev("fs.modified", t0, ClockSource::OsEvent);
         early.sequence = 10;
-        let mut late_obs = ev("terminal.output", t0 + Duration::milliseconds(100), ClockSource::CaptureWall);
+        let mut late_obs = ev(
+            "terminal.output",
+            t0 + Duration::milliseconds(100),
+            ClockSource::CaptureWall,
+        );
         late_obs.sequence = 2; // ingested first
 
         // Occurrence: early before late_obs
@@ -313,7 +321,11 @@ mod tests {
     fn ingest_only_clocks_are_unknown() {
         let t0 = Utc::now();
         let mut a = ev("a", t0, ClockSource::IngestOnly);
-        let mut b = ev("b", t0 + Duration::milliseconds(50), ClockSource::IngestOnly);
+        let mut b = ev(
+            "b",
+            t0 + Duration::milliseconds(50),
+            ClockSource::IngestOnly,
+        );
         a.sequence = 1;
         b.sequence = 2;
         assert_eq!(relate_occurrence(&a, &b), OrderingRelation::Unknown);
@@ -323,7 +335,11 @@ mod tests {
     fn uncertainty_window_yields_concurrent() {
         let t0 = Utc::now();
         let a = ev("a", t0, ClockSource::CaptureWall);
-        let b = ev("b", t0 + Duration::milliseconds(2), ClockSource::CaptureWall);
+        let b = ev(
+            "b",
+            t0 + Duration::milliseconds(2),
+            ClockSource::CaptureWall,
+        );
         assert_eq!(
             relate_occurrence(&a, &b),
             OrderingRelation::ConcurrentOrUncertain
@@ -334,13 +350,21 @@ mod tests {
     fn reorder_buffer_sorts_comparable_clocks() {
         let t0 = Utc::now();
         let mut buf = BoundedReorderBuffer::new(3);
-        let mut a = ev("late", t0 + Duration::milliseconds(100), ClockSource::CaptureWall);
+        let mut a = ev(
+            "late",
+            t0 + Duration::milliseconds(100),
+            ClockSource::CaptureWall,
+        );
         a.set_source_sequence(1);
         let mut b = ev("early", t0, ClockSource::CaptureWall);
         b.set_source_sequence(2);
         assert!(buf.push(a).is_empty());
         assert!(buf.push(b).is_empty());
-        let mut c = ev("mid", t0 + Duration::milliseconds(50), ClockSource::CaptureWall);
+        let mut c = ev(
+            "mid",
+            t0 + Duration::milliseconds(50),
+            ClockSource::CaptureWall,
+        );
         c.set_source_sequence(3);
         let out = buf.push(c);
         assert_eq!(out.len(), 3);
@@ -353,7 +377,11 @@ mod tests {
     fn reorder_keeps_arrival_when_clocks_weak() {
         let t0 = Utc::now();
         let mut buf = BoundedReorderBuffer::new(2);
-        let a = ev("first", t0 + Duration::milliseconds(100), ClockSource::IngestOnly);
+        let a = ev(
+            "first",
+            t0 + Duration::milliseconds(100),
+            ClockSource::IngestOnly,
+        );
         let b = ev("second", t0, ClockSource::IngestOnly);
         assert!(buf.push(a).is_empty());
         let out = buf.push(b);

@@ -933,7 +933,10 @@ impl TraceStore for SqliteStore {
             tx.execute("DELETE FROM checkpoints WHERE run_id = ?1", params![run_id])
                 .context("failed to delete checkpoints")?;
             // Best-effort: table may be missing mid-migrate.
-            let _ = tx.execute("DELETE FROM run_aggregates WHERE run_id = ?1", params![run_id]);
+            let _ = tx.execute(
+                "DELETE FROM run_aggregates WHERE run_id = ?1",
+                params![run_id],
+            );
             let n = tx
                 .execute("DELETE FROM runs WHERE id = ?1", params![run_id])
                 .context("failed to delete run")?;
@@ -1165,10 +1168,7 @@ impl TraceStore for SqliteStore {
         let batch = self
             .get_events_by_kinds(run_id, kinds, fetch.saturating_mul(4).max(fetch))
             .await?;
-        let mut events: Vec<_> = batch
-            .into_iter()
-            .filter(|e| e.sequence > after)
-            .collect();
+        let mut events: Vec<_> = batch.into_iter().filter(|e| e.sequence > after).collect();
         let has_more = events.len() > limit.max(1);
         events.truncate(limit.max(1));
         let next_cursor = if has_more {
@@ -1630,10 +1630,7 @@ impl TraceStore for SqliteStore {
         Ok(deleted)
     }
 
-    async fn get_run_aggregates(
-        &self,
-        run_id: &str,
-    ) -> anyhow::Result<Option<RunAggregates>> {
+    async fn get_run_aggregates(&self, run_id: &str) -> anyhow::Result<Option<RunAggregates>> {
         let run_id = run_id.to_string();
         let result = {
             let conn = self.lock();
@@ -1653,21 +1650,14 @@ impl TraceStore for SqliteStore {
         Ok(())
     }
 
-    async fn recompute_run_aggregates(
-        &self,
-        run_id: &str,
-    ) -> anyhow::Result<RunAggregates> {
+    async fn recompute_run_aggregates(&self, run_id: &str) -> anyhow::Result<RunAggregates> {
         let events = self.get_events(run_id).await?;
         let agg = RunAggregates::recompute(run_id, &events);
         self.put_run_aggregates(&agg).await?;
         Ok(agg)
     }
 
-    async fn get_events_head(
-        &self,
-        run_id: &str,
-        limit: usize,
-    ) -> anyhow::Result<Vec<TraceEvent>> {
+    async fn get_events_head(&self, run_id: &str, limit: usize) -> anyhow::Result<Vec<TraceEvent>> {
         if limit == 0 {
             return Ok(Vec::new());
         }
@@ -1687,11 +1677,7 @@ impl TraceStore for SqliteStore {
         result
     }
 
-    async fn get_events_tail(
-        &self,
-        run_id: &str,
-        limit: usize,
-    ) -> anyhow::Result<Vec<TraceEvent>> {
+    async fn get_events_tail(&self, run_id: &str, limit: usize) -> anyhow::Result<Vec<TraceEvent>> {
         let (events, _) = self.get_events_limited(run_id, limit).await?;
         Ok(events)
     }
@@ -1769,9 +1755,7 @@ impl TraceStore for SqliteStore {
 
 /// Load aggregates payload for a run, if present.
 fn load_aggregates(conn: &Connection, run_id: &str) -> anyhow::Result<Option<RunAggregates>> {
-    let mut stmt = conn.prepare(
-        "SELECT payload FROM run_aggregates WHERE run_id = ?1",
-    )?;
+    let mut stmt = conn.prepare("SELECT payload FROM run_aggregates WHERE run_id = ?1")?;
     match stmt.query_row(params![run_id], |row| row.get::<_, String>(0)) {
         Ok(payload) => {
             let agg: RunAggregates = serde_json::from_str(&payload)

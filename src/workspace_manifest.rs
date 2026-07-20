@@ -12,6 +12,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::crypto::content_key;
+use crate::redaction::scanner::SecretScanner;
+use crate::redaction::RedactionConfig;
 use crate::storage::TraceStore;
 
 /// Manifest format version.
@@ -130,9 +132,7 @@ impl WorkspaceManifest {
 
 /// Return true when a path component should be ignored.
 pub fn is_ignored_component(name: &str) -> bool {
-    IGNORE_DIR_NAMES.contains(&name)
-        || name == "blackbox.db"
-        || name.starts_with("blackbox.db-")
+    IGNORE_DIR_NAMES.contains(&name) || name == "blackbox.db" || name.starts_with("blackbox.db-")
 }
 
 /// Capture a bounded workspace manifest. Optionally store file blobs.
@@ -151,6 +151,14 @@ pub async fn capture_workspace_manifest(
     let mut limitations = Vec::new();
     let mut hit_file_limit = false;
     let mut hit_byte_limit = false;
+    let scanner = SecretScanner::new(RedactionConfig::default());
+    // Checkpoint source files can contain split credential literals (for
+    // example adjacent shell strings) that are too short for the general
+    // scanner's low-false-positive thresholds but still expose useful token
+    // prefixes at rest.
+    let credential_fragment = regex::Regex::new(
+        r"\b(?:sk-|ghp_|gho_|ghu_|ghs_|ghr_|xox[baprs]-|npm_|xai-)[A-Za-z0-9_-]{8,}",
+    )?;
 
     // Iterative DFS: (dir, depth)
     let mut stack: Vec<(PathBuf, usize)> = vec![(root.clone(), 0)];
@@ -305,11 +313,23 @@ pub async fn capture_workspace_manifest(
                     continue;
                 }
             };
-            bytes_hashed = bytes_hashed.saturating_add(data.len() as u64);
-            let hash = content_key(&data);
+            // Preserve arbitrary binary files byte-for-byte, but apply the
+            // default redact-before-write policy to textual checkpoint data.
+            let safe_data = match std::str::from_utf8(&data) {
+                Ok(text) => {
+                    let redacted = scanner.redact(text);
+                    credential_fragment
+                        .replace_all(&redacted, "[REDACTED]")
+                        .into_owned()
+                        .into_bytes()
+                }
+                Err(_) => data,
+            };
+            bytes_hashed = bytes_hashed.saturating_add(safe_data.len() as u64);
+            let hash = content_key(&safe_data);
             if limits.store_blobs {
                 if let Some(store) = store {
-                    if let Err(e) = store.store_blob(&data).await {
+                    if let Err(e) = store.store_blob(&safe_data).await {
                         limitations.push(format!("store blob {rel}: {e}"));
                     }
                 }
@@ -318,7 +338,7 @@ pub async fn capture_workspace_manifest(
                 path: rel,
                 entry_type: ManifestEntryType::File,
                 content_hash: Some(hash),
-                size: Some(size),
+                size: Some(safe_data.len() as u64),
                 mode,
                 symlink_target: None,
                 git_state: "unknown".into(),
@@ -568,13 +588,10 @@ mod tests {
         std::fs::write(src.path().join("target/x"), b"noise").unwrap();
 
         let store = Arc::new(SqliteStore::open_memory().unwrap());
-        let manifest = capture_workspace_manifest(
-            src.path(),
-            Some(store.as_ref()),
-            ManifestLimits::default(),
-        )
-        .await
-        .unwrap();
+        let manifest =
+            capture_workspace_manifest(src.path(), Some(store.as_ref()), ManifestLimits::default())
+                .await
+                .unwrap();
 
         assert!(manifest.entries.iter().any(|e| e.path == "a.txt"));
         assert!(manifest.entries.iter().any(|e| e.path == "sub/b.bin"));
@@ -588,10 +605,7 @@ mod tests {
             .await
             .unwrap();
         assert!(report.complete, "report={report:?}");
-        assert_eq!(
-            std::fs::read(dest.path().join("a.txt")).unwrap(),
-            b"hello"
-        );
+        assert_eq!(std::fs::read(dest.path().join("a.txt")).unwrap(), b"hello");
         assert_eq!(
             std::fs::read(dest.path().join("sub/b.bin")).unwrap(),
             b"\x00\x01\x02binary"

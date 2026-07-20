@@ -2478,8 +2478,7 @@ async fn cmd_export(cli: &Cli, args: &ExportArgs) -> anyhow::Result<()> {
         )?;
     }
     if let Some(path) = args.output.as_deref() {
-        std::fs::write(path, &output)
-            .map_err(|e| anyhow::anyhow!("write {}: {e}", path))?;
+        std::fs::write(path, &output).map_err(|e| anyhow::anyhow!("write {}: {e}", path))?;
         if cli.json {
             return output::emit_ok(
                 "export",
@@ -2525,7 +2524,11 @@ async fn cmd_import(cli: &Cli, args: &ImportArgs) -> anyhow::Result<()> {
             crate::util::short_id(&result.run_id),
             result.events,
             result.blobs,
-            if result.remapped { ", remapped ids" } else { "" }
+            if result.remapped {
+                ", remapped ids"
+            } else {
+                ""
+            }
         );
         return Ok(());
     }

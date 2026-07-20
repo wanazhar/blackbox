@@ -384,10 +384,8 @@ impl ReplayEngine for SandboxReplay {
             std::fs::create_dir_all(ws)?;
             ws.clone()
         } else {
-            let dir = std::env::temp_dir().join(format!(
-                "blackbox-workspace-{}",
-                sanitize_run_id(&run.id)
-            ));
+            let dir = std::env::temp_dir()
+                .join(format!("blackbox-workspace-{}", sanitize_run_id(&run.id)));
             std::fs::create_dir_all(&dir)?;
             cleanup_guard = TempDirGuard::new(dir.clone());
             dir
@@ -613,7 +611,11 @@ impl ReplayEngine for SandboxReplay {
             if !stderr.trim().is_empty() {
                 println!("      stderr: {}", truncate(stderr.trim(), 200));
             }
-            tracing::info!(seq = event.sequence, exit = code, "workspace: executed event");
+            tracing::info!(
+                seq = event.sequence,
+                exit = code,
+                "workspace: executed event"
+            );
             executed += 1;
         }
 
@@ -779,10 +781,8 @@ pub fn apply_git_diff(workspace: &Path, diff: &str) -> anyhow::Result<String> {
     }
 
     // Staging workspace — never mutate the destination until apply succeeds fully.
-    let stage_path = std::env::temp_dir().join(format!(
-        "blackbox-patch-stage-{}",
-        uuid::Uuid::new_v4()
-    ));
+    let stage_path =
+        std::env::temp_dir().join(format!("blackbox-patch-stage-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&stage_path).context("create patch staging dir")?;
     let _stage_guard = TempDirGuard::new(stage_path.clone());
 
@@ -1303,8 +1303,17 @@ mod tests {
         assert!(is_readonly_command(&["cat".into(), "file.txt".into()]));
         assert!(is_readonly_command(&["ls".into(), "-la".into()]));
         // env/find removed; absolute arg paths blocked.
-        assert!(!is_readonly_command(&["env".into(), "python3".into(), "-c".into(), "print(1)".into()]));
-        assert!(!is_readonly_command(&["find".into(), ".".into(), "-delete".into()]));
+        assert!(!is_readonly_command(&[
+            "env".into(),
+            "python3".into(),
+            "-c".into(),
+            "print(1)".into()
+        ]));
+        assert!(!is_readonly_command(&[
+            "find".into(),
+            ".".into(),
+            "-delete".into()
+        ]));
         assert!(!is_readonly_command(&["cat".into(), "/etc/passwd".into()]));
         assert!(!is_readonly_command(&["python3".into(), "x.py".into()]));
     }
@@ -1459,8 +1468,7 @@ mod tests {
     fn apply_git_diff_rejects_traversal_before_modify() {
         let ws = tempfile::tempdir().unwrap();
         std::fs::write(ws.path().join("keep.txt"), b"safe").unwrap();
-        let evil =
-            "diff --git a/x b/x\n--- a/x\n+++ b/../../escape.txt\n@@ -0,0 +1 @@\n+pwned\n";
+        let evil = "diff --git a/x b/x\n--- a/x\n+++ b/../../escape.txt\n@@ -0,0 +1 @@\n+pwned\n";
         let err = apply_git_diff(ws.path(), evil).unwrap_err();
         assert!(
             err.to_string().contains("traversal") || err.to_string().contains("rejected"),

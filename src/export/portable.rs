@@ -147,9 +147,7 @@ pub async fn export_portable_dir(
             Ok(bytes) => {
                 let computed = content_key(&bytes);
                 if computed != key {
-                    anyhow::bail!(
-                        "export blob integrity: key {key} != content hash {computed}"
-                    );
+                    anyhow::bail!("export blob integrity: key {key} != content hash {computed}");
                 }
                 let out_bytes = if let Some(ref sc) = scanner {
                     if let Ok(text) = std::str::from_utf8(&bytes) {
@@ -236,8 +234,7 @@ pub async fn import_portable_dir(
     new_ids: bool,
 ) -> anyhow::Result<ImportResult> {
     let manifest: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(dir.join("manifest.json"))
-            .context("read manifest.json")?,
+        &std::fs::read_to_string(dir.join("manifest.json")).context("read manifest.json")?,
     )?;
     let format = manifest
         .get("format")
@@ -275,8 +272,8 @@ pub async fn import_portable_dir(
         if events_val.len() >= MAX_EVENTS {
             anyhow::bail!("portable dir has too many events (max {MAX_EVENTS})");
         }
-        let v: serde_json::Value = serde_json::from_str(line)
-            .with_context(|| format!("events.jsonl line {}", i + 1))?;
+        let v: serde_json::Value =
+            serde_json::from_str(line).with_context(|| format!("events.jsonl line {}", i + 1))?;
         events_val.push(v);
     }
 
@@ -300,9 +297,7 @@ pub async fn import_portable_dir(
             }
             total_blob_bytes = total_blob_bytes.saturating_add(meta.len() as usize);
             if total_blob_bytes > MAX_TOTAL_BLOB_BYTES {
-                anyhow::bail!(
-                    "portable dir total blob bytes exceed max {MAX_TOTAL_BLOB_BYTES}"
-                );
+                anyhow::bail!("portable dir total blob bytes exceed max {MAX_TOTAL_BLOB_BYTES}");
             }
             if blobs.len() >= MAX_BLOBS {
                 anyhow::bail!("portable dir has too many blobs (max {MAX_BLOBS})");
@@ -310,9 +305,7 @@ pub async fn import_portable_dir(
             let bytes = std::fs::read(entry.path())?;
             let computed = content_key(&bytes);
             if computed != name {
-                anyhow::bail!(
-                    "blob hash mismatch: file {name} content SHA-256 is {computed}"
-                );
+                anyhow::bail!("blob hash mismatch: file {name} content SHA-256 is {computed}");
             }
             let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
             blobs.insert(
@@ -626,10 +619,7 @@ fn decode_and_verify_blobs(
     Ok(out)
 }
 
-fn validate_event_blob_refs(
-    events: &[TraceEvent],
-    known: &HashSet<&str>,
-) -> anyhow::Result<()> {
+fn validate_event_blob_refs(events: &[TraceEvent], known: &HashSet<&str>) -> anyhow::Result<()> {
     for ev in events {
         for (field, key) in [
             ("input_blob", ev.input_blob.as_deref()),

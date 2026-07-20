@@ -172,10 +172,7 @@ impl RunSupervisor {
         let _active_supervisor = crate::nest::ActiveSupervisorGuard::acquire(&run.id);
 
         // 1.5 S1: live capture uses bounded batch ingest (not per-event SQLite).
-        let writer = Arc::new(EventWriter::new_batched(
-            self.store.clone(),
-            run.id.clone(),
-        ));
+        let writer = Arc::new(EventWriter::new_batched(self.store.clone(), run.id.clone()));
 
         // ── Capture and redact environment variables (single map; value+name scan) ──
         let env_redactor = EnvironmentRedactor::new(redact_cfg.clone());

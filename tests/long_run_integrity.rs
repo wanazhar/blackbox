@@ -23,9 +23,10 @@ async fn aggregates_exact_totals_for_large_run() {
 
     // Early human instruction + failure that must remain visible later.
     let mut human = TraceEvent::new(&run.id, EventSource::Human, "human.input");
-    human
-        .metadata
-        .insert("text".into(), serde_json::json!("fix the flaky integration test"));
+    human.metadata.insert(
+        "text".into(),
+        serde_json::json!("fix the flaky integration test"),
+    );
     writer.write(human).await.unwrap();
 
     let mut fail = TraceEvent::new(&run.id, EventSource::Tool, "tool.result");
@@ -34,8 +35,10 @@ async fn aggregates_exact_totals_for_large_run() {
         .insert("tool_use_id".into(), serde_json::json!("early-fail"));
     fail.metadata
         .insert("tool_name".into(), serde_json::json!("Bash"));
-    fail.metadata
-        .insert("message".into(), serde_json::json!("test failed: assert eq"));
+    fail.metadata.insert(
+        "message".into(),
+        serde_json::json!("test failed: assert eq"),
+    );
     writer.write(fail).await.unwrap();
 
     let mut call = TraceEvent::new(&run.id, EventSource::Tool, "tool.call");
@@ -51,8 +54,7 @@ async fn aggregates_exact_totals_for_large_run() {
     for i in 0..N_EVENTS {
         let mut e = TraceEvent::new(&run.id, EventSource::Terminal, "terminal.output");
         e.sequence = next_seq + i as u64;
-        e.metadata
-            .insert("chunk".into(), serde_json::json!(i));
+        e.metadata.insert("chunk".into(), serde_json::json!(i));
         batch.push(e);
         if batch.len() >= 500 {
             store.insert_events_batch(&batch).await.unwrap();

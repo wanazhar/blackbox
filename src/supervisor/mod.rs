@@ -20,6 +20,4 @@ pub mod shutdown;
 pub use checkpoint::{build_end_checkpoint, CheckpointInputs};
 pub use lifecycle::{RunStage, ShutdownReason};
 pub use rollup::{build_coverage_events, RollupInputs, RollupOutput};
-pub use shutdown::{
-    escalate_sigkill, forward_sigint, timeout_kill_and_wait, DrainStep, SIGGRACE,
-};
+pub use shutdown::{escalate_sigkill, forward_sigint, timeout_kill_and_wait, DrainStep, SIGGRACE};

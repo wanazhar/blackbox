@@ -242,10 +242,7 @@ impl TraceEvent {
         t.received_at = t.received_at.or(Some(now));
         if t.occurred_at_wall.is_none() {
             t.occurred_at_wall = Some(self.started_at);
-            if matches!(
-                t.clock_source,
-                crate::core::timing::ClockSource::Unknown
-            ) {
+            if matches!(t.clock_source, crate::core::timing::ClockSource::Unknown) {
                 t.clock_source = crate::core::timing::ClockSource::IngestOnly;
             }
         }

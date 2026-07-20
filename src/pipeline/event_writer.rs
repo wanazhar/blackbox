@@ -248,10 +248,7 @@ impl EventWriter {
             EventSource::Browser => "Browser",
             EventSource::System => "System",
         };
-        let mut map = self
-            .source_seqs
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut map = self.source_seqs.lock().unwrap_or_else(|e| e.into_inner());
         let n = map.entry(key).or_insert(0);
         *n = n.saturating_add(1);
         *n
@@ -337,10 +334,9 @@ impl EventWriter {
                     event
                         .metadata
                         .insert("duplicate_of".to_string(), serde_json::json!(original_id));
-                    event.metadata.insert(
-                        "duplicate_reason".to_string(),
-                        serde_json::json!(reason),
-                    );
+                    event
+                        .metadata
+                        .insert("duplicate_reason".to_string(), serde_json::json!(reason));
                     event.metadata.insert(
                         "capture_provenance".to_string(),
                         serde_json::json!(provenances),
@@ -353,10 +349,8 @@ impl EventWriter {
                             "capture_provenance".to_string(),
                             serde_json::json!(provenances),
                         );
-                        kept.metadata.insert(
-                            "duplicate_reason".to_string(),
-                            serde_json::json!(reason),
-                        );
+                        kept.metadata
+                            .insert("duplicate_reason".to_string(), serde_json::json!(reason));
                         let _ = self.store.update_event(&kept).await;
                     }
                     if let Ok(mut h) = self.health.lock() {
@@ -677,8 +671,7 @@ mod tests {
 
         for i in 0..40 {
             let mut e = TraceEvent::new(&run.id, EventSource::Terminal, "terminal.output");
-            e.metadata
-                .insert("i".into(), serde_json::json!(i));
+            e.metadata.insert("i".into(), serde_json::json!(i));
             writer.write(e).await.unwrap();
         }
         // Barrier event must be durable before write returns.

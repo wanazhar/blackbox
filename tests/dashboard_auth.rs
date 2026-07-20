@@ -13,7 +13,10 @@ fn cookie_parser_ignores_other_cookies() {
         header::COOKIE,
         "a=1; blackbox_session=deadbeef; b=2".parse().unwrap(),
     );
-    assert_eq!(cookie_value(&h, SESSION_COOKIE).as_deref(), Some("deadbeef"));
+    assert_eq!(
+        cookie_value(&h, SESSION_COOKIE).as_deref(),
+        Some("deadbeef")
+    );
     assert!(cookie_value(&h, "missing").is_none());
 }
 

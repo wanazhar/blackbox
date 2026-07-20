@@ -108,7 +108,9 @@ fn try_prepare_marker_dir(dir: &Path) -> bool {
             return false;
         }
         let _ = fs::set_permissions(dir, fs::Permissions::from_mode(0o700));
-        let mode = fs::metadata(dir).map(|m| m.permissions().mode() & 0o777).unwrap_or(0);
+        let mode = fs::metadata(dir)
+            .map(|m| m.permissions().mode() & 0o777)
+            .unwrap_or(0);
         if mode & 0o077 != 0 {
             // Still group/other accessible after chmod attempt.
             let _ = fs::set_permissions(dir, fs::Permissions::from_mode(0o700));

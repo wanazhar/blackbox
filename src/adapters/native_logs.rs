@@ -581,8 +581,7 @@ pub async fn poll_native_logs(
 async fn emit_native_log_health(writer: &EventWriter, health: &NativeLogHealth, phase: &str) {
     let mut ev = TraceEvent::new(writer.run_id(), EventSource::System, "native_log.health");
     ev.status = EventStatus::Success;
-    ev.metadata
-        .insert("phase".into(), serde_json::json!(phase));
+    ev.metadata.insert("phase".into(), serde_json::json!(phase));
     ev.metadata.insert(
         "tracked_files".into(),
         serde_json::json!(health.tracked_files),
@@ -597,10 +596,8 @@ async fn emit_native_log_health(writer: &EventWriter, health: &NativeLogHealth, 
     );
     ev.metadata
         .insert("rotations".into(), serde_json::json!(health.rotations));
-    ev.metadata.insert(
-        "poll_errors".into(),
-        serde_json::json!(health.poll_errors),
-    );
+    ev.metadata
+        .insert("poll_errors".into(), serde_json::json!(health.poll_errors));
     let _ = writer.write(ev).await;
 }
 
@@ -771,10 +768,8 @@ async fn emit_rotation_event(
         .insert("path".into(), serde_json::json!(path.display().to_string()));
     ev.metadata
         .insert("reason".into(), serde_json::json!(reason));
-    ev.metadata.insert(
-        "inode".into(),
-        serde_json::json!(state.identity.inode),
-    );
+    ev.metadata
+        .insert("inode".into(), serde_json::json!(state.identity.inode));
     ev.metadata.insert(
         "generation".into(),
         serde_json::json!(state.identity.generation),

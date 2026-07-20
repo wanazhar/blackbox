@@ -16,18 +16,16 @@ async fn untracked_and_binary_restore() {
     std::fs::write(src.path().join("nested/untracked.txt"), b"side effect").unwrap();
 
     let store = Arc::new(SqliteStore::open_memory().unwrap());
-    let manifest = capture_workspace_manifest(
-        src.path(),
-        Some(store.as_ref()),
-        ManifestLimits::default(),
-    )
-    .await
-    .unwrap();
+    let manifest =
+        capture_workspace_manifest(src.path(), Some(store.as_ref()), ManifestLimits::default())
+            .await
+            .unwrap();
 
     assert!(manifest.files_total >= 3);
-    assert!(manifest.entries.iter().any(|e| e.path == "data.bin"
-        && e.content_hash.is_some()
-        && e.complete));
+    assert!(manifest
+        .entries
+        .iter()
+        .any(|e| e.path == "data.bin" && e.content_hash.is_some() && e.complete));
 
     let dest = tempfile::tempdir().unwrap();
     let report = restore_workspace_manifest(&manifest, dest.path(), store.as_ref())
@@ -66,7 +64,10 @@ async fn partial_restore_reported() {
     let report = restore_workspace_manifest(&manifest, dest.path(), store.as_ref())
         .await
         .unwrap();
-    assert!(!report.complete, "incomplete capture must not claim complete restore");
+    assert!(
+        !report.complete,
+        "incomplete capture must not claim complete restore"
+    );
     assert!(report.skipped >= 1 || !report.limitations.is_empty());
     assert!(dest.path().join("ok.txt").exists());
     assert!(!dest.path().join("huge.bin").exists());
@@ -86,22 +87,16 @@ async fn symlink_explicit_behavior() {
     }
 
     let store = Arc::new(SqliteStore::open_memory().unwrap());
-    let manifest = capture_workspace_manifest(
-        src.path(),
-        Some(store.as_ref()),
-        ManifestLimits::default(),
-    )
-    .await
-    .unwrap();
+    let manifest =
+        capture_workspace_manifest(src.path(), Some(store.as_ref()), ManifestLimits::default())
+            .await
+            .unwrap();
     let link = manifest
         .entries
         .iter()
         .find(|e| e.path == "link.txt")
         .expect("symlink entry");
-    assert_eq!(
-        link.symlink_target.as_deref(),
-        Some("target.txt")
-    );
+    assert_eq!(link.symlink_target.as_deref(), Some("target.txt"));
 
     let dest = tempfile::tempdir().unwrap();
     let report = restore_workspace_manifest(&manifest, dest.path(), store.as_ref())

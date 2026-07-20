@@ -19,10 +19,8 @@ async fn repeated_idless_commands_survive() {
         let mut call = TraceEvent::new(&run.id, EventSource::Tool, "tool.call");
         call.metadata
             .insert("tool_name".into(), serde_json::json!("Bash"));
-        call.metadata.insert(
-            "input".into(),
-            serde_json::json!({"cmd": "cargo test"}),
-        );
+        call.metadata
+            .insert("input".into(), serde_json::json!({"cmd": "cargo test"}));
         writer.write(call).await.unwrap();
     }
 
@@ -60,10 +58,9 @@ async fn proven_pty_native_log_duplicates_merge() {
     native
         .metadata
         .insert("tool_name".into(), serde_json::json!("Read"));
-    native.metadata.insert(
-        "input".into(),
-        serde_json::json!({"path": "src/main.rs"}),
-    );
+    native
+        .metadata
+        .insert("input".into(), serde_json::json!({"path": "src/main.rs"}));
     native
         .metadata
         .insert("native_log".into(), serde_json::json!("/tmp/session.jsonl"));

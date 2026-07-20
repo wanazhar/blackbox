@@ -70,8 +70,7 @@ impl BlobReference {
 
 /// Check if a string is a valid blob key (64 **lowercase** hex chars = SHA-256).
 pub fn is_valid_blob_key(key: &str) -> bool {
-    key.len() == 64
-        && key.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    key.len() == 64 && key.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 #[cfg(test)]

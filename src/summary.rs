@@ -255,12 +255,15 @@ pub async fn build_summary(
         Some(a) if a.events_total == count && count > 0 => a,
         _ => {
             // Missing, incomplete, or out of sync — recompute from events.
-            store.recompute_run_aggregates(&run.id).await.unwrap_or_else(|_| {
-                let mut a = RunAggregates::new(run.id.clone());
-                a.events_total = count;
-                a.aggregates_complete = false;
-                a
-            })
+            store
+                .recompute_run_aggregates(&run.id)
+                .await
+                .unwrap_or_else(|_| {
+                    let mut a = RunAggregates::new(run.id.clone());
+                    a.events_total = count;
+                    a.aggregates_complete = false;
+                    a
+                })
         }
     };
     // Prefer store count when aggregates lag a concurrent writer.

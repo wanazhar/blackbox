@@ -4,7 +4,9 @@ All notable changes to **blackbox** are documented here.
 
 ## [Unreleased]
 
-### Security hardening (pre-1.5.0 tag)
+## [1.5.0] — 2026-07-20
+
+### Security hardening
 
 - Sealed export/backup packs require authenticated BBEN ciphertext (no plaintext passthrough)
 - PBKDF2 iteration count fixed (reject attacker-chosen DoS values)
@@ -18,7 +20,7 @@ All notable changes to **blackbox** are documented here.
 - SSE concurrency permits held for stream lifetime; login rate limit; API events hard cap
 - Import redacts run command/cwd/name/tags; HTTP sync disables redirects + blocks IMDS hosts
 
-### 1.5.0 — Trace integrity & scale (in progress)
+### Trace integrity & scale
 
 Plan: [docs/plan/trace-integrity-1.5.md](docs/plan/trace-integrity-1.5.md). Epic: [issue #3](https://github.com/wanazhar/blackbox/issues/3).
 

@@ -5,9 +5,7 @@
 
 use blackbox::core::event::{EventSource, SideEffect, TraceEvent};
 use blackbox::core::run::Run;
-use blackbox::replay::sandbox::{
-    capability_report, probe_contained_backend, SandboxReplay,
-};
+use blackbox::replay::sandbox::{capability_report, probe_contained_backend, SandboxReplay};
 use blackbox::replay::{ReplayEngine, ReplayPolicy};
 
 #[test]
@@ -118,10 +116,8 @@ async fn contained_replay_runs_when_bwrap_present() {
     let mut ev = TraceEvent::new(&run.id, EventSource::Process, "process.exec");
     ev.sequence = 1;
     ev.side_effect = SideEffect::None;
-    ev.metadata.insert(
-        "argv".into(),
-        serde_json::json!(["/bin/cat", "marker.txt"]),
-    );
+    ev.metadata
+        .insert("argv".into(), serde_json::json!(["/bin/cat", "marker.txt"]));
     ev.metadata
         .insert("capture_method".into(), serde_json::json!("proc_cmdline"));
     ev.metadata

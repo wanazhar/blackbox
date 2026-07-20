@@ -144,7 +144,7 @@ Full acceptance criteria: [issue #3 comments](https://github.com/wanazhar/blackb
 - [x] Claim matrix (`docs/claims.md`); symptom-first troubleshooting
 - [x] Docs CI extensions (`tests/docs_commands.rs` inventory + claim gates)
 - [x] Operator guide editorial pass for 1.5 surfaces (export/portable-dir, troubleshooting, claims)
-- [ ] Cargo **1.5.0** tag after full qualify (release step; not local commit)
+- [x] Cargo **1.5.0** release metadata prepared; tag after full qualification
 
 ---
 
@@ -163,7 +163,7 @@ Full acceptance criteria: [issue #3 comments](https://github.com/wanazhar/blackb
 11. ~~macOS runtime qualification~~
 12. ~~Supervisor decomposition (rollup/checkpoint/shutdown)~~
 
-**Remaining release step:** full Unix qualify + Cargo **1.5.0** tag (not a code item).
+**Release step:** full Unix qualification, publish, and Cargo **1.5.0** tag (not a code item).
 
 ---
 

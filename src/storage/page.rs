@@ -53,7 +53,8 @@ pub fn encode_run_cursor(c: &RunPageCursor) -> String {
 }
 
 pub fn decode_run_cursor(s: &str) -> Option<RunPageCursor> {
-    let bytes = base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, s).ok()?;
+    let bytes =
+        base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, s).ok()?;
     serde_json::from_slice(&bytes).ok()
 }
 
@@ -63,7 +64,8 @@ pub fn encode_event_cursor(c: &EventPageCursor) -> String {
 }
 
 pub fn decode_event_cursor(s: &str) -> Option<EventPageCursor> {
-    let bytes = base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, s).ok()?;
+    let bytes =
+        base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, s).ok()?;
     serde_json::from_slice(&bytes).ok()
 }
 

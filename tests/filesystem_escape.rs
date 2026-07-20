@@ -24,19 +24,11 @@ fn project_symlink_to_home_does_not_expand_scope() {
     }
 
     // Default policy: Ignore symlink paths entirely.
-    let scope = FilesystemCapture::classify_path(
-        root.path(),
-        &link,
-        SymlinkPolicy::Ignore,
-    );
+    let scope = FilesystemCapture::classify_path(root.path(), &link, SymlinkPolicy::Ignore);
     assert_eq!(scope, PathScope::Ignored);
 
     // LinkOnly: labeled symlink, not followed as in-root content.
-    let scope = FilesystemCapture::classify_path(
-        root.path(),
-        &link,
-        SymlinkPolicy::LinkOnly,
-    );
+    let scope = FilesystemCapture::classify_path(root.path(), &link, SymlinkPolicy::LinkOnly);
     assert_eq!(scope, PathScope::Symlink);
 
     // FollowWithinRoot: resolved target is outside → OutsideRoot.

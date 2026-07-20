@@ -140,14 +140,8 @@ impl BatchIngestor {
     }
 
     /// Enqueue an event. When `barrier` is true, wait until it is durably flushed.
-    pub async fn enqueue(
-        &self,
-        event: TraceEvent,
-        barrier: bool,
-    ) -> anyhow::Result<()> {
-        self.health
-            .events_enqueued
-            .fetch_add(1, Ordering::Relaxed);
+    pub async fn enqueue(&self, event: TraceEvent, barrier: bool) -> anyhow::Result<()> {
+        self.health.events_enqueued.fetch_add(1, Ordering::Relaxed);
         let depth = self.queue_depth.fetch_add(1, Ordering::Relaxed) + 1;
         self.health
             .queue_high_water

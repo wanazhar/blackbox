@@ -203,7 +203,7 @@ fi
   echo
   echo "- commit: \`$(git rev-parse HEAD 2>/dev/null || echo unknown)\`"
   echo "- rustc: \`$(rustc --version 2>/dev/null || echo unknown)\`"
-  echo "- target: \`$(rustc -vV 2>/dev/null | awk '/^host:/{print \$2}' || uname -m)\`"
+  echo "- target: \`$(rustc -vV 2>/dev/null | awk '/^host:/{print $2}' || uname -m)\`"
   echo "- uname: \`$(uname -srm 2>/dev/null || echo unknown)\`"
   echo
   if [ "$FAILS" -eq 0 ]; then

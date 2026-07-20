@@ -301,10 +301,7 @@ pub trait TraceStore: Send + Sync + 'static {
     /// Recompute aggregates from the full event table and store them.
     ///
     /// Default: load all events, recompute, put.
-    async fn recompute_run_aggregates(
-        &self,
-        run_id: &str,
-    ) -> anyhow::Result<RunAggregates> {
+    async fn recompute_run_aggregates(&self, run_id: &str) -> anyhow::Result<RunAggregates> {
         let events = self.get_events(run_id).await?;
         let agg = RunAggregates::recompute(run_id, &events);
         self.put_run_aggregates(&agg).await?;
@@ -312,21 +309,13 @@ pub trait TraceStore: Send + Sync + 'static {
     }
 
     /// Load first `limit` events by ascending sequence (run head).
-    async fn get_events_head(
-        &self,
-        run_id: &str,
-        limit: usize,
-    ) -> anyhow::Result<Vec<TraceEvent>> {
+    async fn get_events_head(&self, run_id: &str, limit: usize) -> anyhow::Result<Vec<TraceEvent>> {
         let all = self.get_events(run_id).await?;
         Ok(all.into_iter().take(limit).collect())
     }
 
     /// Load last `limit` events by ascending sequence (run tail).
-    async fn get_events_tail(
-        &self,
-        run_id: &str,
-        limit: usize,
-    ) -> anyhow::Result<Vec<TraceEvent>> {
+    async fn get_events_tail(&self, run_id: &str, limit: usize) -> anyhow::Result<Vec<TraceEvent>> {
         let (events, _) = self.get_events_limited(run_id, limit).await?;
         Ok(events)
     }

@@ -21,9 +21,8 @@ pub fn is_safe_id(id: &str) -> bool {
     if b.is_empty() || b.len() > 128 {
         return false;
     }
-    b.iter().all(|c| {
-        c.is_ascii_alphanumeric() || *c == b'-' || *c == b'_'
-    })
+    b.iter()
+        .all(|c| c.is_ascii_alphanumeric() || *c == b'-' || *c == b'_')
 }
 
 /// Shell harness wrap basename: must be a pure function identifier.
@@ -220,7 +219,9 @@ mod notes_tests {
         assert!(confined_join(base, "runs/a.json").is_ok());
         assert!(confined_join(base, "../etc/passwd").is_err());
         assert!(confined_join(base, "/etc/passwd").is_err());
-        assert!(is_safe_sync_run_file("runs/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.json"));
+        assert!(is_safe_sync_run_file(
+            "runs/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.json"
+        ));
         assert!(!is_safe_sync_run_file("../../x.json"));
         assert!(!is_safe_sync_run_file("runs/../x.json"));
         assert!(!is_safe_sync_run_file("/tmp/x.json"));

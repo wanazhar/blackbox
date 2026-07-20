@@ -87,7 +87,10 @@ fn delayed_cross_layer_does_not_create_false_strict_ordering() {
     });
     pty.set_source_sequence(1);
 
-    assert!(pty.sequence < fs.sequence, "storage order inverted vs reality");
+    assert!(
+        pty.sequence < fs.sequence,
+        "storage order inverted vs reality"
+    );
     assert_eq!(relate_occurrence(&fs, &pty), OrderingRelation::Before);
     assert_eq!(relate_occurrence(&pty, &fs), OrderingRelation::After);
 

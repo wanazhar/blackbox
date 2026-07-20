@@ -31,9 +31,10 @@ const SEED_MAX_DEPTH: usize = 6;
 
 /// Workspace replay — re-execute allowed events inside a temporary directory.
 ///
-/// **Not OS process isolation.** This mode uses a temporary workspace directory
-/// and policy filters (no network/home/kernel sandbox). Capability preflight
-/// reports `workspace isolation: temporary-directory` only.
+/// **Default is not OS process isolation.** Workspace mode uses a temporary
+/// directory and policy filters. Enable [`SandboxReplay::with_contained`] on
+/// Linux when `bwrap` is available for best-effort namespace isolation
+/// (network unshare + restricted binds).
 ///
 /// External and destructive side effects are blocked under the default
 /// `ReplayPolicy::Sandbox`. Read and local-write process/tool commands
@@ -53,6 +54,8 @@ pub struct SandboxReplay {
     git_diff: Option<String>,
     /// When true (default), attempt git-commit restore when `git_commit` is set.
     restore_git: bool,
+    /// Linux contained backend via bubblewrap when available.
+    contained: bool,
 }
 
 impl SandboxReplay {
@@ -64,6 +67,7 @@ impl SandboxReplay {
             git_commit: None,
             git_diff: None,
             restore_git: true,
+            contained: false,
         }
     }
 
@@ -96,6 +100,15 @@ impl SandboxReplay {
 
     pub fn without_git_restore(mut self) -> Self {
         self.restore_git = false;
+        self
+    }
+
+    /// Prefer Linux contained execution (bubblewrap) when available.
+    ///
+    /// If `bwrap` is missing, [`ReplayEngine::start`] fails closed with a clear
+    /// preflight error rather than silently falling back to workspace-only.
+    pub fn with_contained(mut self, enabled: bool) -> Self {
+        self.contained = enabled;
         self
     }
 
@@ -188,6 +201,102 @@ impl SandboxReplay {
             Err(e) => (-1, String::new(), e.to_string()),
         }
     }
+
+    /// Run argv under bubblewrap when contained mode is on.
+    fn run_contained(cmd: &[String], cwd: &Path) -> (i32, String, String) {
+        if cmd.is_empty() {
+            return (-1, String::new(), "empty command".into());
+        }
+        let cwd_s = cwd.to_string_lossy();
+        // Best-effort containment: network unshare, die-with-parent, bind workspace
+        // writable, system paths read-only. Not a full multi-tenant sandbox.
+        let mut bwrap = Command::new("bwrap");
+        bwrap
+            .arg("--die-with-parent")
+            .arg("--unshare-net")
+            .arg("--dev")
+            .arg("/dev")
+            .arg("--proc")
+            .arg("/proc")
+            .arg("--tmpfs")
+            .arg("/tmp")
+            .arg("--ro-bind")
+            .arg("/usr")
+            .arg("/usr")
+            .arg("--ro-bind")
+            .arg("/bin")
+            .arg("/bin");
+        // Optional common roots (missing paths are skipped via separate checks).
+        for p in ["/lib", "/lib64", "/sbin", "/etc"] {
+            if Path::new(p).exists() {
+                bwrap.arg("--ro-bind").arg(p).arg(p);
+            }
+        }
+        bwrap
+            .arg("--bind")
+            .arg(cwd.as_os_str())
+            .arg(cwd.as_os_str())
+            .arg("--chdir")
+            .arg(cwd.as_os_str())
+            .arg("--")
+            .arg(&cmd[0])
+            .args(&cmd[1..]);
+        match bwrap.output() {
+            Ok(o) => (
+                o.status.code().unwrap_or(-1),
+                String::from_utf8_lossy(&o.stdout).to_string(),
+                String::from_utf8_lossy(&o.stderr).to_string(),
+            ),
+            Err(e) => (
+                -1,
+                String::new(),
+                format!("bwrap spawn failed in {cwd_s}: {e}"),
+            ),
+        }
+    }
+}
+
+/// Status of the optional Linux contained replay backend.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContainedBackendStatus {
+    pub available: bool,
+    pub tool: Option<String>,
+    pub reason: String,
+}
+
+/// Probe whether bubblewrap-based contained replay can be used on this host.
+pub fn probe_contained_backend() -> ContainedBackendStatus {
+    if !cfg!(target_os = "linux") {
+        return ContainedBackendStatus {
+            available: false,
+            tool: None,
+            reason: "contained replay requires Linux".into(),
+        };
+    }
+    match Command::new("bwrap").arg("--version").output() {
+        Ok(o) if o.status.success() => {
+            let ver = String::from_utf8_lossy(&o.stdout);
+            let first = ver.lines().next().unwrap_or("bwrap").trim().to_string();
+            ContainedBackendStatus {
+                available: true,
+                tool: Some("bwrap".into()),
+                reason: format!("bubblewrap available ({first})"),
+            }
+        }
+        Ok(o) => ContainedBackendStatus {
+            available: false,
+            tool: None,
+            reason: format!(
+                "bwrap --version failed: {}",
+                String::from_utf8_lossy(&o.stderr).trim()
+            ),
+        },
+        Err(e) => ContainedBackendStatus {
+            available: false,
+            tool: None,
+            reason: format!("bubblewrap (bwrap) not found on PATH: {e}"),
+        },
+    }
 }
 
 impl Default for SandboxReplay {
@@ -237,8 +346,12 @@ fn sanitize_run_id(id: &str) -> String {
 #[async_trait::async_trait]
 impl ReplayEngine for SandboxReplay {
     fn name(&self) -> &'static str {
-        // Historical engine id; operator-facing copy says "workspace replay".
-        "workspace"
+        if self.contained {
+            "contained"
+        } else {
+            // Historical engine id; operator-facing copy says "workspace replay".
+            "workspace"
+        }
     }
 
     async fn start(
@@ -311,7 +424,21 @@ impl ReplayEngine for SandboxReplay {
         };
 
         // Capability preflight — honest isolation level (1.5 R1).
-        let capabilities = workspace_capability_report(self.policy);
+        if self.contained {
+            let probe = probe_contained_backend();
+            if !probe.available {
+                anyhow::bail!(
+                    "contained replay requested but unavailable: {}",
+                    probe.reason
+                );
+            }
+        }
+        let capabilities = capability_report(self.policy, self.contained);
+        let mode_label = if self.contained {
+            "contained_replay"
+        } else {
+            "workspace_replay"
+        };
         let context = serde_json::json!({
             "source_run_id": run.id,
             "command": run.command,
@@ -323,7 +450,8 @@ impl ReplayEngine for SandboxReplay {
             "git_commit": self.git_commit,
             "git_restored": git_restored,
             "git_diff_applied": git_diff_applied,
-            "mode": "workspace_replay",
+            "mode": mode_label,
+            "contained": self.contained,
             "capabilities": capabilities,
         });
         std::fs::write(
@@ -336,10 +464,17 @@ impl ReplayEngine for SandboxReplay {
             serde_json::to_string_pretty(&context)?,
         );
 
-        println!("═══ Workspace replay ═══");
-        println!("workspace: {}", workspace.display());
-        println!("policy:    {:?}", self.policy);
-        println!("isolation: temporary directory (not OS process isolation)");
+        if self.contained {
+            println!("═══ Contained replay (bubblewrap) ═══");
+            println!("workspace: {}", workspace.display());
+            println!("policy:    {:?}", self.policy);
+            println!("isolation: best-effort namespaces via bwrap (not multi-tenant hardened)");
+        } else {
+            println!("═══ Workspace replay ═══");
+            println!("workspace: {}", workspace.display());
+            println!("policy:    {:?}", self.policy);
+            println!("isolation: temporary directory (not OS process isolation)");
+        }
         for (k, v) in &capabilities {
             println!("{k}: {v}");
         }
@@ -426,7 +561,11 @@ impl ReplayEngine for SandboxReplay {
                 continue;
             }
 
-            let (code, stdout, stderr) = Self::run_in_workspace(&cmd, &workspace);
+            let (code, stdout, stderr) = if self.contained {
+                Self::run_contained(&cmd, &workspace)
+            } else {
+                Self::run_in_workspace(&cmd, &workspace)
+            };
             println!(
                 "exec  seq={} kind={} cmd={:?} exit={}",
                 event.sequence, event.kind, cmd, code
@@ -507,34 +646,76 @@ pub fn restore_git_tree(source: &Path, workspace: &Path, commit: &str) -> anyhow
     Ok(format!("git archive {commit} → {}", workspace.display()))
 }
 
-/// Honest capability report for workspace replay (1.5 R1).
+/// Honest capability report for workspace or contained replay (1.5 R1).
 pub fn workspace_capability_report(policy: ReplayPolicy) -> Vec<(String, String)> {
-    let (net, home, creds, limits) = match policy {
+    capability_report(policy, false)
+}
+
+/// Capability report including contained-backend probe when `contained` is true.
+pub fn capability_report(policy: ReplayPolicy, contained: bool) -> Vec<(String, String)> {
+    let probe = if contained {
+        Some(probe_contained_backend())
+    } else {
+        None
+    };
+    let contained_ok = probe.as_ref().map(|p| p.available).unwrap_or(false);
+
+    let (net, home, creds, limits, isolation, kernel, backend) = match policy {
         ReplayPolicy::Live => (
-            "not enforced (live)",
-            "not enforced (live)",
-            "not stripped (live)",
-            "none",
+            "not enforced (live)".to_string(),
+            "not enforced (live)".to_string(),
+            "not stripped (live)".to_string(),
+            "none".to_string(),
+            "none (live)".to_string(),
+            "not available".to_string(),
+            "live".to_string(),
         ),
+        _ if contained_ok => (
+            "unshare-net (bwrap)".to_string(),
+            "not bound into container (bwrap)".to_string(),
+            "inherited from host process env (not stripped)".to_string(),
+            "die-with-parent only".to_string(),
+            "namespaces via bubblewrap".to_string(),
+            "best-effort (bwrap namespaces; not multi-tenant hardened)".to_string(),
+            "contained-bwrap".to_string(),
+        ),
+        _ if contained => {
+            let reason = probe
+                .as_ref()
+                .map(|p| p.reason.clone())
+                .unwrap_or_else(|| "unavailable".into());
+            (
+                format!("requested but unavailable ({reason})"),
+                "workspace-only fallback not used (fail closed)".to_string(),
+                "n/a".to_string(),
+                "n/a".to_string(),
+                "unavailable".to_string(),
+                format!("unavailable: {reason}"),
+                "contained-unavailable".to_string(),
+            )
+        }
         _ => (
-            "not enforced (workspace-only)",
-            "not enforced (workspace-only)",
-            "not stripped (workspace-only)",
-            "none",
+            "not enforced (workspace-only)".to_string(),
+            "not enforced (workspace-only)".to_string(),
+            "not stripped (workspace-only)".to_string(),
+            "none".to_string(),
+            "temporary-directory".to_string(),
+            "not available (use --contained on Linux with bwrap)".to_string(),
+            "workspace".to_string(),
         ),
     };
     vec![
-        ("workspace isolation".into(), "temporary-directory".into()),
-        ("filesystem escape protection".into(), "path-validated-patch-only".into()),
-        ("network isolation".into(), net.into()),
-        ("home access".into(), home.into()),
-        ("credential environment".into(), creds.into()),
-        ("resource limits".into(), limits.into()),
-        ("backend".into(), "workspace".into()),
+        ("workspace isolation".into(), isolation),
         (
-            "kernel isolation".into(),
-            "not available (use contained replay when implemented)".into(),
+            "filesystem escape protection".into(),
+            "path-validated-patch-only".into(),
         ),
+        ("network isolation".into(), net),
+        ("home access".into(), home),
+        ("credential environment".into(), creds),
+        ("resource limits".into(), limits),
+        ("backend".into(), backend),
+        ("kernel isolation".into(), kernel),
     ]
 }
 

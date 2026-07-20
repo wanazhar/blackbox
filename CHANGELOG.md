@@ -57,6 +57,13 @@ Plan: [docs/plan/trace-integrity-1.5.md](docs/plan/trace-integrity-1.5.md). Epic
 - Initial discovery + rare rediscovery; poll cycles do not rescan home trees every tick
 - Rate limits leave backlog_bytes / deferred_lines (honest incompleteness via `native_log.health`)
 
+#### Dashboard authentication (H1)
+- Browser session flow: `GET /login`, `POST /session`, `POST /logout`
+- Session cookie: HttpOnly, SameSite=Strict, optional Secure; API still uses Bearer
+- HTML navigations redirect to login; no token in query/URL
+- Cache-Control no-store + Referrer-Policy no-referrer on responses
+- Optional `--unix-socket` with mode 0600
+
 ## [1.4.0] — 2026-07-19
 
 **Trust Proof (Unix)** — recorder mode can stay on without silently changing the child or overstating causality; secrets are holdback-redacted before persist; coverage and postmortem claims stay weaker than or equal to evidence.

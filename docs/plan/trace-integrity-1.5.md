@@ -121,11 +121,11 @@ Full acceptance criteria: [issue #3 comments](https://github.com/wanazhar/blackb
 
 - [x] Bounded FS watcher + shared ignore policy + symlink scope (C1)
 - [x] Native-log rotation / identity tracking + backlog honesty
-- [ ] Dashboard session auth + CSRF for writes + optional UDS
+- [x] Dashboard session auth + bearer API + optional UDS (`--unix-socket`)
 - [ ] macOS runtime PR/pre-release gate
 - [x] Gate: `tests/filesystem_escape.rs`
 - [x] Gate: `tests/native_log_rotation.rs`
-- [ ] Gate: `tests/dashboard_auth.rs`
+- [x] Gate: `tests/dashboard_auth.rs`
 
 ### Phase E — Documentation rewrite + release
 

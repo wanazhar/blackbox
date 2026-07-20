@@ -1,10 +1,11 @@
 //! Local HTTP dashboard with live SSE event streams.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::convert::Infallible;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::export::portable::import_portable;
 use crate::export::{export_html_secure, export_portable_secure};
@@ -14,15 +15,21 @@ use crate::storage::TraceStore;
 use crate::sync::manifest_from_store;
 use crate::transcript::{rebuild_terminal_transcript, rebuild_tool_transcript};
 use axum::extract::{Path, Query, Request, State};
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
 use axum::middleware::{from_fn_with_state, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
-use axum::response::{Html, IntoResponse, Response};
-use axum::routing::get;
-use axum::{Json, Router};
+use axum::response::{Html, IntoResponse, Redirect, Response};
+use axum::routing::{get, post};
+use axum::{Form, Json, Router};
 use futures_util::stream::{self, Stream};
+use parking_lot::Mutex;
 use serde::Deserialize;
 use tokio::sync::Semaphore;
+
+/// Browser session cookie name (HttpOnly; not readable by JS).
+pub const SESSION_COOKIE: &str = "blackbox_session";
+/// Default browser session TTL.
+const SESSION_TTL: Duration = Duration::from_secs(12 * 3600);
 
 #[derive(Clone)]
 struct AppState {
@@ -31,6 +38,10 @@ struct AppState {
     token: Option<String>,
     /// Semaphore limiting concurrent SSE streams (max 100).
     sse_semaphore: Arc<Semaphore>,
+    /// Server-side browser sessions (id → expiry).
+    sessions: Arc<Mutex<HashMap<String, Instant>>>,
+    /// Set Secure flag on session cookies (TLS / explicit).
+    secure_cookies: bool,
 }
 
 /// Dashboard configuration.
@@ -38,6 +49,10 @@ pub struct ServeOptions {
     pub addr: SocketAddr,
     pub token: Option<String>,
     pub reindex: bool,
+    /// Optional Unix domain socket path (restrictive mode/ownership).
+    pub unix_socket: Option<PathBuf>,
+    /// Force Secure cookie flag (also implied for non-loopback binds).
+    pub secure_cookies: bool,
 }
 
 /// Bind and serve the dashboard until cancelled.
@@ -56,14 +71,20 @@ pub async fn serve(store: Arc<SqliteStore>, opts: ServeOptions) -> anyhow::Resul
         println!("Reindexed FTS ({n} events)");
     }
 
+    let secure_cookies = opts.secure_cookies || !crate::privacy::is_loopback_addr(&opts.addr);
     let state = AppState {
         store,
         token: opts.token.clone(),
         sse_semaphore: Arc::new(Semaphore::new(100)),
+        sessions: Arc::new(Mutex::new(HashMap::new())),
+        secure_cookies,
     };
 
     let app = Router::new()
         .route("/", get(index))
+        .route("/login", get(login_page))
+        .route("/session", post(create_session))
+        .route("/logout", post(logout_session))
         .route("/runs/{id}", get(run_page))
         .route("/runs/{id}/live", get(run_live_page))
         .route("/runs/{id}/export.html", get(run_export_html))
@@ -89,6 +110,10 @@ pub async fn serve(store: Arc<SqliteStore>, opts: ServeOptions) -> anyhow::Resul
         .layer(from_fn_with_state(state.clone(), timeout_middleware))
         .with_state(state);
 
+    if let Some(ref sock_path) = opts.unix_socket {
+        return serve_unix(app, sock_path).await;
+    }
+
     let listener = tokio::net::TcpListener::bind(opts.addr).await?;
     tracing::info!(addr = %opts.addr, auth = opts.token.is_some(), "dashboard listening");
     println!("blackbox dashboard → http://{}", opts.addr);
@@ -101,7 +126,8 @@ pub async fn serve(store: Arc<SqliteStore>, opts: ServeOptions) -> anyhow::Resul
         );
     }
     if opts.token.is_some() {
-        println!("  auth:    Authorization: Bearer <token> (query ?token= removed)");
+        println!("  auth:    browser → GET /login then session cookie; API → Authorization: Bearer");
+        println!("  login:   http://{}/login", opts.addr);
     }
     println!("  live:    http://{}/watch", opts.addr);
     println!("  status:  http://{}/status", opts.addr);
@@ -116,17 +142,73 @@ pub async fn serve(store: Arc<SqliteStore>, opts: ServeOptions) -> anyhow::Resul
     Ok(())
 }
 
+/// Serve over a Unix domain socket with restrictive permissions (1.5 H1).
+async fn serve_unix(app: Router, sock_path: &std::path::Path) -> anyhow::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if sock_path.exists() {
+            let _ = std::fs::remove_file(sock_path);
+        }
+        if let Some(parent) = sock_path.parent() {
+            std::fs::create_dir_all(parent)?;
+            crate::privacy::restrict_dir(parent);
+        }
+        let listener = tokio::net::UnixListener::bind(sock_path)?;
+        // Owner read/write only (0600).
+        std::fs::set_permissions(sock_path, std::fs::Permissions::from_mode(0o600))?;
+        crate::privacy::restrict_file(sock_path);
+        println!(
+            "blackbox dashboard → unix:{} (mode 0600)",
+            sock_path.display()
+        );
+        println!("  Press Ctrl+C to stop.");
+        // axum 0.8: serve with into_make_service via hyper unix — use
+        // axum::serve with UnixListener when available.
+        axum::serve(listener, app).await?;
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = app;
+        anyhow::bail!(
+            "Unix domain sockets are not supported on this platform ({})",
+            sock_path.display()
+        );
+    }
+}
+
 async fn auth_middleware(State(state): State<AppState>, request: Request, next: Next) -> Response {
+    // Public auth endpoints when token protection is enabled.
+    let path = request.uri().path();
+    let method = request.method().clone();
+    let public = matches!(
+        (method.as_str(), path),
+        ("GET", "/login") | ("POST", "/session")
+    );
+
     let mut response = if let Some(expected) = &state.token {
-        if token_ok(expected, request.headers()) {
+        if public || authorized(&state, expected, request.headers()) {
             next.run(request).await
         } else {
-            (
-                StatusCode::UNAUTHORIZED,
-                [(header::WWW_AUTHENTICATE, "Bearer")],
-                "Unauthorized",
-            )
-                .into_response()
+            let wants_html = request
+                .headers()
+                .get(header::ACCEPT)
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.contains("text/html"))
+                .unwrap_or(false)
+                && method == Method::GET
+                && !path.starts_with("/api/");
+            if wants_html {
+                Redirect::temporary("/login").into_response()
+            } else {
+                (
+                    StatusCode::UNAUTHORIZED,
+                    [(header::WWW_AUTHENTICATE, "Bearer")],
+                    "Unauthorized",
+                )
+                    .into_response()
+            }
         }
     } else {
         next.run(request).await
@@ -135,6 +217,14 @@ async fn auth_middleware(State(state): State<AppState>, request: Request, next: 
     let headers = response.headers_mut();
     headers.insert("x-content-type-options", "nosniff".parse().unwrap());
     headers.insert("x-frame-options", "DENY".parse().unwrap());
+    headers.insert(
+        header::REFERRER_POLICY,
+        "no-referrer".parse().unwrap(),
+    );
+    headers.insert(
+        header::CACHE_CONTROL,
+        "no-store, no-cache, must-revalidate".parse().unwrap(),
+    );
     headers.insert(
         header::CONTENT_SECURITY_POLICY,
         "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'".parse().unwrap(),
@@ -154,11 +244,18 @@ async fn timeout_middleware(
     }
 }
 
-/// Authenticate via `Authorization: Bearer` only.
+/// Authenticate via `Authorization: Bearer` **or** HttpOnly session cookie.
 ///
-/// Query `?token=` is **removed** — tokens in URLs leak into browser history,
-/// proxy logs, and Referer. Dashboard JS uses `fetch` + Authorization for SSE.
-fn token_ok(expected: &str, headers: &HeaderMap) -> bool {
+/// Query `?token=` is **not** accepted — tokens in URLs leak into history,
+/// proxy logs, and Referer. Browsers use POST /session → cookie; APIs use Bearer.
+fn authorized(state: &AppState, expected: &str, headers: &HeaderMap) -> bool {
+    if bearer_token_ok(expected, headers) {
+        return true;
+    }
+    session_cookie_ok(state, headers)
+}
+
+fn bearer_token_ok(expected: &str, headers: &HeaderMap) -> bool {
     if let Some(auth) = headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
@@ -167,6 +264,133 @@ fn token_ok(expected: &str, headers: &HeaderMap) -> bool {
         return constant_time_eq(provided.as_bytes(), expected.as_bytes());
     }
     false
+}
+
+fn session_cookie_ok(state: &AppState, headers: &HeaderMap) -> bool {
+    let Some(sid) = cookie_value(headers, SESSION_COOKIE) else {
+        return false;
+    };
+    let mut sessions = state.sessions.lock();
+    // Opportunistic expiry sweep.
+    let now = Instant::now();
+    sessions.retain(|_, exp| *exp > now);
+    matches!(sessions.get(&sid), Some(exp) if *exp > now)
+}
+
+/// Parse a single cookie value from the Cookie header.
+pub fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
+    let cookie = headers.get(header::COOKIE)?.to_str().ok()?;
+    for part in cookie.split(';') {
+        let part = part.trim();
+        if let Some(rest) = part.strip_prefix(name) {
+            if let Some(val) = rest.strip_prefix('=') {
+                return Some(val.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn session_cookie_header(session_id: &str, secure: bool, max_age_secs: u64) -> String {
+    // HttpOnly + SameSite=Strict; Secure when TLS / non-loopback.
+    let mut c = format!(
+        "{SESSION_COOKIE}={session_id}; Path=/; HttpOnly; SameSite=Strict; Max-Age={max_age_secs}"
+    );
+    if secure {
+        c.push_str("; Secure");
+    }
+    c
+}
+
+fn clear_session_cookie(secure: bool) -> String {
+    let mut c =
+        format!("{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0");
+    if secure {
+        c.push_str("; Secure");
+    }
+    c
+}
+
+#[derive(Debug, Deserialize)]
+struct SessionForm {
+    token: String,
+}
+
+async fn login_page(State(state): State<AppState>) -> impl IntoResponse {
+    if state.token.is_none() {
+        return Redirect::temporary("/").into_response();
+    }
+    Html(login_html(None)).into_response()
+}
+
+async fn create_session(
+    State(state): State<AppState>,
+    Form(form): Form<SessionForm>,
+) -> impl IntoResponse {
+    let Some(expected) = state.token.as_deref() else {
+        return Redirect::temporary("/").into_response();
+    };
+    if !constant_time_eq(form.token.trim().as_bytes(), expected.as_bytes()) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Html(login_html(Some("Invalid token"))),
+        )
+            .into_response();
+    }
+    let sid = uuid::Uuid::new_v4().to_string();
+    {
+        let mut sessions = state.sessions.lock();
+        sessions.insert(sid.clone(), Instant::now() + SESSION_TTL);
+    }
+    let mut res = Redirect::temporary("/").into_response();
+    if let Ok(val) = HeaderValue::from_str(&session_cookie_header(
+        &sid,
+        state.secure_cookies,
+        SESSION_TTL.as_secs(),
+    )) {
+        res.headers_mut().insert(header::SET_COOKIE, val);
+    }
+    res
+}
+
+async fn logout_session(State(state): State<AppState>, request: Request) -> impl IntoResponse {
+    if let Some(sid) = cookie_value(request.headers(), SESSION_COOKIE) {
+        state.sessions.lock().remove(&sid);
+    }
+    let mut res = Redirect::temporary("/login").into_response();
+    if let Ok(val) = HeaderValue::from_str(&clear_session_cookie(state.secure_cookies)) {
+        res.headers_mut().insert(header::SET_COOKIE, val);
+    }
+    res
+}
+
+fn login_html(error: Option<&str>) -> String {
+    let err = error
+        .map(|e| format!(r#"<p class="err">{e}</p>"#))
+        .unwrap_or_default();
+    format!(
+        r#"<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>blackbox · login</title>
+<style>
+ body{{font-family:system-ui,sans-serif;max-width:28rem;margin:4rem auto;padding:0 1rem;color:#1a1a1a}}
+ label{{display:block;margin:.75rem 0 .25rem;font-weight:600}}
+ input[type=password]{{width:100%;padding:.5rem;font-size:1rem;box-sizing:border-box}}
+ button{{margin-top:1rem;padding:.5rem 1rem;font-size:1rem;cursor:pointer}}
+ .err{{color:#b00020}}
+ .hint{{color:#555;font-size:.9rem}}
+</style></head><body>
+<h1>blackbox dashboard</h1>
+<p class="hint">Enter the serve token. A session cookie is set (HttpOnly, SameSite=Strict). API clients should use <code>Authorization: Bearer</code> instead.</p>
+{err}
+<form method="post" action="/session" autocomplete="off">
+  <label for="token">Token</label>
+  <input id="token" name="token" type="password" required autofocus/>
+  <button type="submit">Sign in</button>
+</form>
+</body></html>"#
+    )
 }
 
 /// Byte-wise equality comparison that runs in constant time regardless of
@@ -1360,6 +1584,8 @@ mod testing {
                 store,
                 token: None,
                 sse_semaphore: Arc::new(Semaphore::new(100)),
+                sessions: Arc::new(Mutex::new(HashMap::new())),
+                secure_cookies: false,
             }
         }
     }
@@ -1512,14 +1738,19 @@ mod testing {
         assert!(!constant_time_eq(b"AAAA", b"AAB"));
     }
 
+    fn state_with_token(token: Option<&str>) -> AppState {
+        AppState {
+            store: Arc::new(SqliteStore::open_memory().unwrap()),
+            token: token.map(|s| s.to_string()),
+            sse_semaphore: Arc::new(Semaphore::new(100)),
+            sessions: Arc::new(Mutex::new(HashMap::new())),
+            secure_cookies: false,
+        }
+    }
+
     #[tokio::test]
     async fn test_auth_middleware_rejects_without_token() {
-        let store = Arc::new(SqliteStore::open_memory().unwrap());
-        let state = AppState {
-            store,
-            token: Some("test-secret".into()),
-            sse_semaphore: Arc::new(Semaphore::new(100)),
-        };
+        let state = state_with_token(Some("test-secret"));
         let app = Router::new()
             .route("/", get(test_handler))
             .layer(from_fn_with_state(state.clone(), auth_middleware))
@@ -1528,17 +1759,13 @@ mod testing {
             .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
             .await
             .unwrap();
+        // Browser HTML Accept → redirect to login; bare request → 401.
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
     async fn test_auth_middleware_accepts_valid_token() {
-        let store = Arc::new(SqliteStore::open_memory().unwrap());
-        let state = AppState {
-            store,
-            token: Some("test-secret".into()),
-            sse_semaphore: Arc::new(Semaphore::new(100)),
-        };
+        let state = state_with_token(Some("test-secret"));
         let app = Router::new()
             .route("/", get(test_handler))
             .layer(from_fn_with_state(state.clone(), auth_middleware))
@@ -1557,13 +1784,33 @@ mod testing {
     }
 
     #[tokio::test]
+    async fn test_auth_middleware_accepts_session_cookie() {
+        let state = state_with_token(Some("test-secret"));
+        let sid = "session-abc".to_string();
+        state
+            .sessions
+            .lock()
+            .insert(sid.clone(), Instant::now() + Duration::from_secs(60));
+        let app = Router::new()
+            .route("/", get(test_handler))
+            .layer(from_fn_with_state(state.clone(), auth_middleware))
+            .with_state(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .header(header::COOKIE, format!("{SESSION_COOKIE}={sid}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
     async fn test_auth_middleware_passthrough_when_no_token() {
-        let store = Arc::new(SqliteStore::open_memory().unwrap());
-        let state = AppState {
-            store,
-            token: None,
-            sse_semaphore: Arc::new(Semaphore::new(100)),
-        };
+        let state = state_with_token(None);
         let app = Router::new()
             .route("/", get(test_handler))
             .layer(from_fn_with_state(state.clone(), auth_middleware))
@@ -1577,12 +1824,7 @@ mod testing {
 
     #[tokio::test]
     async fn test_auth_middleware_sets_security_headers() {
-        let store = Arc::new(SqliteStore::open_memory().unwrap());
-        let state = AppState {
-            store,
-            token: None,
-            sse_semaphore: Arc::new(Semaphore::new(100)),
-        };
+        let state = state_with_token(None);
         let app = Router::new()
             .route("/", get(test_handler))
             .layer(from_fn_with_state(state.clone(), auth_middleware))
@@ -1595,6 +1837,36 @@ mod testing {
         let headers = resp.headers();
         assert_eq!(headers.get("x-content-type-options").unwrap(), "nosniff");
         assert_eq!(headers.get("x-frame-options").unwrap(), "DENY");
+        assert_eq!(headers.get("referrer-policy").unwrap(), "no-referrer");
+        assert!(headers
+            .get("cache-control")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("no-store"));
+    }
+
+    #[test]
+    fn cookie_value_parses() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::COOKIE,
+            "foo=1; blackbox_session=abc123; bar=2".parse().unwrap(),
+        );
+        assert_eq!(
+            cookie_value(&headers, SESSION_COOKIE).as_deref(),
+            Some("abc123")
+        );
+    }
+
+    #[test]
+    fn session_cookie_flags() {
+        let c = session_cookie_header("sid", true, 3600);
+        assert!(c.contains("HttpOnly"));
+        assert!(c.contains("SameSite=Strict"));
+        assert!(c.contains("Secure"));
+        let c2 = session_cookie_header("sid", false, 3600);
+        assert!(!c2.contains("Secure"));
     }
 
     async fn test_handler() -> (StatusCode, &'static str) {

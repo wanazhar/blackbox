@@ -354,9 +354,17 @@ pub struct ServeArgs {
     #[arg(long)]
     pub reindex: bool,
 
-    /// Require this shared secret (Authorization: Bearer or ?token=)
+    /// Require this shared secret (browser: POST /session cookie; API: Authorization: Bearer)
     #[arg(long, env = "BLACKBOX_SERVE_TOKEN")]
     pub token: Option<String>,
+
+    /// Listen on a Unix domain socket instead of TCP (mode 0600)
+    #[arg(long, value_name = "PATH")]
+    pub unix_socket: Option<std::path::PathBuf>,
+
+    /// Set Secure flag on session cookies (also implied for non-loopback binds)
+    #[arg(long)]
+    pub secure_cookies: bool,
 }
 
 #[derive(Args)]
@@ -5190,16 +5198,22 @@ fn format_bytes(n: u64) -> String {
 
 async fn cmd_serve(cli: &Cli, args: &ServeArgs) -> anyhow::Result<()> {
     let store = open_store(cli)?;
-    let addr: std::net::SocketAddr = args
-        .bind
-        .parse()
-        .map_err(|e| anyhow::anyhow!("invalid --bind address: {e}"))?;
+    let addr: std::net::SocketAddr = if args.unix_socket.is_some() {
+        // Placeholder; unix path is used instead of TCP.
+        "127.0.0.1:0".parse().unwrap()
+    } else {
+        args.bind
+            .parse()
+            .map_err(|e| anyhow::anyhow!("invalid --bind address: {e}"))?
+    };
     crate::serve::serve(
         Arc::new(store),
         crate::serve::ServeOptions {
             addr,
             token: args.token.clone(),
             reindex: args.reindex,
+            unix_socket: args.unix_socket.clone(),
+            secure_cookies: args.secure_cookies,
         },
     )
     .await

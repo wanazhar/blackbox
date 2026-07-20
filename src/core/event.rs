@@ -137,14 +137,15 @@ pub struct TraceEvent {
 impl TraceEvent {
     /// Create a new event with auto-generated ID and current timestamp.
     pub fn new(run_id: &str, source: EventSource, kind: &str) -> Self {
-        Self {
+        let now = Utc::now();
+        let mut ev = Self {
             id: Uuid::new_v4().to_string(),
             run_id: run_id.to_string(),
             parent_event_id: None,
             sequence: 0,
             source,
             kind: kind.to_string(),
-            started_at: Utc::now(),
+            started_at: now,
             ended_at: None,
             duration_ms: None,
             status: EventStatus::Pending,
@@ -153,7 +154,17 @@ impl TraceEvent {
             output_blob: None,
             error_blob: None,
             metadata: HashMap::new(),
-        }
+        };
+        // Capture-layer defaults: wall clock at construction (1.5 O1).
+        let timing = crate::core::timing::EventTiming {
+            occurred_at_wall: Some(now),
+            observed_at: Some(now),
+            clock_source: crate::core::timing::ClockSource::CaptureWall,
+            ordering_uncertainty_ms: crate::core::timing::DEFAULT_UNCERTAINTY_MS,
+            ..Default::default()
+        };
+        ev.set_timing(&timing);
+        ev
     }
 
     /// Mark this event as completed with a status.
@@ -167,6 +178,78 @@ impl TraceEvent {
                     .max(0) as u64,
             );
         }
+    }
+
+    /// Source-local sequence within a capture layer (1.5 O1).
+    pub fn source_sequence(&self) -> Option<u64> {
+        self.metadata
+            .get(crate::core::timing::META_SOURCE_SEQUENCE)
+            .and_then(|v| v.as_u64())
+    }
+
+    pub fn set_source_sequence(&mut self, seq: u64) {
+        self.metadata.insert(
+            crate::core::timing::META_SOURCE_SEQUENCE.to_string(),
+            serde_json::json!(seq),
+        );
+    }
+
+    /// Timing provenance (defaults if missing).
+    pub fn timing(&self) -> crate::core::timing::EventTiming {
+        self.metadata
+            .get(crate::core::timing::META_TIMING)
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_else(|| crate::core::timing::EventTiming {
+                occurred_at_wall: Some(self.started_at),
+                observed_at: Some(self.started_at),
+                ..Default::default()
+            })
+    }
+
+    pub fn set_timing(&mut self, timing: &crate::core::timing::EventTiming) {
+        if let Ok(v) = serde_json::to_value(timing) {
+            self.metadata
+                .insert(crate::core::timing::META_TIMING.to_string(), v);
+        }
+    }
+
+    /// Stamp capture observation time + optional source sequence.
+    pub fn stamp_capture(
+        &mut self,
+        source_seq: u64,
+        clock_source: crate::core::timing::ClockSource,
+    ) {
+        self.set_source_sequence(source_seq);
+        let now = Utc::now();
+        let mut t = self.timing();
+        if t.occurred_at_wall.is_none() {
+            t.occurred_at_wall = Some(self.started_at);
+        }
+        t.observed_at = Some(now);
+        t.received_at = t.received_at.or(Some(now));
+        t.clock_source = clock_source;
+        if t.ordering_uncertainty_ms == 0 {
+            t.ordering_uncertainty_ms = crate::core::timing::DEFAULT_UNCERTAINTY_MS;
+        }
+        self.set_timing(&t);
+    }
+
+    /// Stamp ingest time (EventWriter path). Does not overwrite occurrence.
+    pub fn stamp_ingested(&mut self) {
+        let now = Utc::now();
+        let mut t = self.timing();
+        t.ingested_at = Some(now);
+        t.received_at = t.received_at.or(Some(now));
+        if t.occurred_at_wall.is_none() {
+            t.occurred_at_wall = Some(self.started_at);
+            if matches!(
+                t.clock_source,
+                crate::core::timing::ClockSource::Unknown
+            ) {
+                t.clock_source = crate::core::timing::ClockSource::IngestOnly;
+            }
+        }
+        self.set_timing(&t);
     }
 }
 

@@ -4,10 +4,12 @@ pub mod classifier;
 pub mod correlator;
 pub mod error_detector;
 pub mod failure_fix;
+pub mod ordering;
 pub mod retry_waste;
 pub mod turning_points;
 
 pub use anomalies::{detect_anomalies, Anomaly};
+pub use ordering::{occurrence_timeline, OrderingSummary};
 
 use crate::core::event::TraceEvent;
 

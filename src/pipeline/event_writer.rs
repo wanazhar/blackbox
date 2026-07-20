@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::core::event::TraceEvent;
+use crate::core::event::{EventSource, TraceEvent};
 use crate::pipeline::batch_ingest::{
     is_barrier_kind, BatchIngestConfig, BatchIngestHealth, BatchIngestor,
 };
@@ -185,6 +185,8 @@ pub struct EventWriter {
     health: Mutex<WriterHealth>,
     /// When set, events go through the dedicated batch writer.
     batch: Option<BatchIngestor>,
+    /// Per-source local sequence counters (1.5 O1).
+    source_seqs: Mutex<HashMap<&'static str, u64>>,
 }
 
 impl EventWriter {
@@ -210,6 +212,7 @@ impl EventWriter {
             tool_seen: Mutex::new(ToolDedupeCache::new()),
             health: Mutex::new(WriterHealth::default()),
             batch: None,
+            source_seqs: Mutex::new(HashMap::new()),
         }
     }
 
@@ -228,7 +231,30 @@ impl EventWriter {
             tool_seen: Mutex::new(ToolDedupeCache::new()),
             health: Mutex::new(WriterHealth::default()),
             batch: Some(batch),
+            source_seqs: Mutex::new(HashMap::new()),
         }
+    }
+
+    fn allocate_source_sequence(&self, source: &EventSource) -> u64 {
+        let key = match source {
+            EventSource::Human => "Human",
+            EventSource::Harness => "Harness",
+            EventSource::Terminal => "Terminal",
+            EventSource::Process => "Process",
+            EventSource::Filesystem => "Filesystem",
+            EventSource::Git => "Git",
+            EventSource::Tool => "Tool",
+            EventSource::Network => "Network",
+            EventSource::Browser => "Browser",
+            EventSource::System => "System",
+        };
+        let mut map = self
+            .source_seqs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let n = map.entry(key).or_insert(0);
+        *n = n.saturating_add(1);
+        *n
     }
 
     pub fn run_id(&self) -> &str {
@@ -344,6 +370,14 @@ impl EventWriter {
         if event.sequence == 0 {
             event.sequence = self.allocate_sequence();
         }
+
+        // Source-local sequence + ingest timestamps (1.5 O1).
+        // Layers may pre-assign source_sequence; otherwise allocate per source.
+        if event.source_sequence().is_none() {
+            let src_seq = self.allocate_source_sequence(&event.source);
+            event.set_source_sequence(src_seq);
+        }
+        event.stamp_ingested();
 
         // Record fingerprint when we accept the event for persist (before/after batch).
         if let Some((fp, payload_hash, prov)) = tool_dedupe_key(&event) {

@@ -180,6 +180,7 @@ Operator-facing notes for shipped harnesses: [docs/guide/adapters.md](docs/guide
 | `tests/patch_path_safety.rs` | 1.5 R1: absolute/traversal patch rejection; honest capabilities |
 | `tests/storage_batch_faults.rs` | 1.5 S1: batch barriers, flush/shutdown durability, backpressure |
 | `tests/workspace_checkpoint.rs` | 1.5 W1: binary/untracked restore + completeness report |
+| `tests/event_ordering.rs` | 1.5 O1: source sequences, occurrence vs storage order |
 
 ## Docs map
 

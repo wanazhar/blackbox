@@ -92,7 +92,8 @@ Full acceptance criteria: [issue #3 comments](https://github.com/wanazhar/blackb
 - [x] `analysis_scope` on summary/postmortem JSON
 - [x] Tool totals/facts from aggregates, not display windows
 - [x] Safe tool dedupe: preserve ID-less retries; LRU/age cache; provenance annotation
-- [x] Gates: `tests/long_run_integrity.rs`, `tests/tool_dedup.rs` (8k PR fixture; 100k on release qualify)
+- [x] Event clocks / source sequences / occurrence relations (O1)
+- [x] Gates: `tests/long_run_integrity.rs`, `tests/tool_dedup.rs`, `tests/event_ordering.rs`
 
 **Exit:** A large-run fixture reports exact totals; early instruction/failure remain visible; `--short`/`--full` alter detail only. **Met for Phase A core on Linux (PR gates).**
 

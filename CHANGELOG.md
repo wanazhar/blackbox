@@ -39,6 +39,13 @@ Plan: [docs/plan/trace-integrity-1.5.md](docs/plan/trace-integrity-1.5.md). Epic
 - Restore returns completeness report (expected/restored/missing/skipped/limitations)
 - Binary and untracked files restore when fully captured; large/excluded paths listed
 
+#### Event clocks and ordering (O1)
+- Timing provenance on events (`metadata.timing`: occurred/observed/received/ingested, clock_source, uncertainty)
+- Per-source `source_sequence` assigned at write (layers may pre-assign)
+- `sequence` remains stable storage/ingestion order; occurrence relations via `relate_occurrence`
+- Bounded reorder buffer only when clocks are comparable (no false strict order from weak clocks)
+- Analysis helper `occurrence_timeline` for JSON/UI storage-vs-occurrence views
+
 ## [1.4.0] — 2026-07-19
 
 **Trust Proof (Unix)** — recorder mode can stay on without silently changing the child or overstating causality; secrets are holdback-redacted before persist; coverage and postmortem claims stay weaker than or equal to evidence.

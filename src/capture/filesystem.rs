@@ -1,7 +1,7 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc as std_mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use notify::event::{CreateKind, EventKind, ModifyKind, RemoveKind, RenameMode};
@@ -11,22 +11,33 @@ use tokio::sync::mpsc;
 use crate::capture::CaptureLayer;
 use crate::core::event::{EventSource, EventStatus, SideEffect, TraceEvent};
 use crate::core::run::Run;
+use crate::workspace_manifest::is_ignored_component;
 
-/// Path components ignored by the live watcher (high-noise / internal).
-/// **Note:** `notify` follows symlinks by default on most platforms. Changes
-/// inside symlinked directories will appear as normal events. If isolation is
-/// needed in the future, resolve and filter symlinked paths before forwarding.
-const IGNORE_COMPONENTS: &[&str] = &[
-    ".git",
-    "target",
-    "node_modules",
-    ".blackbox",
-    ".cargo",
-    "__pycache__",
-    ".tox",
-    "dist",
-    "build",
-];
+/// Symlink handling for filesystem capture (1.5 C1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SymlinkPolicy {
+    /// Skip symlink paths entirely.
+    #[default]
+    Ignore,
+    /// Emit link metadata only; do not follow into targets.
+    LinkOnly,
+    /// Follow only when the resolved path stays inside the project root.
+    FollowWithinRoot,
+}
+
+/// How a path relates to the capture root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathScope {
+    InRoot,
+    OutsideRoot,
+    Symlink,
+    Ignored,
+}
+
+/// Bounded bridge capacity between notify callback and async ingest (1.5 C1).
+const BRIDGE_CAPACITY: usize = 512;
+/// Per-path coalescing window for storm reduction.
+const COALESCE_MS: u128 = 25;
 
 /// Filesystem-change observer with live `notify` watching.
 ///
@@ -35,6 +46,8 @@ const IGNORE_COMPONENTS: &[&str] = &[
 /// - Live events while the run is active:
 ///   `filesystem.created`, `filesystem.modified`,
 ///   `filesystem.removed`, `filesystem.renamed`
+/// - `filesystem.overflow` when the bridge queue is full
+/// - `filesystem.out_of_scope` when a path escapes the project root
 pub struct FilesystemCapture {
     event_tx: Option<mpsc::Sender<TraceEvent>>,
     run_id: Option<String>,
@@ -44,6 +57,7 @@ pub struct FilesystemCapture {
     _watcher: Option<RecommendedWatcher>,
     /// Join handle for the notify→async bridge task
     bridge_handle: Option<tokio::task::JoinHandle<()>>,
+    symlink_policy: SymlinkPolicy,
 }
 
 impl FilesystemCapture {
@@ -55,19 +69,24 @@ impl FilesystemCapture {
             start_manifest: None,
             _watcher: None,
             bridge_handle: None,
+            symlink_policy: SymlinkPolicy::default(),
         }
     }
 
-    fn should_ignore(path: &Path) -> bool {
+    pub fn with_symlink_policy(mut self, policy: SymlinkPolicy) -> Self {
+        self.symlink_policy = policy;
+        self
+    }
+
+    /// Shared ignore policy (aligned with workspace_manifest / seed).
+    pub fn should_ignore(path: &Path) -> bool {
         for component in path.components() {
             if let std::path::Component::Normal(name) = component {
-                let name = name.to_string_lossy();
-                if IGNORE_COMPONENTS.iter().any(|ig| *ig == name) {
+                if is_ignored_component(&name.to_string_lossy()) {
                     return true;
                 }
             }
         }
-        // Also ignore blackbox DB files at the project root
         if let Some(name) = path.file_name().map(|n| n.to_string_lossy()) {
             if name == "blackbox.db"
                 || name.starts_with("blackbox.db-")
@@ -78,6 +97,37 @@ impl FilesystemCapture {
             }
         }
         false
+    }
+
+    /// Classify path against canonical project root and symlink policy.
+    pub fn classify_path(root: &Path, path: &Path, policy: SymlinkPolicy) -> PathScope {
+        if Self::should_ignore(path) {
+            return PathScope::Ignored;
+        }
+        let root_canon = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+
+        // Symlink leaf or ancestor?
+        let is_link = path
+            .symlink_metadata()
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false);
+
+        if is_link {
+            match policy {
+                SymlinkPolicy::Ignore => return PathScope::Ignored,
+                SymlinkPolicy::LinkOnly => return PathScope::Symlink,
+                SymlinkPolicy::FollowWithinRoot => {
+                    // Fall through to resolved path check.
+                }
+            }
+        }
+
+        let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        if resolved.starts_with(&root_canon) {
+            PathScope::InRoot
+        } else {
+            PathScope::OutsideRoot
+        }
     }
 
     fn snapshot(cwd: &str) -> String {
@@ -121,13 +171,14 @@ impl FilesystemCapture {
         }
     }
 
-    fn notify_to_events(run_id: &str, event: NotifyEvent) -> Vec<TraceEvent> {
+    fn notify_to_events(
+        run_id: &str,
+        root: &Path,
+        policy: SymlinkPolicy,
+        event: NotifyEvent,
+    ) -> Vec<TraceEvent> {
         let mut out = Vec::new();
-        let paths: Vec<PathBuf> = event
-            .paths
-            .into_iter()
-            .filter(|p| !Self::should_ignore(p))
-            .collect();
+        let paths: Vec<PathBuf> = event.paths;
         if paths.is_empty() {
             return out;
         }
@@ -163,22 +214,55 @@ impl FilesystemCapture {
             if !seen.insert(path_str.clone()) {
                 continue;
             }
+
+            let scope = Self::classify_path(root, &path, policy);
+            match scope {
+                PathScope::Ignored => continue,
+                PathScope::OutsideRoot => {
+                    let mut ev =
+                        TraceEvent::new(run_id, EventSource::Filesystem, "filesystem.out_of_scope");
+                    ev.status = EventStatus::Error;
+                    ev.side_effect = SideEffect::Unknown;
+                    ev.metadata
+                        .insert("path".into(), serde_json::json!(path_str));
+                    ev.metadata
+                        .insert("scope".into(), serde_json::json!("outside_root"));
+                    out.push(ev);
+                    continue;
+                }
+                PathScope::Symlink if matches!(policy, SymlinkPolicy::Ignore) => continue,
+                PathScope::InRoot | PathScope::Symlink => {}
+            }
+
             let mut ev = TraceEvent::new(run_id, EventSource::Filesystem, kind);
             ev.status = EventStatus::Success;
             ev.side_effect = side_effect.clone();
             ev.metadata
                 .insert("path".to_string(), serde_json::json!(path_str));
+            ev.metadata.insert(
+                "scope".to_string(),
+                serde_json::json!(match scope {
+                    PathScope::InRoot => "in_root",
+                    PathScope::Symlink => "symlink",
+                    _ => "in_root",
+                }),
+            );
             if let Some(name) = path.file_name() {
                 ev.metadata.insert(
                     "name".to_string(),
                     serde_json::json!(name.to_string_lossy()),
                 );
             }
-            if let Ok(meta) = std::fs::metadata(&path) {
+            // Prefer symlink_metadata so we do not follow escapes.
+            if let Ok(meta) = std::fs::symlink_metadata(&path) {
                 ev.metadata
                     .insert("size".to_string(), serde_json::json!(meta.len()));
                 ev.metadata
                     .insert("is_dir".to_string(), serde_json::json!(meta.is_dir()));
+                ev.metadata.insert(
+                    "is_symlink".to_string(),
+                    serde_json::json!(meta.file_type().is_symlink()),
+                );
             }
             out.push(ev);
         }
@@ -199,7 +283,11 @@ impl CaptureLayer for FilesystemCapture {
     }
 
     async fn start(&mut self, run: &Run) -> anyhow::Result<mpsc::Receiver<TraceEvent>> {
-        let (tx, rx) = mpsc::channel(1024);
+        // Bounded channel — overflow becomes filesystem.overflow events (1.5 C1).
+        let (tx, rx) = mpsc::channel(BRIDGE_CAPACITY);
+
+        let root = PathBuf::from(&run.cwd);
+        let root_canon = root.canonicalize().unwrap_or_else(|_| root.clone());
 
         let mut started = TraceEvent::new(
             &run.id,
@@ -210,6 +298,18 @@ impl CaptureLayer for FilesystemCapture {
         started
             .metadata
             .insert("mode".to_string(), serde_json::json!("live-notify"));
+        started.metadata.insert(
+            "bridge_capacity".to_string(),
+            serde_json::json!(BRIDGE_CAPACITY),
+        );
+        started.metadata.insert(
+            "symlink_policy".to_string(),
+            serde_json::json!(format!("{:?}", self.symlink_policy)),
+        );
+        started.metadata.insert(
+            "root".to_string(),
+            serde_json::json!(root_canon.display().to_string()),
+        );
         tx.send(started).await?;
         let _ = tx
             .send(crate::capture::health::layer_started(&run.id, "filesystem"))
@@ -231,12 +331,13 @@ impl CaptureLayer for FilesystemCapture {
         let (notify_tx, notify_rx) = std_mpsc::channel::<notify::Result<NotifyEvent>>();
         let mut watcher = RecommendedWatcher::new(
             move |res| {
+                // Non-blocking: drop if notify producer outpaces bridge (rare).
                 let _ = notify_tx.send(res);
             },
             Config::default().with_poll_interval(Duration::from_millis(200)),
         )?;
 
-        let watch_path = PathBuf::from(&run.cwd);
+        let watch_path = root_canon.clone();
         if let Err(e) = watcher.watch(&watch_path, RecursiveMode::Recursive) {
             tracing::warn!(
                 path = %watch_path.display(),
@@ -256,19 +357,78 @@ impl CaptureLayer for FilesystemCapture {
 
             let run_id = run.id.clone();
             let bridge_tx = tx.clone();
+            let root_for_bridge = root_canon.clone();
+            let policy = self.symlink_policy;
             let handle = tokio::task::spawn_blocking(move || {
-                // Coalesce bursts: small sleep between drains reduces event spam
+                let mut last_path: HashMap<String, Instant> = HashMap::new();
+                let mut overflow_count = 0u64;
                 while let Ok(res) = notify_rx.recv() {
                     match res {
                         Ok(event) => {
-                            for ev in FilesystemCapture::notify_to_events(&run_id, event) {
-                                if bridge_tx.blocking_send(ev).is_err() {
-                                    return;
+                            for ev in FilesystemCapture::notify_to_events(
+                                &run_id,
+                                &root_for_bridge,
+                                policy,
+                                event,
+                            ) {
+                                // Per-path coalescing: keep final state under storm.
+                                if let Some(path) =
+                                    ev.metadata.get("path").and_then(|v| v.as_str())
+                                {
+                                    let now = Instant::now();
+                                    if let Some(prev) = last_path.get(path) {
+                                        if now.duration_since(*prev).as_millis() < COALESCE_MS
+                                            && ev.kind != "filesystem.out_of_scope"
+                                        {
+                                            // Skip intermediate; next event supersedes.
+                                            last_path.insert(path.to_string(), now);
+                                            continue;
+                                        }
+                                    }
+                                    last_path.insert(path.to_string(), now);
+                                }
+
+                                match bridge_tx.try_send(ev) {
+                                    Ok(()) => {}
+                                    Err(mpsc::error::TrySendError::Full(ev)) => {
+                                        overflow_count = overflow_count.saturating_add(1);
+                                        let mut overflow = TraceEvent::new(
+                                            &run_id,
+                                            EventSource::Filesystem,
+                                            "filesystem.overflow",
+                                        );
+                                        overflow.status = EventStatus::Error;
+                                        overflow.metadata.insert(
+                                            "dropped_kind".into(),
+                                            serde_json::json!(ev.kind),
+                                        );
+                                        overflow.metadata.insert(
+                                            "overflow_count".into(),
+                                            serde_json::json!(overflow_count),
+                                        );
+                                        overflow.metadata.insert(
+                                            "bridge_capacity".into(),
+                                            serde_json::json!(BRIDGE_CAPACITY),
+                                        );
+                                        // Best-effort overflow signal; if still full, give up this tick.
+                                        let _ = bridge_tx.try_send(overflow);
+                                    }
+                                    Err(mpsc::error::TrySendError::Closed(_)) => return,
                                 }
                             }
                         }
                         Err(e) => {
                             tracing::warn!(error = %e, "filesystem watcher error");
+                            let mut err_ev = TraceEvent::new(
+                                &run_id,
+                                EventSource::Filesystem,
+                                "filesystem.watcher_error",
+                            );
+                            err_ev.status = EventStatus::Error;
+                            err_ev
+                                .metadata
+                                .insert("error".into(), serde_json::json!(e.to_string()));
+                            let _ = bridge_tx.try_send(err_ev);
                         }
                     }
                 }
@@ -362,9 +522,41 @@ mod tests {
         assert!(FilesystemCapture::should_ignore(Path::new(
             "/proj/node_modules/x"
         )));
+        assert!(FilesystemCapture::should_ignore(Path::new(
+            "/proj/.venv/lib/x"
+        )));
         assert!(!FilesystemCapture::should_ignore(Path::new(
             "/proj/src/main.rs"
         )));
+    }
+
+    #[test]
+    fn classify_outside_root() {
+        let root = temp_workspace();
+        let outside = std::env::temp_dir().join(format!("bb-fs-out-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("x"), b"y").unwrap();
+        let scope = FilesystemCapture::classify_path(
+            &root,
+            &outside.join("x"),
+            SymlinkPolicy::Ignore,
+        );
+        assert_eq!(scope, PathScope::OutsideRoot);
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn classify_in_root() {
+        let root = temp_workspace();
+        fs::write(root.join("a.txt"), b"ok").unwrap();
+        let scope = FilesystemCapture::classify_path(
+            &root,
+            &root.join("a.txt"),
+            SymlinkPolicy::Ignore,
+        );
+        assert_eq!(scope, PathScope::InRoot);
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

@@ -46,6 +46,11 @@ Plan: [docs/plan/trace-integrity-1.5.md](docs/plan/trace-integrity-1.5.md). Epic
 - Bounded reorder buffer only when clocks are comparable (no false strict order from weak clocks)
 - Analysis helper `occurrence_timeline` for JSON/UI storage-vs-occurrence views
 
+#### Filesystem capture boundaries (C1)
+- Canonical project root scoping; out-of-root paths emit `filesystem.out_of_scope`
+- Shared ignore list with workspace manifests; symlink policy (ignore / link-only / follow-within-root)
+- Bounded bridge queue with `filesystem.overflow` on pressure; per-path coalescing
+
 ## [1.4.0] — 2026-07-19
 
 **Trust Proof (Unix)** — recorder mode can stay on without silently changing the child or overstating causality; secrets are holdback-redacted before persist; coverage and postmortem claims stay weaker than or equal to evidence.

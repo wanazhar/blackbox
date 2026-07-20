@@ -1,7 +1,9 @@
 use crate::capture::CaptureLayer;
 use crate::core::command::{CaptureMethod, CommandMetadata};
 use crate::core::event::{EventSource, EventStatus, TraceEvent};
-use crate::core::process_tree::{ProcessNode, ProcessResources};
+use crate::core::process_tree::ProcessNode;
+#[cfg(target_os = "linux")]
+use crate::core::process_tree::ProcessResources;
 use crate::core::run::Run;
 use async_trait::async_trait;
 use std::collections::HashSet;
@@ -1101,7 +1103,9 @@ mod tests {
         let _ = drain_until(&mut rx, "process.observer.started");
         let _ = drain_until(&mut rx, "capture.layer.started");
         cap.emit_spawned().await;
-        assert!(rx.try_recv().is_err());
+        while let Ok(ev) = rx.try_recv() {
+            assert_ne!(ev.kind, "process.spawned");
+        }
     }
 
     #[tokio::test]

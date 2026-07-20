@@ -880,7 +880,10 @@ mod tests {
     fn resolve_legacy_used_when_present() {
         let (_dir, proj) = make_project(true);
         let paths = BlackboxPaths::resolve(Some(&proj), None).unwrap();
-        assert_eq!(paths.db_path, proj.join("blackbox.db"));
+        assert_eq!(
+            paths.db_path,
+            proj.canonicalize().unwrap().join("blackbox.db")
+        );
     }
 
     #[test]
@@ -890,8 +893,12 @@ mod tests {
         std::env::remove_var("BLACKBOX_DB");
         let (_dir, proj) = make_project(false);
         let paths = BlackboxPaths::resolve(Some(&proj), None).unwrap();
-        assert_eq!(paths.db_path, proj.join(".blackbox").join("blackbox.db"));
-        assert_eq!(paths.blob_dir, proj.join(".blackbox").join("blobs"));
+        let canonical = proj.canonicalize().unwrap();
+        assert_eq!(
+            paths.db_path,
+            canonical.join(".blackbox").join("blackbox.db")
+        );
+        assert_eq!(paths.blob_dir, canonical.join(".blackbox").join("blobs"));
         if let Some(val) = prev {
             std::env::set_var("BLACKBOX_DB", val);
         }
@@ -914,7 +921,13 @@ mod tests {
 
         let d = discover_project(&child, None).unwrap();
         assert_eq!(d.project_root, proj.canonicalize().unwrap());
-        assert_eq!(d.paths.db_path, bb.join("blackbox.db"));
+        assert_eq!(
+            d.paths.db_path,
+            proj.canonicalize()
+                .unwrap()
+                .join(".blackbox")
+                .join("blackbox.db")
+        );
         assert!(d.config.as_ref().is_some_and(|c| c.enabled));
 
         if let Some(v) = prev {
@@ -942,7 +955,10 @@ mod tests {
 
         let d = discover_project(&child, None).unwrap();
         assert_eq!(d.project_root, child.canonicalize().unwrap());
-        assert_eq!(d.paths.db_path, child.join("blackbox.db"));
+        assert_eq!(
+            d.paths.db_path,
+            child.canonicalize().unwrap().join("blackbox.db")
+        );
 
         if let Some(v) = prev {
             std::env::set_var("BLACKBOX_DB", v);

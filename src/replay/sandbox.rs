@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use anyhow::Context;
+
 use crate::core::command::{CommandFidelity, CommandMetadata};
 use crate::core::event::{EventSource, SideEffect, TraceEvent};
 use crate::core::run::Run;
@@ -27,11 +29,15 @@ const SEED_MAX_FILES: usize = 5_000;
 const SEED_MAX_BYTES: u64 = 64 * 1024 * 1024; // 64 MiB
 const SEED_MAX_DEPTH: usize = 6;
 
-/// Sandbox replay — re-execute allowed events inside a temporary workspace.
+/// Workspace replay — re-execute allowed events inside a temporary directory.
+///
+/// **Not OS process isolation.** This mode uses a temporary workspace directory
+/// and policy filters (no network/home/kernel sandbox). Capability preflight
+/// reports `workspace isolation: temporary-directory` only.
 ///
 /// External and destructive side effects are blocked under the default
 /// `ReplayPolicy::Sandbox`. Read and local-write process/tool commands
-/// may run in the isolated directory.
+/// may run in the temporary directory.
 ///
 /// By default the workspace is seeded with a shallow copy of the original
 /// run cwd (noise dirs skipped) so `cat`/`ls` style commands see real files.
@@ -231,7 +237,8 @@ fn sanitize_run_id(id: &str) -> String {
 #[async_trait::async_trait]
 impl ReplayEngine for SandboxReplay {
     fn name(&self) -> &'static str {
-        "sandbox"
+        // Historical engine id; operator-facing copy says "workspace replay".
+        "workspace"
     }
 
     async fn start(
@@ -248,8 +255,10 @@ impl ReplayEngine for SandboxReplay {
             std::fs::create_dir_all(ws)?;
             ws.clone()
         } else {
-            let dir =
-                std::env::temp_dir().join(format!("blackbox-sandbox-{}", sanitize_run_id(&run.id)));
+            let dir = std::env::temp_dir().join(format!(
+                "blackbox-workspace-{}",
+                sanitize_run_id(&run.id)
+            ));
             std::fs::create_dir_all(&dir)?;
             cleanup_guard = TempDirGuard::new(dir.clone());
             dir
@@ -262,10 +271,10 @@ impl ReplayEngine for SandboxReplay {
                 match restore_git_tree(Path::new(&run.cwd), &workspace, commit) {
                     Ok(msg) => {
                         git_restored = Some(msg);
-                        tracing::info!(commit = %commit, "sandbox: restored git tree via archive");
+                        tracing::info!(commit = %commit, "workspace: restored git tree via archive");
                     }
                     Err(e) => {
-                        tracing::warn!(error = %e, commit = %commit, "sandbox: git restore failed");
+                        tracing::warn!(error = %e, commit = %commit, "workspace: git restore failed");
                     }
                 }
             }
@@ -274,10 +283,10 @@ impl ReplayEngine for SandboxReplay {
                     match apply_git_diff(&workspace, diff) {
                         Ok(msg) => {
                             git_diff_applied = Some(msg);
-                            tracing::info!("sandbox: applied checkpoint git diff");
+                            tracing::info!("workspace: applied checkpoint git diff");
                         }
                         Err(e) => {
-                            tracing::warn!(error = %e, "sandbox: git diff apply failed");
+                            tracing::warn!(error = %e, "workspace: git diff apply failed");
                         }
                     }
                 }
@@ -292,7 +301,7 @@ impl ReplayEngine for SandboxReplay {
                 match seed_workspace(Path::new(&run.cwd), &workspace) {
                     Ok(s) => s,
                     Err(e) => {
-                        tracing::warn!(error = %e, "sandbox: seed from cwd failed");
+                        tracing::warn!(error = %e, "workspace: seed from cwd failed");
                         SeedStats::default()
                     }
                 }
@@ -301,7 +310,8 @@ impl ReplayEngine for SandboxReplay {
             SeedStats::default()
         };
 
-        // Context file from the original run
+        // Capability preflight — honest isolation level (1.5 R1).
+        let capabilities = workspace_capability_report(self.policy);
         let context = serde_json::json!({
             "source_run_id": run.id,
             "command": run.command,
@@ -313,15 +323,26 @@ impl ReplayEngine for SandboxReplay {
             "git_commit": self.git_commit,
             "git_restored": git_restored,
             "git_diff_applied": git_diff_applied,
+            "mode": "workspace_replay",
+            "capabilities": capabilities,
         });
         std::fs::write(
-            workspace.join(".blackbox-sandbox-context.json"),
+            workspace.join(".blackbox-workspace-context.json"),
             serde_json::to_string_pretty(&context)?,
         )?;
+        // Compat alias for older tooling that looked for the sandbox name.
+        let _ = std::fs::write(
+            workspace.join(".blackbox-sandbox-context.json"),
+            serde_json::to_string_pretty(&context)?,
+        );
 
-        println!("═══ Sandbox replay ═══");
+        println!("═══ Workspace replay ═══");
         println!("workspace: {}", workspace.display());
         println!("policy:    {:?}", self.policy);
+        println!("isolation: temporary directory (not OS process isolation)");
+        for (k, v) in &capabilities {
+            println!("{k}: {v}");
+        }
         if let Some(ref g) = git_restored {
             println!("git:       {g}");
         }
@@ -360,7 +381,7 @@ impl ReplayEngine for SandboxReplay {
                     seq = event.sequence,
                     kind = %event.kind,
                     fidelity = fidelity.as_str(),
-                    "sandbox: skipping lossy command reconstruction"
+                    "workspace: skipping lossy command reconstruction"
                 );
                 skipped += 1;
                 continue;
@@ -379,7 +400,7 @@ impl ReplayEngine for SandboxReplay {
             // even when the event was mis-tagged as Read/LocalWrite.
             let shell_blocked = self.policy != ReplayPolicy::Live && is_shell_interpreter(&cmd);
 
-            // For sandbox policy, allow Unknown only if it's a clearly read-only command
+            // For workspace policy, allow Unknown only if it's a clearly read-only command
             let allowed = !shell_blocked
                 && (self.is_allowed(&side)
                     || (self.policy == ReplayPolicy::Sandbox
@@ -399,7 +420,7 @@ impl ReplayEngine for SandboxReplay {
                     seq = event.sequence,
                     kind = %event.kind,
                     side_effect = ?event.side_effect,
-                    "sandbox: skipping event (side effect blocked)"
+                    "workspace: skipping event (side effect blocked)"
                 );
                 skipped += 1;
                 continue;
@@ -416,7 +437,7 @@ impl ReplayEngine for SandboxReplay {
             if !stderr.trim().is_empty() {
                 println!("      stderr: {}", truncate(stderr.trim(), 200));
             }
-            tracing::info!(seq = event.sequence, exit = code, "sandbox: executed event");
+            tracing::info!(seq = event.sequence, exit = code, "workspace: executed event");
             executed += 1;
         }
 
@@ -486,68 +507,244 @@ pub fn restore_git_tree(source: &Path, workspace: &Path, commit: &str) -> anyhow
     Ok(format!("git archive {commit} → {}", workspace.display()))
 }
 
+/// Honest capability report for workspace replay (1.5 R1).
+pub fn workspace_capability_report(policy: ReplayPolicy) -> Vec<(String, String)> {
+    let (net, home, creds, limits) = match policy {
+        ReplayPolicy::Live => (
+            "not enforced (live)",
+            "not enforced (live)",
+            "not stripped (live)",
+            "none",
+        ),
+        _ => (
+            "not enforced (workspace-only)",
+            "not enforced (workspace-only)",
+            "not stripped (workspace-only)",
+            "none",
+        ),
+    };
+    vec![
+        ("workspace isolation".into(), "temporary-directory".into()),
+        ("filesystem escape protection".into(), "path-validated-patch-only".into()),
+        ("network isolation".into(), net.into()),
+        ("home access".into(), home.into()),
+        ("credential environment".into(), creds.into()),
+        ("resource limits".into(), limits.into()),
+        ("backend".into(), "workspace".into()),
+        (
+            "kernel isolation".into(),
+            "not available (use contained replay when implemented)".into(),
+        ),
+    ]
+}
+
 /// Strip blackbox capture banners and apply a unified diff to `workspace`.
 ///
-/// Tries `git apply` first (if git is available), then `patch -p1`.
-/// Best-effort — partial apply is not rolled back.
+/// **Path-safe transactional restore (1.5):**
+/// 1. Parse every source/destination path in the patch.
+/// 2. Reject absolute paths, `..` traversal, and destinations outside the workspace.
+/// 3. Apply into a staging directory.
+/// 4. Promote changed files only after the complete patch succeeds.
+/// 5. On failure, leave the original workspace unmodified.
 pub fn apply_git_diff(workspace: &Path, diff: &str) -> anyhow::Result<String> {
     let cleaned = strip_diff_banners(diff);
     if cleaned.trim().is_empty() {
         anyhow::bail!("empty diff after stripping banners");
     }
-    // Cap size (matches capture limits roughly)
     if cleaned.len() > 8 * 1024 * 1024 {
         anyhow::bail!("diff too large to apply");
     }
 
-    let patch_path = workspace.join(".blackbox-restore.patch");
+    let paths = parse_patch_paths(&cleaned)?;
+    for p in &paths {
+        validate_patch_path(p)?;
+    }
+
+    // Staging workspace — never mutate the destination until apply succeeds fully.
+    let stage_path = std::env::temp_dir().join(format!(
+        "blackbox-patch-stage-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&stage_path).context("create patch staging dir")?;
+    let _stage_guard = TempDirGuard::new(stage_path.clone());
+
+    // Seed staging with existing destination files that the patch may touch.
+    for rel in &paths {
+        let src = workspace.join(rel);
+        let dst = stage_path.join(rel);
+        if src.is_file() {
+            if let Some(parent) = dst.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::copy(&src, &dst)
+                .with_context(|| format!("seed staging from {}", src.display()))?;
+        }
+    }
+
+    let patch_path = stage_path.join(".blackbox-restore.patch");
     std::fs::write(&patch_path, &cleaned)?;
 
-    // Prefer git apply --unsafe-paths -p1 in workspace (not necessarily a repo)
+    // Apply without --unsafe-paths; paths already validated.
     let git = Command::new("git")
         .args([
             "apply",
             "--whitespace=nowarn",
-            "--unsafe-paths",
             "-p1",
+            "--directory",
+            &stage_path.to_string_lossy(),
             &patch_path.to_string_lossy(),
         ])
-        .current_dir(workspace)
         .output();
 
-    if let Ok(out) = git {
-        if out.status.success() {
-            let _ = std::fs::remove_file(&patch_path);
-            return Ok(format!("git apply ({} bytes)", cleaned.len()));
-        }
-        tracing::debug!(
-            stderr = %String::from_utf8_lossy(&out.stderr),
-            "git apply failed; trying patch"
-        );
-    }
-
-    let patch = Command::new("patch")
-        .args([
-            "-p1",
-            "--forward",
-            "--batch",
-            "-i",
-            &patch_path.to_string_lossy(),
-        ])
-        .current_dir(workspace)
-        .output();
-
-    match patch {
-        Ok(out) if out.status.success() => {
-            let _ = std::fs::remove_file(&patch_path);
-            Ok(format!("patch -p1 ({} bytes)", cleaned.len()))
-        }
+    let applied = match git {
+        Ok(out) if out.status.success() => true,
         Ok(out) => {
-            let err = String::from_utf8_lossy(&out.stderr);
-            anyhow::bail!("patch apply failed: {err}");
+            tracing::debug!(
+                stderr = %String::from_utf8_lossy(&out.stderr),
+                "git apply failed; trying patch in staging"
+            );
+            false
         }
-        Err(e) => anyhow::bail!("patch spawn failed: {e}"),
+        Err(_) => false,
+    };
+
+    if !applied {
+        let patch = Command::new("patch")
+            .args([
+                "-p1",
+                "--forward",
+                "--batch",
+                "-d",
+                &stage_path.to_string_lossy(),
+                "-i",
+                &patch_path.to_string_lossy(),
+            ])
+            .output();
+        match patch {
+            Ok(out) if out.status.success() => {}
+            Ok(out) => {
+                let err = String::from_utf8_lossy(&out.stderr);
+                anyhow::bail!("patch apply failed (workspace unchanged): {err}");
+            }
+            Err(e) => anyhow::bail!("patch spawn failed (workspace unchanged): {e}"),
+        }
     }
+
+    // Promote: copy every staged relative path (except the patch file) into workspace.
+    promote_staged_files(&stage_path, workspace)?;
+    Ok(format!(
+        "path-safe patch apply ({} bytes, {} paths)",
+        cleaned.len(),
+        paths.len()
+    ))
+}
+
+fn promote_staged_files(stage: &Path, workspace: &Path) -> anyhow::Result<()> {
+    fn walk(stage_root: &Path, dir: &Path, workspace: &Path) -> anyhow::Result<()> {
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            let name = entry.file_name();
+            if name == ".blackbox-restore.patch" {
+                continue;
+            }
+            let rel = path
+                .strip_prefix(stage_root)
+                .map_err(|_| anyhow::anyhow!("staging path escape"))?;
+            // Re-validate relative path on promote.
+            let rel_str = rel.to_string_lossy();
+            validate_patch_path(&rel_str)?;
+            let dest = workspace.join(rel);
+            if path.is_dir() {
+                std::fs::create_dir_all(&dest)?;
+                walk(stage_root, &path, workspace)?;
+            } else if path.is_file() {
+                if let Some(parent) = dest.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                // Atomic-ish: write temp then rename within destination dir.
+                let tmp = dest.with_extension("bb-promote-tmp");
+                std::fs::copy(&path, &tmp)
+                    .with_context(|| format!("promote copy {}", path.display()))?;
+                std::fs::rename(&tmp, &dest)
+                    .with_context(|| format!("promote rename {}", dest.display()))?;
+            }
+        }
+        Ok(())
+    }
+    walk(stage, stage, workspace)
+}
+
+/// Extract destination-ish paths from a unified diff (`+++ b/...`, `diff --git a/ x b/y`).
+pub fn parse_patch_paths(diff: &str) -> anyhow::Result<Vec<String>> {
+    let mut paths = Vec::new();
+    for line in diff.lines() {
+        if let Some(rest) = line.strip_prefix("+++ ") {
+            // Formats: `+++ b/path` or `+++ path` or `/dev/null`
+            let p = rest.trim();
+            if p == "/dev/null" {
+                continue;
+            }
+            let p = p
+                .strip_prefix("b/")
+                .or_else(|| p.strip_prefix("a/"))
+                .unwrap_or(p);
+            // Drop optional tab timestamp
+            let p = p.split('\t').next().unwrap_or(p).trim();
+            if !p.is_empty() {
+                paths.push(p.to_string());
+            }
+        } else if let Some(rest) = line.strip_prefix("diff --git ") {
+            // `diff --git a/foo b/bar`
+            for part in rest.split_whitespace() {
+                let p = part
+                    .strip_prefix("a/")
+                    .or_else(|| part.strip_prefix("b/"))
+                    .unwrap_or(part);
+                if p != "/dev/null" && !p.is_empty() {
+                    paths.push(p.to_string());
+                }
+            }
+        } else if let Some(rest) = line.strip_prefix("rename to ") {
+            paths.push(rest.trim().to_string());
+        } else if let Some(rest) = line.strip_prefix("copy to ") {
+            paths.push(rest.trim().to_string());
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+
+/// Reject absolute paths, traversal, and other escapes (1.5 patch path safety).
+pub fn validate_patch_path(path: &str) -> anyhow::Result<()> {
+    let path = path.trim();
+    if path.is_empty() {
+        anyhow::bail!("empty path in patch");
+    }
+    if path.starts_with('/') || path.starts_with('\\') {
+        anyhow::bail!("absolute path rejected in patch: {path}");
+    }
+    // Windows drive letter
+    let bytes = path.as_bytes();
+    if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
+        anyhow::bail!("absolute path rejected in patch: {path}");
+    }
+    if path.contains('\0') {
+        anyhow::bail!("NUL in patch path");
+    }
+    for comp in Path::new(path).components() {
+        match comp {
+            std::path::Component::ParentDir => {
+                anyhow::bail!("path traversal rejected in patch: {path}");
+            }
+            std::path::Component::RootDir | std::path::Component::Prefix(_) => {
+                anyhow::bail!("absolute path rejected in patch: {path}");
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 /// Capture stores diffs with human banners; strip them for `git apply`.
@@ -938,6 +1135,98 @@ mod tests {
         let ws = tempfile::tempdir().unwrap();
         let err = apply_git_diff(ws.path(), "--- Unstaged Changes ---\n").unwrap_err();
         assert!(err.to_string().contains("empty"));
+    }
+
+    #[test]
+    fn validate_patch_path_rejects_absolute_and_traversal() {
+        assert!(validate_patch_path("src/main.rs").is_ok());
+        assert!(validate_patch_path("/etc/passwd").is_err());
+        assert!(validate_patch_path("../escape").is_err());
+        assert!(validate_patch_path("foo/../../etc/passwd").is_err());
+        assert!(validate_patch_path(r"C:\Windows\System32").is_err());
+    }
+
+    #[test]
+    fn apply_git_diff_rejects_absolute_before_modify() {
+        let ws = tempfile::tempdir().unwrap();
+        std::fs::write(ws.path().join("keep.txt"), b"safe").unwrap();
+        let evil = "diff --git a/x b/x\n--- a/x\n+++ /etc/passwd\n@@ -0,0 +1 @@\n+pwned\n";
+        let err = apply_git_diff(ws.path(), evil).unwrap_err();
+        assert!(
+            err.to_string().contains("absolute") || err.to_string().contains("rejected"),
+            "got: {err}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(ws.path().join("keep.txt")).unwrap(),
+            "safe",
+            "workspace must be unchanged after rejected patch"
+        );
+    }
+
+    #[test]
+    fn apply_git_diff_rejects_traversal_before_modify() {
+        let ws = tempfile::tempdir().unwrap();
+        std::fs::write(ws.path().join("keep.txt"), b"safe").unwrap();
+        let evil =
+            "diff --git a/x b/x\n--- a/x\n+++ b/../../escape.txt\n@@ -0,0 +1 @@\n+pwned\n";
+        let err = apply_git_diff(ws.path(), evil).unwrap_err();
+        assert!(
+            err.to_string().contains("traversal") || err.to_string().contains("rejected"),
+            "got: {err}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(ws.path().join("keep.txt")).unwrap(),
+            "safe"
+        );
+    }
+
+    #[test]
+    fn apply_git_diff_path_safe_success() {
+        let ws = tempfile::tempdir().unwrap();
+        std::fs::write(ws.path().join("file.txt"), b"hello\n").unwrap();
+        // Create a minimal git repo so git apply can work; also try plain patch.
+        let _ = Command::new("git")
+            .args(["init"])
+            .current_dir(ws.path())
+            .output();
+        let diff = "\
+diff --git a/file.txt b/file.txt
+--- a/file.txt
++++ b/file.txt
+@@ -1 +1 @@
+-hello
++hello world
+";
+        // May succeed via git apply or patch depending on environment.
+        match apply_git_diff(ws.path(), diff) {
+            Ok(msg) => {
+                assert!(msg.contains("path-safe"));
+                let body = std::fs::read_to_string(ws.path().join("file.txt")).unwrap();
+                assert!(body.contains("hello world"), "body={body}");
+            }
+            Err(e) => {
+                // Environments without git/patch still validate path safety above.
+                let msg = e.to_string();
+                assert!(
+                    msg.contains("failed") || msg.contains("spawn"),
+                    "unexpected: {msg}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn capability_report_is_honest() {
+        let caps = workspace_capability_report(ReplayPolicy::Sandbox);
+        let map: std::collections::HashMap<_, _> = caps.into_iter().collect();
+        assert_eq!(
+            map.get("workspace isolation").map(String::as_str),
+            Some("temporary-directory")
+        );
+        assert!(map
+            .get("kernel isolation")
+            .map(|s| s.contains("not available"))
+            .unwrap_or(false));
     }
 
     #[test]

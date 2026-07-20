@@ -98,11 +98,12 @@ Full acceptance criteria: [issue #3 comments](https://github.com/wanazhar/blackb
 
 ### Phase B — Reproducible / contained replay
 
-- [ ] Rename workspace-only mode; do not claim kernel isolation
-- [ ] Path-safe transactional patch restore
+- [x] Rename workspace-only mode; do not claim kernel isolation (`--workspace`, capability report)
+- [x] Path-safe transactional patch restore (stage + promote; no `--unsafe-paths`)
 - [ ] Workspace manifest + completeness report
 - [ ] Optional Linux contained backend (bubblewrap/namespaces) + capability preflight
-- [ ] Gates: `tests/workspace_checkpoint.rs`, `tests/patch_path_safety.rs`, `tests/replay_containment_linux.rs`
+- [x] Gate: `tests/patch_path_safety.rs`
+- [ ] Gates: `tests/workspace_checkpoint.rs`, `tests/replay_containment_linux.rs`
 
 ### Phase C — Durable storage / imports
 

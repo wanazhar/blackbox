@@ -22,6 +22,11 @@ Plan: [docs/plan/trace-integrity-1.5.md](docs/plan/trace-integrity-1.5.md). Epic
 - Nested metadata redaction; malformed parent/blob refs rejected
 - Failed imports roll back the run and newly created blob keys/files
 
+#### Workspace replay honesty + path-safe patches (R1)
+- Operator-facing rename: **workspace replay** (temp directory), not kernel isolation; `--workspace` with `--sandbox` alias
+- Capability preflight lists temporary-directory limits; no overstated sandbox claims
+- Path-safe transactional patch apply: reject absolute/traversal paths; stage then promote; no `--unsafe-paths`
+
 ## [1.4.0] — 2026-07-19
 
 **Trust Proof (Unix)** — recorder mode can stay on without silently changing the child or overstating causality; secrets are holdback-redacted before persist; coverage and postmortem claims stay weaker than or equal to evidence.

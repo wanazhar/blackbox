@@ -45,7 +45,7 @@ impl std::fmt::Display for ReplayOutcome {
                 summary,
             } => write!(
                 f,
-                "sandbox executed={} skipped={} workspace={} — {}",
+                "workspace executed={} skipped={} dir={} — {}",
                 executed, skipped, workspace, summary
             ),
             ReplayOutcome::Forked {

@@ -634,14 +634,14 @@ curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:7788/api/runs
 **When to use:** Revisit a run without trusting LLM re-execution. Modes differ in how much they re-execute tools.
 
 ```bash
-blackbox replay <run-id> [--mode timeline|mock|sandbox|live] [--store <path>]
+blackbox replay <run-id> [--mock-tools | --workspace | --sandbox | --live] [--store <path>]
 ```
 
 | Mode | Executes? | Notes |
 |---|---|---|
 | `timeline` | No | Playback |
 | `mock` | No | Mock tool results |
-| `sandbox` | Yes, isolated | Lossy; dangerous ops blocked |
+| `workspace` (`--sandbox` alias) | Yes, temporary directory only | Not OS isolation; dangerous ops blocked by policy |
 | `live` | Yes | **Dangerous** — real re-execution |
 
 Not deterministic model replay.

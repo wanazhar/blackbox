@@ -775,11 +775,12 @@ pub struct ReplayArgs {
     #[arg(long)]
     pub mock_tools: bool,
 
-    /// Sandbox re-execution: re-run allowed local commands in a temp workspace.
-    /// Guarantee: external/destructive events blocked; lossy argv reconstruction blocked;
+    /// Workspace re-execution: re-run allowed local commands in a temp directory.
+    /// Temporary-directory isolation only — not OS process/network isolation.
+    /// External/destructive events blocked; lossy argv reconstruction blocked;
     /// shell interpreters blocked unless --live. Not deterministic LLM replay.
-    #[arg(long)]
-    pub sandbox: bool,
+    #[arg(long = "workspace", alias = "sandbox")]
+    pub workspace: bool,
 
     /// Live re-execution against the current environment (dangerous).
     /// Guarantee: may change files, network, and external systems. Requires explicit opt-in.
@@ -2560,10 +2561,10 @@ async fn cmd_sync(cli: &Cli, args: &SyncArgs) -> anyhow::Result<()> {
 
 async fn cmd_replay(cli: &Cli, args: &ReplayArgs) -> anyhow::Result<()> {
     // Validate mutually exclusive replay mode flags.
-    let mode_count = args.mock_tools as u8 + args.sandbox as u8 + args.live as u8;
+    let mode_count = args.mock_tools as u8 + args.workspace as u8 + args.live as u8;
     if mode_count > 1 {
         anyhow::bail!(
-            "conflicting replay flags: --mock-tools, --sandbox, and --live are mutually exclusive"
+            "conflicting replay flags: --mock-tools, --workspace/--sandbox, and --live are mutually exclusive"
         );
     }
 
@@ -2591,8 +2592,8 @@ async fn cmd_replay(cli: &Cli, args: &ReplayArgs) -> anyhow::Result<()> {
     // Preflight: honest guarantees before any execution.
     let mode_name = if args.live {
         "Live re-execution"
-    } else if args.sandbox {
-        "Sandbox re-execution"
+    } else if args.workspace {
+        "Workspace re-execution"
     } else if args.mock_tools {
         "Recorded tool playback"
     } else {
@@ -2642,13 +2643,14 @@ async fn cmd_replay(cli: &Cli, args: &ReplayArgs) -> anyhow::Result<()> {
                 println!("external:   unchanged");
                 println!("note:       not deterministic LLM replay");
             }
-            "Sandbox re-execution" => {
-                println!("executes:   yes — allowed local commands only (temp workspace)");
-                println!("filesystem: isolated workspace (seeded/best-effort git restore)");
-                println!("external:   blocked by default");
-                println!("destructive:blocked by default");
+            "Workspace re-execution" => {
+                println!("executes:   yes — allowed local commands only (temp directory)");
+                println!("filesystem: temporary workspace (seeded/best-effort git restore)");
+                println!("isolation:  temporary-directory (NOT OS process/network isolation)");
+                println!("external:   not kernel-blocked (policy filter only)");
+                println!("destructive:blocked by default (policy)");
                 println!("lossy argv: blocked ({lossy_cmds} lossy / {executable_cmds} exact-or-inferred)");
-                println!("shell cmds: blocked under sandbox ({shell_cmds} detected)");
+                println!("shell cmds: blocked under workspace policy ({shell_cmds} detected)");
                 println!("note:       not deterministic LLM replay");
             }
             "Live re-execution" => {
@@ -2656,7 +2658,7 @@ async fn cmd_replay(cli: &Cli, args: &ReplayArgs) -> anyhow::Result<()> {
                 println!("filesystem: MAY CHANGE");
                 println!("external:   MAY CHANGE");
                 println!("destructive:ALLOWED");
-                println!("warning:    live mode is dangerous; prefer --sandbox");
+                println!("warning:    live mode is dangerous; prefer --workspace");
                 println!("note:       not deterministic LLM replay");
             }
             _ => {}
@@ -2666,7 +2668,7 @@ async fn cmd_replay(cli: &Cli, args: &ReplayArgs) -> anyhow::Result<()> {
 
     let mut engine: Box<dyn ReplayEngine> = if args.mock_tools {
         Box::new(MockReplay)
-    } else if args.sandbox || args.live {
+    } else if args.workspace || args.live {
         let policy = if args.live {
             crate::replay::ReplayPolicy::Live
         } else {

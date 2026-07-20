@@ -111,11 +111,11 @@ Full acceptance criteria: [issue #3 comments](https://github.com/wanazhar/blackb
 
 - [x] Hash-validated atomic portable import (hash match required; batch events; rollback journal)
 - [x] Batched SQLite writer + barriers + observability (`BatchIngestor` / `EventWriter::new_batched`)
-- [ ] Cursor pagination APIs
-- [ ] Blob compression before encryption; streaming portable format
+- [x] Cursor pagination APIs (`list_runs_page`, `get_events_range`, kind pages)
+- [x] Blob compression before encryption (BBZC zlib); streaming portable format deferred
 - [x] Gate: `tests/portable_import_atomicity.rs`
 - [x] Gate: `tests/storage_batch_faults.rs`
-- [ ] Gate: `tests/pagination_scale.rs`
+- [x] Gate: `tests/pagination_scale.rs`
 
 ### Phase D — Capture / platform operations
 

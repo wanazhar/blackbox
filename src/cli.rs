@@ -1464,11 +1464,7 @@ async fn apply_retention_quiet(
 
 async fn cmd_runs(cli: &Cli, args: &RunsArgs) -> anyhow::Result<()> {
     let store = open_store(cli)?;
-    let mut runs = store.list_runs().await?;
 
-    if !args.tag.is_empty() {
-        runs.retain(|r| args.tag.iter().any(|t| r.tags.iter().any(|rt| rt == t)));
-    }
     if let Some(status) = &args.status {
         // Validate against known status values with a helpful error
         let valid_statuses = [
@@ -1499,10 +1495,19 @@ async fn cmd_runs(cli: &Cli, args: &RunsArgs) -> anyhow::Result<()> {
                 status
             );
         }
-        runs.retain(|r| format!("{:?}", r.status).to_lowercase().contains(&s));
     }
-    if let Some(limit) = args.limit {
-        runs.truncate(limit);
+
+    // Cursor-friendly page API: avoid loading the entire runs table when limited.
+    let page_limit = args.limit.unwrap_or(10_000).max(1);
+    let filters = crate::storage::RunFilters {
+        status: args.status.clone(),
+        tag: args.tag.first().cloned(),
+    };
+    let page = store.list_runs_page(None, page_limit, &filters).await?;
+    // Multi-tag: if more than one --tag, filter the page in memory.
+    let mut runs = page.runs;
+    if args.tag.len() > 1 {
+        runs.retain(|r| args.tag.iter().any(|t| r.tags.iter().any(|rt| rt == t)));
     }
 
     if cli.json {

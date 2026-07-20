@@ -1,3 +1,4 @@
+pub mod page;
 pub mod sqlite;
 pub mod store;
 
@@ -6,6 +7,11 @@ use crate::core::blob::BlobReference;
 use crate::core::checkpoint::Checkpoint;
 use crate::core::event::TraceEvent;
 use crate::core::run::Run;
+
+pub use page::{
+    decode_event_cursor, decode_run_cursor, encode_event_cursor, encode_run_cursor, EventPage,
+    EventPageCursor, RunFilters, RunPage, RunPageCursor,
+};
 
 /// Storage backend for run traces, events, checkpoints, and blobs.
 ///
@@ -25,7 +31,52 @@ pub trait TraceStore: Send + Sync + 'static {
     async fn get_run(&self, run_id: &str) -> anyhow::Result<Option<Run>>;
 
     /// List all runs, most recent first.
+    ///
+    /// Prefer [`list_runs_page`] for large stores — this may load everything.
     async fn list_runs(&self) -> anyhow::Result<Vec<Run>>;
+
+    /// Cursor-based run listing (most recent first). Does not load the full table.
+    ///
+    /// Default: full `list_runs` then slice (backends SHOULD override with SQL LIMIT).
+    async fn list_runs_page(
+        &self,
+        cursor: Option<&str>,
+        limit: usize,
+        filters: &RunFilters,
+    ) -> anyhow::Result<RunPage> {
+        let mut runs = self.list_runs().await?;
+        if let Some(status) = &filters.status {
+            let s = status.to_lowercase();
+            runs.retain(|r| format!("{:?}", r.status).to_lowercase().contains(&s));
+        }
+        if let Some(tag) = &filters.tag {
+            runs.retain(|r| r.tags.iter().any(|t| t == tag));
+        }
+        if let Some(cur) = cursor.and_then(decode_run_cursor) {
+            runs.retain(|r| {
+                r.started_at < cur.started_at
+                    || (r.started_at == cur.started_at && r.id.as_str() < cur.id.as_str())
+            });
+        }
+        let limit = limit.max(1);
+        let has_more = runs.len() > limit;
+        runs.truncate(limit);
+        let next_cursor = if has_more {
+            runs.last().map(|r| {
+                encode_run_cursor(&RunPageCursor {
+                    started_at: r.started_at,
+                    id: r.id.clone(),
+                })
+            })
+        } else {
+            None
+        };
+        Ok(RunPage {
+            runs,
+            next_cursor,
+            has_more,
+        })
+    }
 
     /// Delete a run and its events/checkpoints.
     ///
@@ -80,6 +131,76 @@ pub trait TraceStore: Send + Sync + 'static {
             .filter(|e| e.sequence > after_seq)
             .take(limit)
             .collect())
+    }
+
+    /// Range query: `after_sequence < sequence < before_sequence` (bounds optional via 0 / u64::MAX).
+    ///
+    /// Returns ascending sequence order. Default: filter in memory.
+    async fn get_events_range(
+        &self,
+        run_id: &str,
+        after_sequence: u64,
+        before_sequence: u64,
+        limit: usize,
+    ) -> anyhow::Result<EventPage> {
+        let limit = limit.max(1);
+        let all = self.get_events(run_id).await?;
+        let mut events: Vec<_> = all
+            .into_iter()
+            .filter(|e| e.sequence > after_sequence && e.sequence < before_sequence)
+            .collect();
+        let has_more = events.len() > limit;
+        events.truncate(limit);
+        let next_cursor = if has_more {
+            events.last().map(|e| {
+                encode_event_cursor(&EventPageCursor {
+                    sequence: e.sequence,
+                })
+            })
+        } else {
+            None
+        };
+        Ok(EventPage {
+            events,
+            next_cursor,
+            has_more,
+        })
+    }
+
+    /// Kind-filtered events with optional sequence cursor (exclusive lower bound).
+    async fn get_events_by_kind_page(
+        &self,
+        run_id: &str,
+        kinds: &[&str],
+        cursor: Option<&str>,
+        limit: usize,
+    ) -> anyhow::Result<EventPage> {
+        let after = cursor
+            .and_then(decode_event_cursor)
+            .map(|c| c.sequence)
+            .unwrap_or(0);
+        let limit = limit.max(1);
+        let all = self.get_events(run_id).await?;
+        let mut events: Vec<_> = all
+            .into_iter()
+            .filter(|e| e.sequence > after && kinds.iter().any(|k| e.kind == *k))
+            .collect();
+        let has_more = events.len() > limit;
+        events.truncate(limit);
+        let next_cursor = if has_more {
+            events.last().map(|e| {
+                encode_event_cursor(&EventPageCursor {
+                    sequence: e.sequence,
+                })
+            })
+        } else {
+            None
+        };
+        Ok(EventPage {
+            events,
+            next_cursor,
+            has_more,
+        })
     }
 
     /// Load a single event by ID.

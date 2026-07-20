@@ -184,6 +184,7 @@ Operator-facing notes for shipped harnesses: [docs/guide/adapters.md](docs/guide
 | `tests/filesystem_escape.rs` | 1.5 C1: symlink/out-of-root scope for FS capture |
 | `tests/native_log_rotation.rs` | 1.5: native-log identity, rotation, backlog |
 | `tests/dashboard_auth.rs` | 1.5 H1: session cookie contract |
+| `tests/pagination_scale.rs` | 1.5 P1: cursor pages + blob compression |
 
 ## Docs map
 

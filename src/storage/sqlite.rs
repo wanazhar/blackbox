@@ -14,6 +14,10 @@ use crate::core::blob::BlobReference;
 use crate::core::checkpoint::Checkpoint;
 use crate::core::event::TraceEvent;
 use crate::core::run::Run;
+use crate::storage::page::{
+    decode_event_cursor, decode_run_cursor, encode_event_cursor, encode_run_cursor, EventPage,
+    EventPageCursor, RunFilters, RunPage, RunPageCursor,
+};
 use crate::storage::TraceStore;
 
 /// Current schema version. Bump when migrations change.
@@ -837,6 +841,81 @@ impl TraceStore for SqliteStore {
         result
     }
 
+    async fn list_runs_page(
+        &self,
+        cursor: Option<&str>,
+        limit: usize,
+        filters: &RunFilters,
+    ) -> anyhow::Result<RunPage> {
+        let limit = limit.max(1);
+        // Fetch limit+1 to detect has_more without a second query.
+        let fetch = limit + 1;
+        let cur = cursor.and_then(decode_run_cursor);
+        let status_pat = filters
+            .status
+            .as_ref()
+            .map(|s| format!("%{}%", s.to_lowercase()));
+
+        let result = {
+            let conn = self.lock();
+            // Cursor: (started_at, id) lexicographic for stable DESC order.
+            let sql = if cur.is_some() {
+                "SELECT id, name, command, cwd, project_dir, tags, notes, status, started_at, ended_at, exit_code, parent_run_id, next_sequence,
+                 duration_ms, adapter, session_id, input_tokens, output_tokens, total_tokens, estimated_cost_usd, model
+                 FROM runs
+                 WHERE (started_at < ?1 OR (started_at = ?1 AND id < ?2))
+                 ORDER BY started_at DESC, id DESC
+                 LIMIT ?3"
+            } else {
+                "SELECT id, name, command, cwd, project_dir, tags, notes, status, started_at, ended_at, exit_code, parent_run_id, next_sequence,
+                 duration_ms, adapter, session_id, input_tokens, output_tokens, total_tokens, estimated_cost_usd, model
+                 FROM runs
+                 ORDER BY started_at DESC, id DESC
+                 LIMIT ?1"
+            };
+            let mut stmt = conn.prepare(sql)?;
+            let mut runs = if let Some(ref c) = cur {
+                stmt.query_map(
+                    params![c.started_at.to_rfc3339(), c.id, fetch as i64],
+                    run_from_row,
+                )?
+                .collect::<Result<Vec<_>, _>>()?
+            } else {
+                stmt.query_map(params![fetch as i64], run_from_row)?
+                    .collect::<Result<Vec<_>, _>>()?
+            };
+
+            // Optional status filter (status stored as JSON string e.g. "\"Failed\"").
+            if let Some(ref pat) = status_pat {
+                let p = pat.trim_matches('%').to_lowercase();
+                runs.retain(|r| format!("{:?}", r.status).to_lowercase().contains(&p));
+            }
+            if let Some(ref tag) = filters.tag {
+                runs.retain(|r| r.tags.iter().any(|t| t == tag));
+            }
+
+            let has_more = runs.len() > limit;
+            runs.truncate(limit);
+            let next_cursor = if has_more {
+                runs.last().map(|r| {
+                    encode_run_cursor(&RunPageCursor {
+                        started_at: r.started_at,
+                        id: r.id.clone(),
+                    })
+                })
+            } else {
+                None
+            };
+            Ok(RunPage {
+                runs,
+                next_cursor,
+                has_more,
+            })
+        };
+        tokio::task::yield_now().await;
+        result
+    }
+
     async fn delete_run(&self, run_id: &str) -> anyhow::Result<bool> {
         let run_id = run_id.to_string();
         let deleted = {
@@ -1010,6 +1089,102 @@ impl TraceStore for SqliteStore {
         };
         tokio::task::yield_now().await;
         result
+    }
+
+    async fn get_events_range(
+        &self,
+        run_id: &str,
+        after_sequence: u64,
+        before_sequence: u64,
+        limit: usize,
+    ) -> anyhow::Result<EventPage> {
+        let limit = limit.max(1);
+        let fetch = limit + 1;
+        let run_id = run_id.to_string();
+        // SQLite binds i64; treat 0 / values above i64::MAX as "no upper bound".
+        let before = if before_sequence == 0 || before_sequence > i64::MAX as u64 {
+            i64::MAX
+        } else {
+            before_sequence as i64
+        };
+        let result = {
+            let conn = self.lock();
+            let mut stmt = conn.prepare(
+                "SELECT id, run_id, parent_event_id, sequence, source, kind, started_at, ended_at, duration_ms, status, side_effect, input_blob, output_blob, error_blob, metadata
+                 FROM events
+                 WHERE run_id = ?1 AND sequence > ?2 AND sequence < ?3
+                 ORDER BY sequence ASC LIMIT ?4",
+            )?;
+            let mut events = stmt
+                .query_map(
+                    params![run_id, after_sequence as i64, before, fetch as i64],
+                    event_from_row,
+                )?
+                .collect::<Result<Vec<_>, _>>()?;
+            let has_more = events.len() > limit;
+            events.truncate(limit);
+            let next_cursor = if has_more {
+                events.last().map(|e| {
+                    encode_event_cursor(&EventPageCursor {
+                        sequence: e.sequence,
+                    })
+                })
+            } else {
+                None
+            };
+            Ok(EventPage {
+                events,
+                next_cursor,
+                has_more,
+            })
+        };
+        tokio::task::yield_now().await;
+        result
+    }
+
+    async fn get_events_by_kind_page(
+        &self,
+        run_id: &str,
+        kinds: &[&str],
+        cursor: Option<&str>,
+        limit: usize,
+    ) -> anyhow::Result<EventPage> {
+        if kinds.is_empty() {
+            return Ok(EventPage {
+                events: Vec::new(),
+                next_cursor: None,
+                has_more: false,
+            });
+        }
+        let after = cursor
+            .and_then(decode_event_cursor)
+            .map(|c| c.sequence)
+            .unwrap_or(0);
+        // Reuse range + filter by kind in SQL via get_events_by_kinds + manual page.
+        let fetch = limit.max(1) + 1;
+        let batch = self
+            .get_events_by_kinds(run_id, kinds, fetch.saturating_mul(4).max(fetch))
+            .await?;
+        let mut events: Vec<_> = batch
+            .into_iter()
+            .filter(|e| e.sequence > after)
+            .collect();
+        let has_more = events.len() > limit.max(1);
+        events.truncate(limit.max(1));
+        let next_cursor = if has_more {
+            events.last().map(|e| {
+                encode_event_cursor(&EventPageCursor {
+                    sequence: e.sequence,
+                })
+            })
+        } else {
+            None
+        };
+        Ok(EventPage {
+            events,
+            next_cursor,
+            has_more,
+        })
     }
 
     async fn get_event(&self, event_id: &str) -> anyhow::Result<Option<TraceEvent>> {
@@ -1203,11 +1378,12 @@ impl TraceStore for SqliteStore {
         let key = crate::crypto::content_key(data);
         let size = data.len() as u64;
 
-        // Optionally encrypt on disk (BBEN header); key still hashes plaintext.
+        // Compress if beneficial, then encrypt (1.5: compress before encrypt).
+        let (payload, compressed) = compress_if_beneficial(data);
         let disk_bytes = if let Some(ref crypto) = self.blob_crypto {
-            crypto.seal(data)?
+            crypto.seal(&payload)?
         } else {
-            data.to_vec()
+            payload
         };
 
         let blob_path = self.blob_dir.join(&key);
@@ -1233,13 +1409,17 @@ impl TraceStore for SqliteStore {
             let conn = self.lock();
             conn.execute(
                 "INSERT OR IGNORE INTO blobs (key, size, compressed, content_type)
-                 VALUES (?1, ?2, 0, NULL)",
-                params![key, size as i64],
+                 VALUES (?1, ?2, ?3, NULL)",
+                params![key, size as i64, if compressed { 1i64 } else { 0i64 }],
             )
             .context("failed to store blob metadata")?;
         }
 
-        Ok(BlobReference::new(key, size))
+        let mut bref = BlobReference::new(key, size);
+        if compressed {
+            bref = bref.compressed();
+        }
+        Ok(bref)
     }
 
     async fn load_blob(&self, reference: &BlobReference) -> anyhow::Result<Vec<u8>> {
@@ -1251,7 +1431,7 @@ impl TraceStore for SqliteStore {
             let data = std::fs::read(&path)
                 .with_context(|| format!("blob not found: {}", path.display()))?;
             // Decrypt if sealed; plaintext legacy blobs pass through.
-            let plain = if let Some(ref c) = crypto {
+            let body = if let Some(ref c) = crypto {
                 c.open(&data)?
             } else if crate::crypto::is_encrypted_blob(&data) {
                 anyhow::bail!(
@@ -1261,6 +1441,8 @@ impl TraceStore for SqliteStore {
             } else {
                 data
             };
+            // Decompress BBZC payload when present.
+            let plain = decompress_if_needed(&body)?;
             // Integrity: SHA-256 of plaintext must match content key.
             let computed = crate::crypto::content_key(&plain);
             if computed != key {
@@ -1639,6 +1821,57 @@ fn apply_event_to_aggregates_in_tx(
     agg.observe(event);
     upsert_aggregates(tx, &agg)?;
     Ok(())
+}
+
+/// Magic for zlib-wrapped blob payloads (before encryption).
+const BLOB_COMPRESS_MAGIC: &[u8; 4] = b"BBZC";
+/// Skip compression for tiny payloads.
+const COMPRESS_MIN_BYTES: usize = 512;
+
+/// Compress plaintext when zlib output is smaller. Content hash stays on plaintext.
+fn compress_if_beneficial(data: &[u8]) -> (Vec<u8>, bool) {
+    if data.len() < COMPRESS_MIN_BYTES {
+        return (data.to_vec(), false);
+    }
+    use flate2::write::ZlibEncoder;
+    use flate2::Compression;
+    use std::io::Write;
+    let mut enc = ZlibEncoder::new(Vec::new(), Compression::fast());
+    if enc.write_all(data).is_err() {
+        return (data.to_vec(), false);
+    }
+    let Ok(compressed) = enc.finish() else {
+        return (data.to_vec(), false);
+    };
+    // Require meaningful savings (header + overhead).
+    if compressed.len() + 16 >= data.len() {
+        return (data.to_vec(), false);
+    }
+    let mut out = Vec::with_capacity(8 + compressed.len());
+    out.extend_from_slice(BLOB_COMPRESS_MAGIC);
+    out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    out.extend_from_slice(&compressed);
+    (out, true)
+}
+
+fn decompress_if_needed(data: &[u8]) -> anyhow::Result<Vec<u8>> {
+    if data.len() < 8 || &data[..4] != BLOB_COMPRESS_MAGIC {
+        return Ok(data.to_vec());
+    }
+    let orig_len = u32::from_le_bytes(data[4..8].try_into().unwrap()) as usize;
+    use flate2::read::ZlibDecoder;
+    use std::io::Read;
+    let mut dec = ZlibDecoder::new(&data[8..]);
+    let mut out = Vec::with_capacity(orig_len);
+    dec.read_to_end(&mut out)
+        .context("blob zlib decompress failed")?;
+    if out.len() != orig_len {
+        anyhow::bail!(
+            "blob decompress length mismatch: header {orig_len} got {}",
+            out.len()
+        );
+    }
+    Ok(out)
 }
 
 fn event_search_body(event: &TraceEvent) -> String {

@@ -95,6 +95,7 @@ pub async fn serve(store: Arc<SqliteStore>, opts: ServeOptions) -> anyhow::Resul
         .route("/api/runs/stream", get(api_runs_stream))
         .route("/api/runs/{id}", get(api_run))
         .route("/api/runs/{id}/events", get(api_events))
+        .route("/api/runs/{id}/events/page", get(api_events_page))
         .route("/api/runs/{id}/events/stream", get(api_event_stream))
         .route("/api/runs/{id}/anomalies", get(api_anomalies))
         .route("/api/search", get(api_search))
@@ -1041,9 +1042,82 @@ async fn search_page(
 
 // ── JSON / SSE API ────────────────────────────────────────────────
 
-async fn api_runs(State(state): State<AppState>) -> Result<Json<serde_json::Value>, AppError> {
-    let runs = state.store.list_runs().await?;
-    Ok(Json(serde_json::to_value(runs)?))
+#[derive(Debug, Deserialize)]
+struct RunsPageQuery {
+    /// Opaque cursor from previous page (`next_cursor`).
+    cursor: Option<String>,
+    /// Page size (default 100, max 500).
+    limit: Option<usize>,
+    status: Option<String>,
+    tag: Option<String>,
+}
+
+async fn api_runs(
+    State(state): State<AppState>,
+    Query(q): Query<RunsPageQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let limit = q.limit.unwrap_or(100).clamp(1, 500);
+    let filters = crate::storage::RunFilters {
+        status: q.status,
+        tag: q.tag,
+    };
+    let page = state
+        .store
+        .list_runs_page(q.cursor.as_deref(), limit, &filters)
+        .await?;
+    Ok(Json(serde_json::json!({
+        "runs": page.runs,
+        "next_cursor": page.next_cursor,
+        "has_more": page.has_more,
+        "limit": limit,
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+struct EventsPageQuery {
+    after: Option<u64>,
+    before: Option<u64>,
+    limit: Option<usize>,
+    cursor: Option<String>,
+    /// Comma-separated kinds for kind-filtered paging.
+    kinds: Option<String>,
+}
+
+async fn api_events_page(
+    State(state): State<AppState>,
+    Path(run_id): Path<String>,
+    Query(q): Query<EventsPageQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let limit = q.limit.unwrap_or(500).clamp(1, 5_000);
+    let run_id = resolve_prefix(state.store.as_ref(), &run_id).await?;
+    let page = if let Some(ref kinds) = q.kinds {
+        let kinds: Vec<&str> = kinds.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+        state
+            .store
+            .get_events_by_kind_page(&run_id, &kinds, q.cursor.as_deref(), limit)
+            .await?
+    } else {
+        let after = q
+            .after
+            .or_else(|| {
+                q.cursor
+                    .as_deref()
+                    .and_then(crate::storage::decode_event_cursor)
+                    .map(|c| c.sequence)
+            })
+            .unwrap_or(0);
+        let before = q.before.unwrap_or(u64::MAX);
+        state
+            .store
+            .get_events_range(&run_id, after, before, limit)
+            .await?
+    };
+    Ok(Json(serde_json::json!({
+        "events": page.events,
+        "next_cursor": page.next_cursor,
+        "has_more": page.has_more,
+        "limit": limit,
+    })))
 }
 
 /// SSE stream of run snapshots (initial + updates / new runs).

@@ -64,6 +64,12 @@ Plan: [docs/plan/trace-integrity-1.5.md](docs/plan/trace-integrity-1.5.md). Epic
 - Cache-Control no-store + Referrer-Policy no-referrer on responses
 - Optional `--unix-socket` with mode 0600
 
+#### Pagination and blob compression (P1)
+- Cursor APIs: `list_runs_page`, `get_events_range`, `get_events_by_kind_page`
+- Dashboard `GET /api/runs?cursor=&limit=` and `GET /api/runs/{id}/events/page`
+- CLI `runs` uses paged listing when limited
+- Optional zlib blob compression before encryption (BBZC); content key remains plaintext SHA-256
+
 ## [1.4.0] — 2026-07-19
 
 **Trust Proof (Unix)** — recorder mode can stay on without silently changing the child or overstating causality; secrets are holdback-redacted before persist; coverage and postmortem claims stay weaker than or equal to evidence.

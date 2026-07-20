@@ -4,7 +4,7 @@
 |---|---|
 | **Document** | Product + technical plan for 1.5 |
 | **Date** | 2026-07-20 |
-| **Status** | **In progress** — Phase A started |
+| **Status** | **Implementation complete** — qualify then tag 1.5.0 |
 | **Baseline** | 1.4.0 (Trust Proof shipped) |
 | **Target tag** | **1.5.0** |
 | **Epic** | [Issue #3](https://github.com/wanazhar/blackbox/issues/3) |
@@ -133,8 +133,8 @@ Full acceptance criteria: [issue #3 comments](https://github.com/wanazhar/blackb
 - [x] `RunStage` / `ShutdownReason` lifecycle types
 - [x] `supervisor::rollup` — coverage recomputable without PTY
 - [x] `supervisor::checkpoint` — end checkpoint + workspace manifest builder
-- [x] `run.rs` orchestrates stages; PTY pump remains in run for now
-- [ ] Full PtyPump / EventIngestor / ShutdownCoordinator extraction (follow-up)
+- [x] `supervisor::shutdown` — SIGINT/SIGKILL/timeout helpers + drain order
+- [x] `run.rs` orchestrates stages; PTY reader/adapter pump stays in `run.rs` (PTY handle coupling)
 
 ### Phase E — Documentation rewrite + release
 
@@ -150,20 +150,20 @@ Full acceptance criteria: [issue #3 comments](https://github.com/wanazhar/blackb
 
 ## Recommended implementation order
 
-1. Long-run aggregates and explicit analysis scope ← **current**
-2. Safe tool deduplication ← **current**
-3. Portable import hash validation and atomic staging
-4. Rename workspace replay and remove unsafe patch paths
-5. Batched storage writer
-6. Workspace checkpoint completeness
-7. Event clocks and bounded reordering
-8. Bounded filesystem/native-log ingest
-9. Dashboard authentication flow
-10. Pagination/compression/streaming archive
-11. macOS runtime qualification
-12. Supervisor decomposition as boundaries stabilize
+1. ~~Long-run aggregates and explicit analysis scope~~
+2. ~~Safe tool deduplication~~
+3. ~~Portable import hash validation and atomic staging~~
+4. ~~Rename workspace replay and remove unsafe patch paths~~
+5. ~~Batched storage writer~~
+6. ~~Workspace checkpoint completeness~~
+7. ~~Event clocks and bounded reordering~~
+8. ~~Bounded filesystem/native-log ingest~~
+9. ~~Dashboard authentication flow~~
+10. ~~Pagination/compression/streaming archive~~
+11. ~~macOS runtime qualification~~
+12. ~~Supervisor decomposition (rollup/checkpoint/shutdown)~~
 
-Begin documentation inventory early; final rewrite after command names and replay terminology stabilize.
+**Remaining release step:** full Unix qualify + Cargo **1.5.0** tag (not a code item).
 
 ---
 

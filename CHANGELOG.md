@@ -79,7 +79,7 @@ Plan: [docs/plan/trace-integrity-1.5.md](docs/plan/trace-integrity-1.5.md). Epic
 #### Qualification + supervisor (Q1 / U1)
 - PR CI: lightweight **macOS runtime gate** (lib + trust/integrity subset + clippy)
 - Ubuntu CI names 1.5 integrity suites; `release-qualify-unix.sh` includes them + host metadata
-- `supervisor::{lifecycle,rollup,checkpoint}` — rollup recomputable without PTY; end checkpoint builder
+- `supervisor::{lifecycle,rollup,checkpoint,shutdown}` — rollup recomputable without PTY; end checkpoint builder; kill/drain policy extracted from `run.rs`
 
 #### Documentation truth (X1)
 - `docs/inventory.json` + `docs/inventory.md` for every non-history Markdown page

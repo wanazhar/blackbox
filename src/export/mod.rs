@@ -95,7 +95,10 @@ fn apply_html_redaction(output: &str) -> anyhow::Result<String> {
     Ok(wrapped.as_str().unwrap_or("").to_string())
 }
 
-/// H-08: path-aware JSON redaction + base64 blob body re-scan.
+/// H-08: path-aware JSON redaction + base64 blob body re-scan + **rekey**.
+///
+/// After redacting blob plaintext, recompute content keys so `key ==
+/// sha256(data)` still holds for import (A1). Event `*_blob` refs are rewritten.
 pub fn apply_portable_blob_redaction(output: &str) -> anyhow::Result<String> {
     let redactor = ExportRedactor::new(RedactionConfig::default());
     let mut v: serde_json::Value = serde_json::from_str(output)?;
@@ -106,9 +109,12 @@ pub fn apply_portable_blob_redaction(output: &str) -> anyhow::Result<String> {
         if let Some(b) = v.get_mut("blobs").and_then(|b| b.as_object_mut()) {
             *b = saved;
         }
-        // Scan restored blob data for secrets that survived capture.
-        if let Some(blobs_obj) = v.get_mut("blobs").and_then(|b| b.as_object_mut()) {
-            for (_key, entry) in blobs_obj.iter_mut() {
+        // Scan restored blob data for secrets; rekey map + event refs.
+        let mut key_remap: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        if let Some(blobs_obj) = v.get("blobs").and_then(|b| b.as_object()) {
+            let mut rebuilt = serde_json::Map::new();
+            for (old_key, entry) in blobs_obj {
                 let data_str = if let Some(obj) = entry.as_object() {
                     obj.get("data")
                         .and_then(|d| d.as_str())
@@ -116,32 +122,79 @@ pub fn apply_portable_blob_redaction(output: &str) -> anyhow::Result<String> {
                 } else {
                     entry.as_str().map(|s| s.to_string())
                 };
+                let mut new_entry = entry.clone();
+                let mut new_key = old_key.clone();
                 if let Some(data_b64) = data_str {
                     if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(&data_b64)
                     {
-                        if let Ok(text) = String::from_utf8(decoded) {
+                        if let Ok(text) = String::from_utf8(decoded.clone()) {
                             let redacted_text = redactor.scanner.redact(&text);
-                            if redacted_text != text {
-                                let new_b64 = base64::engine::general_purpose::STANDARD
-                                    .encode(redacted_text.as_bytes());
-                                if let Some(obj) = entry.as_object_mut() {
-                                    obj.insert(
-                                        "data".to_string(),
-                                        serde_json::Value::String(new_b64),
-                                    );
-                                } else {
-                                    *entry = serde_json::Value::String(new_b64);
-                                }
+                            let plain = if redacted_text != text {
+                                redacted_text.into_bytes()
+                            } else {
+                                decoded
+                            };
+                            new_key = crate::crypto::content_key(&plain);
+                            let new_b64 =
+                                base64::engine::general_purpose::STANDARD.encode(&plain);
+                            if let Some(obj) = new_entry.as_object_mut() {
+                                obj.insert("data".into(), serde_json::Value::String(new_b64));
+                                obj.insert(
+                                    "size".into(),
+                                    serde_json::json!(plain.len()),
+                                );
+                            } else {
+                                new_entry = serde_json::Value::String(new_b64);
                             }
                         }
                     }
                 }
+                if new_key != *old_key {
+                    key_remap.insert(old_key.clone(), new_key.clone());
+                }
+                rebuilt.insert(new_key, new_entry);
             }
+            if let Some(b) = v.get_mut("blobs").and_then(|b| b.as_object_mut()) {
+                *b = rebuilt;
+            }
+        }
+        if !key_remap.is_empty() {
+            rewrite_blob_refs_in_value(&mut v, &key_remap);
         }
     } else {
         redactor.redact_json(&mut v);
     }
     Ok(serde_json::to_string_pretty(&v)?)
+}
+
+fn rewrite_blob_refs_in_value(
+    v: &mut serde_json::Value,
+    remap: &std::collections::HashMap<String, String>,
+) {
+    match v {
+        serde_json::Value::Object(map) => {
+            for (k, child) in map.iter_mut() {
+                if matches!(
+                    k.as_str(),
+                    "input_blob" | "output_blob" | "error_blob" | "key"
+                ) {
+                    if let Some(s) = child.as_str() {
+                        if let Some(new_k) = remap.get(s) {
+                            *child = serde_json::Value::String(new_k.clone());
+                            continue;
+                        }
+                    }
+                }
+                rewrite_blob_refs_in_value(child, remap);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for child in arr {
+                rewrite_blob_refs_in_value(child, remap);
+            }
+        }
+        _ => {}
+    }
 }
 
 #[cfg(test)]

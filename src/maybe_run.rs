@@ -185,6 +185,10 @@ pub fn exec_passthrough(command: &[String]) -> anyhow::Result<()> {
 pub fn shell_snippet_fish(wrap: &[String]) -> String {
     let mut out = String::from("# blackbox ambient capture (fish)\n");
     for name in wrap {
+        if !crate::util::is_safe_wrap_name(name) {
+            tracing::warn!(name = %name, "skipping unsafe wrap name in fish snippet");
+            continue;
+        }
         out.push_str(&format!(
             "function {name}\n  if command -q blackbox\n    command blackbox maybe-run -- {name} $argv\n  else\n    command {name} $argv\n  end\nend\n\n"
         ));
@@ -195,6 +199,10 @@ pub fn shell_snippet_fish(wrap: &[String]) -> String {
 pub fn shell_snippet_bash(wrap: &[String]) -> String {
     let mut out = String::from("# blackbox ambient capture (bash/zsh)\n");
     for name in wrap {
+        if !crate::util::is_safe_wrap_name(name) {
+            tracing::warn!(name = %name, "skipping unsafe wrap name in bash snippet");
+            continue;
+        }
         out.push_str(&format!(
             "{name}() {{\n  if command -v blackbox >/dev/null 2>&1; then\n    command blackbox maybe-run -- {name} \"$@\"\n  else\n    command {name} \"$@\"\n  fi\n}}\n\n"
         ));

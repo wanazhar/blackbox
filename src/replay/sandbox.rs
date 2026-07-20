@@ -188,11 +188,11 @@ impl SandboxReplay {
         if cmd.is_empty() {
             return (-1, String::new(), "empty command".into());
         }
-        let output = Command::new(&cmd[0])
-            .args(&cmd[1..])
-            .current_dir(cwd)
-            .output();
-        match output {
+        let mut c = Command::new(&cmd[0]);
+        c.args(&cmd[1..]).current_dir(cwd);
+        // Workspace is not OS isolation — still scrub obvious credential env.
+        scrub_replay_env(&mut c, cwd);
+        match c.output() {
             Ok(o) => (
                 o.status.code().unwrap_or(-1),
                 String::from_utf8_lossy(&o.stdout).to_string(),
@@ -241,6 +241,8 @@ impl SandboxReplay {
             .arg("--")
             .arg(&cmd[0])
             .args(&cmd[1..]);
+        // Scrub host credentials from the child environment.
+        scrub_replay_env(&mut bwrap, cwd);
         match bwrap.output() {
             Ok(o) => (
                 o.status.code().unwrap_or(-1),
@@ -252,6 +254,20 @@ impl SandboxReplay {
                 String::new(),
                 format!("bwrap spawn failed in {cwd_s}: {e}"),
             ),
+        }
+    }
+}
+
+/// Clear inherited secrets; keep a minimal PATH/locale and set HOME to workspace.
+fn scrub_replay_env(cmd: &mut Command, workspace: &Path) {
+    cmd.env_clear();
+    let path = std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".into());
+    cmd.env("PATH", path);
+    cmd.env("HOME", workspace);
+    cmd.env("TMPDIR", workspace);
+    for k in ["LANG", "LC_ALL", "LC_CTYPE", "TERM"] {
+        if let Ok(v) = std::env::var(k) {
+            cmd.env(k, v);
         }
     }
 }
@@ -530,6 +546,27 @@ impl ReplayEngine for SandboxReplay {
                 event.side_effect.clone()
             };
 
+            // Block shells under every non-Live policy.
+            if self.policy != ReplayPolicy::Live && is_shell_interpreter(&cmd) {
+                println!(
+                    "skip  seq={} kind={} cmd={:?} (shell interpreter blocked)",
+                    event.sequence, event.kind, cmd
+                );
+                skipped += 1;
+                continue;
+            }
+            // Block script interpreters and escape args under Sandbox/ReadOnly.
+            if self.policy != ReplayPolicy::Live
+                && (is_script_interpreter(&cmd) || has_escape_args(&cmd))
+            {
+                println!(
+                    "skip  seq={} kind={} cmd={:?} (interpreter or absolute path blocked)",
+                    event.sequence, event.kind, cmd
+                );
+                skipped += 1;
+                continue;
+            }
+
             // R2-C3 / R2-H13: shell interpreters can execute arbitrary argv payloads
             // (e.g. `sh -c "rm -rf /"`). Block them under every policy except Live,
             // even when the event was mis-tagged as Read/LocalWrite.
@@ -673,7 +710,7 @@ pub fn capability_report(policy: ReplayPolicy, contained: bool) -> Vec<(String, 
         _ if contained_ok => (
             "unshare-net (bwrap)".to_string(),
             "not bound into container (bwrap)".to_string(),
-            "inherited from host process env (not stripped)".to_string(),
+            "scrubbed (minimal PATH/locale; HOME=workspace)".to_string(),
             "die-with-parent only".to_string(),
             "namespaces via bubblewrap".to_string(),
             "best-effort (bwrap namespaces; not multi-tenant hardened)".to_string(),
@@ -1006,32 +1043,99 @@ fn seed_walk(
     Ok(())
 }
 
+/// Basename of argv[0] (handles absolute paths).
+fn cmd_basename(cmd: &[String]) -> &str {
+    let first = cmd.first().map(|s| s.as_str()).unwrap_or("");
+    std::path::Path::new(first)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(first)
+}
+
 /// True when the command binary is a shell interpreter (basename match).
 ///
 /// Accepts both bare names (`sh`) and paths (`/bin/bash`) so sandbox policy
 /// cannot be bypassed via absolute paths.
 fn is_shell_interpreter(cmd: &[String]) -> bool {
-    let first = cmd.first().map(|s| s.as_str()).unwrap_or("");
-    let base = std::path::Path::new(first)
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or(first);
-    matches!(base, "sh" | "bash" | "dash" | "zsh" | "fish" | "ksh")
+    matches!(
+        cmd_basename(cmd),
+        "sh" | "bash" | "dash" | "zsh" | "fish" | "ksh"
+    )
+}
+
+/// Scripting / multi-purpose interpreters that must not re-execute under workspace policy.
+fn is_script_interpreter(cmd: &[String]) -> bool {
+    let base = cmd_basename(cmd);
+    matches!(
+        base,
+        "python"
+            | "python2"
+            | "python3"
+            | "node"
+            | "nodejs"
+            | "perl"
+            | "ruby"
+            | "php"
+            | "lua"
+            | "luajit"
+            | "deno"
+            | "bun"
+            | "pwsh"
+            | "powershell"
+            | "osascript"
+            | "awk"
+            | "gawk"
+            | "make"
+            | "cmake"
+            | "ninja"
+            | "cargo"
+            | "go"
+            | "java"
+            | "dotnet"
+            | "env" // launcher: env python3 -c …
+            | "xargs"
+            | "nice"
+            | "nohup"
+            | "timeout"
+            | "stdbuf"
+            | "sudo"
+            | "doas"
+    ) || base.starts_with("python")
+}
+
+/// Reject absolute path arguments outside a pure relative workspace form.
+fn has_escape_args(cmd: &[String]) -> bool {
+    for (i, a) in cmd.iter().enumerate() {
+        if i == 0 {
+            // Allow absolute binary path for system tools (/bin/cat); still gated by allowlist.
+            continue;
+        }
+        if a.starts_with('/') || a.starts_with("~/") || a.contains("..") {
+            return true;
+        }
+        // Windows-style absolute
+        let b = a.as_bytes();
+        if b.len() >= 3 && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/') {
+            return true;
+        }
+    }
+    false
 }
 
 fn is_readonly_command(cmd: &[String]) -> bool {
-    let joined = cmd.join(" ").to_lowercase();
-    let first = cmd.first().map(|s| s.as_str()).unwrap_or("");
-
-    // Block shell interpreters entirely — they can execute arbitrary commands
-    // passed as arguments (e.g. `sh -c "rm -rf /"`), bypassing the side-effect
-    // classification if the event was incorrectly tagged as Read/LocalWrite.
-    if is_shell_interpreter(cmd) {
+    // Block shells / interpreters entirely under Unknown→readonly promotion.
+    if is_shell_interpreter(cmd) || is_script_interpreter(cmd) {
+        return false;
+    }
+    if has_escape_args(cmd) {
         return false;
     }
 
+    let base = cmd_basename(cmd);
+    // Deny-by-default allowlist of pure read/display tools (basename only).
+    // Intentionally excludes env/find (launcher / -exec/-delete).
     matches!(
-        first,
+        base,
         "ls" | "cat"
             | "head"
             | "tail"
@@ -1040,18 +1144,20 @@ fn is_readonly_command(cmd: &[String]) -> bool {
             | "true"
             | "false"
             | "which"
-            | "env"
-            | "printenv"
             | "wc"
             | "grep"
             | "rg"
-            | "find"
             | "stat"
             | "file"
-    ) && !joined.contains("rm ")
-        && !joined.contains(">")
-        && !joined.contains("curl")
-        && !joined.contains("wget")
+            | "md5sum"
+            | "sha256sum"
+            | "basename"
+            | "dirname"
+            | "realpath"
+            | "readlink"
+            | "test"
+            | "["
+    )
 }
 
 fn truncate(s: &str, max: usize) -> String {
@@ -1196,6 +1302,11 @@ mod tests {
         assert!(is_readonly_command(&["echo".into(), "hi".into()]));
         assert!(is_readonly_command(&["cat".into(), "file.txt".into()]));
         assert!(is_readonly_command(&["ls".into(), "-la".into()]));
+        // env/find removed; absolute arg paths blocked.
+        assert!(!is_readonly_command(&["env".into(), "python3".into(), "-c".into(), "print(1)".into()]));
+        assert!(!is_readonly_command(&["find".into(), ".".into(), "-delete".into()]));
+        assert!(!is_readonly_command(&["cat".into(), "/etc/passwd".into()]));
+        assert!(!is_readonly_command(&["python3".into(), "x.py".into()]));
     }
 
     #[tokio::test]

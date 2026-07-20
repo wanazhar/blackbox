@@ -1458,6 +1458,11 @@ impl TraceStore for SqliteStore {
     }
 
     async fn move_blob(&self, from_key: &str, to_key: &str) -> anyhow::Result<()> {
+        if !crate::core::blob::is_valid_blob_key(from_key)
+            || !crate::core::blob::is_valid_blob_key(to_key)
+        {
+            anyhow::bail!("move_blob requires valid 64-char lowercase hex keys");
+        }
         // Move the file on disk
         {
             let blob_dir = self.blob_dir.clone();
@@ -1854,17 +1859,31 @@ fn compress_if_beneficial(data: &[u8]) -> (Vec<u8>, bool) {
     (out, true)
 }
 
+/// Max expanded size for a BBZC blob (matches portable single-blob cap).
+const MAX_DECOMPRESSED_BLOB: usize = 64 * 1024 * 1024;
+
 fn decompress_if_needed(data: &[u8]) -> anyhow::Result<Vec<u8>> {
     if data.len() < 8 || &data[..4] != BLOB_COMPRESS_MAGIC {
         return Ok(data.to_vec());
     }
     let orig_len = u32::from_le_bytes(data[4..8].try_into().unwrap()) as usize;
+    if orig_len > MAX_DECOMPRESSED_BLOB {
+        anyhow::bail!(
+            "blob decompress refused: claimed size {orig_len} exceeds max {MAX_DECOMPRESSED_BLOB}"
+        );
+    }
     use flate2::read::ZlibDecoder;
     use std::io::Read;
-    let mut dec = ZlibDecoder::new(&data[8..]);
-    let mut out = Vec::with_capacity(orig_len);
-    dec.read_to_end(&mut out)
+    let dec = ZlibDecoder::new(&data[8..]);
+    let mut out = Vec::with_capacity(orig_len.min(MAX_DECOMPRESSED_BLOB));
+    // Cap expansion even if header lies low then stream grows.
+    let mut limited = dec.take(MAX_DECOMPRESSED_BLOB as u64 + 1);
+    limited
+        .read_to_end(&mut out)
         .context("blob zlib decompress failed")?;
+    if out.len() > MAX_DECOMPRESSED_BLOB {
+        anyhow::bail!("blob decompress exceeded max {MAX_DECOMPRESSED_BLOB}");
+    }
     if out.len() != orig_len {
         anyhow::bail!(
             "blob decompress length mismatch: header {orig_len} got {}",

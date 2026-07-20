@@ -150,11 +150,22 @@ impl FilesystemCapture {
             if Self::should_ignore(&path) {
                 continue;
             }
+            // Never follow symlinks in snapshots (escape / secret tree leak).
+            let ft = entry.file_type().ok();
+            if ft.as_ref().map(|f| f.is_symlink()).unwrap_or(false) {
+                let rel = path
+                    .strip_prefix(root)
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_else(|_| path.to_string_lossy().to_string());
+                out.push(format!("symlink 0 0 {rel}"));
+                continue;
+            }
             let rel = path
                 .strip_prefix(root)
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_else(|_| path.to_string_lossy().to_string());
-            let meta = entry.metadata().ok();
+            // symlink_metadata: do not follow.
+            let meta = std::fs::symlink_metadata(&path).ok();
             let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
             let mtime = meta
                 .as_ref()
@@ -162,7 +173,7 @@ impl FilesystemCapture {
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
-            let is_dir = meta.as_ref().map(|m| m.is_dir()).unwrap_or(false);
+            let is_dir = ft.as_ref().map(|f| f.is_dir()).unwrap_or(false);
             let kind = if is_dir { "dir" } else { "file" };
             out.push(format!("{} {} {} {}", kind, size, mtime, rel));
             if is_dir {

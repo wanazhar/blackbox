@@ -351,11 +351,18 @@ pub fn open_export_pack(
             let salt = base64::engine::general_purpose::STANDARD
                 .decode(salt_b64)
                 .context("salt_b64 decode")?;
+            // Ignore attacker-chosen iteration counts (DoS). Only the current
+            // PBKDF2_ITERS policy is accepted; historical packs must match.
             let iters = v
                 .get("iterations")
                 .and_then(|i| i.as_u64())
-                .unwrap_or(PBKDF2_ITERS as u64) as u32;
-            BlobCrypto::from_passphrase(pass, &salt, iters)?
+                .unwrap_or(PBKDF2_ITERS as u64);
+            if iters != PBKDF2_ITERS as u64 {
+                anyhow::bail!(
+                    "unsupported PBKDF2 iterations {iters} (expected {PBKDF2_ITERS})"
+                );
+            }
+            BlobCrypto::from_passphrase(pass, &salt, PBKDF2_ITERS)?
         }
         "store_key" => store
             .cloned()
@@ -366,6 +373,11 @@ pub fn open_export_pack(
             })?,
         other => anyhow::bail!("unknown kdf: {other}"),
     };
+    // Sealed packs must be AEAD ciphertext (BBEN). Never reuse blob `open()`
+    // plaintext passthrough — that would accept unauthenticated "sealed" packs.
+    if !is_encrypted_blob(&ct) {
+        anyhow::bail!("sealed pack ciphertext is not authenticated (missing BBEN header)");
+    }
     let plain = crypto.open(&ct)?;
     String::from_utf8(plain).context("sealed plaintext is not UTF-8")
 }
@@ -420,6 +432,36 @@ mod tests {
         let opened = open_export_pack(&sealed, Some("correct horse battery"), None).unwrap();
         assert_eq!(opened, plain);
         assert!(open_export_pack(&sealed, Some("wrong"), None).is_err());
+    }
+
+    #[test]
+    fn sealed_pack_rejects_unauthenticated_ciphertext() {
+        // Attacker ships sealed envelope with raw plaintext as ciphertext_b64.
+        let fake = serde_json::json!({
+            "format": SEALED_FORMAT,
+            "kdf": "pbkdf2-sha256",
+            "salt_b64": base64::engine::general_purpose::STANDARD.encode(b"0123456789abcdef"),
+            "iterations": PBKDF2_ITERS,
+            "ciphertext_b64": base64::engine::general_purpose::STANDARD
+                .encode(br#"{"version":2,"run":{"id":"forged"},"events":[]}"#),
+        });
+        let err = open_export_pack(&fake.to_string(), Some("any"), None).unwrap_err();
+        assert!(
+            err.to_string().contains("authenticated") || err.to_string().contains("BBEN"),
+            "unexpected: {err}"
+        );
+    }
+
+    #[test]
+    fn sealed_pack_rejects_attacker_pbkdf2_iterations() {
+        let plain = r#"{"version":2}"#;
+        let sealed = seal_export_pack(plain, Some("pw"), None).unwrap();
+        let mut v: serde_json::Value = serde_json::from_str(&sealed).unwrap();
+        v.as_object_mut()
+            .unwrap()
+            .insert("iterations".into(), serde_json::json!(4_294_967_295u64));
+        let err = open_export_pack(&v.to_string(), Some("pw"), None).unwrap_err();
+        assert!(err.to_string().contains("iterations"), "unexpected: {err}");
     }
 
     #[test]

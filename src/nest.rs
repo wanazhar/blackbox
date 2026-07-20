@@ -32,13 +32,7 @@ pub struct ActiveSupervisorGuard {
 impl ActiveSupervisorGuard {
     /// Register `std::process::id()` as supervising `run_id`.
     pub fn acquire(run_id: &str) -> Self {
-        let dir = supervisor_dir();
-        let _ = fs::create_dir_all(&dir);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = fs::set_permissions(&dir, fs::Permissions::from_mode(0o700));
-        }
+        let dir = ensure_private_supervisor_dir();
         let path = dir.join(std::process::id().to_string());
         if let Ok(mut f) = fs::OpenOptions::new()
             .create(true)
@@ -77,6 +71,50 @@ pub fn supervisor_dir() -> PathBuf {
     }
     let uid = current_uid();
     std::env::temp_dir().join(format!("blackbox-supervisors-{uid}"))
+}
+
+/// Create/verify a private marker directory (owner-only, self-owned on Unix).
+fn ensure_private_supervisor_dir() -> PathBuf {
+    let preferred = supervisor_dir();
+    if try_prepare_marker_dir(&preferred) {
+        return preferred;
+    }
+    // Fallback: private path under home so we never write into an attacker-owned /tmp dir.
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    let fallback = home.join(".blackbox").join("supervisors");
+    let _ = try_prepare_marker_dir(&fallback);
+    fallback
+}
+
+fn try_prepare_marker_dir(dir: &Path) -> bool {
+    if let Err(e) = fs::create_dir_all(dir) {
+        tracing::debug!(error = %e, path = %dir.display(), "supervisor marker dir create failed");
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let meta = match fs::metadata(dir) {
+            Ok(m) => m,
+            Err(_) => return false,
+        };
+        if meta.uid() != current_uid() {
+            tracing::warn!(
+                path = %dir.display(),
+                "supervisor marker dir not owned by current uid; refusing"
+            );
+            return false;
+        }
+        let _ = fs::set_permissions(dir, fs::Permissions::from_mode(0o700));
+        let mode = fs::metadata(dir).map(|m| m.permissions().mode() & 0o777).unwrap_or(0);
+        if mode & 0o077 != 0 {
+            // Still group/other accessible after chmod attempt.
+            let _ = fs::set_permissions(dir, fs::Permissions::from_mode(0o700));
+        }
+    }
+    true
 }
 
 fn current_uid() -> u32 {

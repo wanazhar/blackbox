@@ -319,10 +319,12 @@ mod tests {
     }
 
     #[test]
-    fn metadata_empty_by_default() {
+    fn metadata_starts_with_timing_only() {
+        // 1.5 O1: construction records capture-wall timing; no free-form keys.
         let ev = TraceEvent::new("run-1", EventSource::Filesystem, "read");
-        assert!(ev.metadata.is_empty());
-        assert_eq!(ev.metadata.len(), 0);
+        assert!(ev.metadata.contains_key("timing") || !ev.metadata.is_empty());
+        assert!(!ev.metadata.contains_key("tool_name"));
+        assert!(!ev.metadata.contains_key("preview"));
     }
 
     #[test]

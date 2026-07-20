@@ -85,6 +85,12 @@ pub async fn sync_push(
             }
         };
         let hash = sha256_hex(json.as_bytes());
+        if !crate::util::is_safe_id(&run.id) {
+            report
+                .errors
+                .push(format!("{}: unsafe run id for sync path", short(&run.id)));
+            continue;
+        }
         let filename = format!("{}.json", run.id);
         let path = runs_dir.join(&filename);
 
@@ -130,7 +136,23 @@ pub async fn sync_pull(store: &dyn TraceStore, dir: &Path) -> anyhow::Result<Syn
             report.skipped += 1;
             continue;
         }
-        let path = dir.join(&entry.file);
+        if !crate::util::is_safe_sync_run_file(&entry.file) {
+            report.errors.push(format!(
+                "{}: unsafe sync file path refused: {}",
+                short(run_id),
+                entry.file
+            ));
+            continue;
+        }
+        let path = match crate::util::confined_join(dir, &entry.file) {
+            Ok(p) => p,
+            Err(e) => {
+                report
+                    .errors
+                    .push(format!("{}: path rejected: {e}", short(run_id)));
+                continue;
+            }
+        };
         let json = match std::fs::read_to_string(&path) {
             Ok(j) => j,
             Err(e) => {
@@ -373,6 +395,12 @@ pub async fn sync_push_s3(
             }
         };
         let hash = sha256_hex(json.as_bytes());
+        if !crate::util::is_safe_id(&run.id) {
+            report
+                .errors
+                .push(format!("{}: unsafe run id for sync path", short(&run.id)));
+            continue;
+        }
         let file = format!("runs/{}.json", run.id);
         let needs = match manifest.runs.get(&run.id) {
             Some(e) => e.sha256 != hash,
@@ -417,6 +445,14 @@ pub async fn sync_pull_s3(
     for (run_id, entry) in &manifest.runs {
         if store.get_run(run_id).await?.is_some() {
             report.skipped += 1;
+            continue;
+        }
+        if !crate::util::is_safe_sync_run_file(&entry.file) {
+            report.errors.push(format!(
+                "{}: unsafe s3 sync file path refused: {}",
+                short(run_id),
+                entry.file
+            ));
             continue;
         }
         let key = obj_path(&root, &entry.file);

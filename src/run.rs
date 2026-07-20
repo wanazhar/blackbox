@@ -727,7 +727,12 @@ impl RunSupervisor {
                                 match serde_json::from_value(meta_val) {
                                     Ok(m) => parsed.metadata = m,
                                     Err(e) => {
-                                        tracing::warn!(error = %e, "metadata deserialization failed after redaction; keeping original")
+                                        // Fail closed: never persist pre-redaction metadata.
+                                        tracing::warn!(
+                                            error = %e,
+                                            "metadata deserialization failed after redaction; dropping free-form metadata"
+                                        );
+                                        parsed.metadata.clear();
                                     }
                                 }
                             }
@@ -753,7 +758,11 @@ impl RunSupervisor {
                             match serde_json::from_value(meta_val) {
                                 Ok(m) => parsed.metadata = m,
                                 Err(e) => {
-                                    tracing::warn!(error = %e, "metadata deserialization failed after redaction; keeping original")
+                                    tracing::warn!(
+                                        error = %e,
+                                        "metadata deserialization failed after redaction; dropping free-form metadata"
+                                    );
+                                    parsed.metadata.clear();
                                 }
                             }
                         }

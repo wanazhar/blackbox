@@ -174,6 +174,11 @@ pub fn restore_sealed_backup(
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(&file.data_b64)
             .with_context(|| format!("decode {name}"))?;
+        // Bound single-file restore size (DoS / accidental multi-GB packs).
+        const MAX_BACKUP_FILE: usize = 512 * 1024 * 1024;
+        if bytes.len() > MAX_BACKUP_FILE {
+            anyhow::bail!("backup file {name} too large ({} bytes)", bytes.len());
+        }
         let mut hasher = Sha256::new();
         hasher.update(&bytes);
         let got = hex::encode(hasher.finalize());
@@ -183,19 +188,10 @@ pub fn restore_sealed_backup(
                 file.sha256
             );
         }
-        let dest = if name == "blackbox.db" {
-            db_path.to_path_buf()
-        } else if name == "blackbox.db-wal" {
-            PathBuf::from(format!("{}-wal", db_path.display()))
-        } else if name == "blackbox.db-shm" {
-            PathBuf::from(format!("{}-shm", db_path.display()))
-        } else if let Some(rest) = name.strip_prefix("blobs/") {
-            blob_dir.join(rest)
-        } else {
-            store_root.join(name)
-        };
+        let dest = resolve_backup_dest(name, store_root, db_path, blob_dir)?;
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent)?;
+            crate::privacy::restrict_dir(parent);
         }
         std::fs::write(&dest, &bytes)?;
         crate::privacy::restrict_file(&dest);
@@ -211,6 +207,52 @@ pub struct RestoreReport {
     pub files_written: usize,
     pub bytes_written: u64,
     pub notes: Vec<String>,
+}
+
+/// Map a backup manifest path to a confined destination under the store.
+///
+/// Rejects path traversal (`..`), absolute components, and unknown sticky names.
+fn resolve_backup_dest(
+    name: &str,
+    store_root: &Path,
+    db_path: &Path,
+    blob_dir: &Path,
+) -> anyhow::Result<PathBuf> {
+    // Fixed DB names only (no path separators).
+    if name == "blackbox.db" {
+        return Ok(db_path.to_path_buf());
+    }
+    if name == "blackbox.db-wal" {
+        return Ok(PathBuf::from(format!("{}-wal", db_path.display())));
+    }
+    if name == "blackbox.db-shm" {
+        return Ok(PathBuf::from(format!("{}-shm", db_path.display())));
+    }
+    if let Some(rest) = name.strip_prefix("blobs/") {
+        if !crate::core::blob::is_valid_blob_key(rest) {
+            anyhow::bail!("invalid blob key in backup: {rest}");
+        }
+        return Ok(blob_dir.join(rest));
+    }
+    // Sticky / project memory files — basename only, allowlist.
+    const STICKY: &[&str] = &[
+        "state.json",
+        "config.toml",
+        "MEMORY.md",
+        "MEMORY.json",
+        "RESUME.md",
+        "RESUME.json",
+        "AGENT.md",
+        "claims.json",
+    ];
+    if STICKY.contains(&name) {
+        // Basename only — no separators.
+        if name.contains('/') || name.contains('\\') || name.contains("..") {
+            anyhow::bail!("invalid sticky backup name: {name}");
+        }
+        return Ok(store_root.join(name));
+    }
+    anyhow::bail!("backup entry not allowed: {name}");
 }
 
 fn add_file(
@@ -238,6 +280,22 @@ fn add_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restore_rejects_path_traversal_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join(".blackbox");
+        let blobs = root.join("blobs");
+        let db = root.join("blackbox.db");
+        std::fs::create_dir_all(&blobs).unwrap();
+        // Craft a "manifest" via resolve only — unit-test the path gate.
+        assert!(resolve_backup_dest("../../../etc/passwd", &root, &db, &blobs).is_err());
+        assert!(resolve_backup_dest("blobs/../../evil", &root, &db, &blobs).is_err());
+        assert!(resolve_backup_dest("blobs/not-a-hex-key", &root, &db, &blobs).is_err());
+        assert!(resolve_backup_dest("state.json", &root, &db, &blobs).is_ok());
+        let key = "a".repeat(64);
+        assert!(resolve_backup_dest(&format!("blobs/{key}"), &root, &db, &blobs).is_ok());
+    }
 
     #[test]
     fn backup_restore_roundtrip_sticky() {

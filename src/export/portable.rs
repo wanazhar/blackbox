@@ -130,18 +130,14 @@ pub async fn export_portable_dir(
         serde_json::to_string_pretty(&run_val)?,
     )?;
 
-    let mut events_sorted: Vec<&TraceEvent> = events.iter().collect();
-    events_sorted.sort_by_key(|e| e.sequence);
-    let mut events_file = std::fs::File::create(dir.join("events.jsonl"))?;
-    for ev in &events_sorted {
-        let mut v = serde_json::to_value(ev)?;
-        if redact {
-            redact_event(&mut v);
-        }
-        writeln!(events_file, "{}", serde_json::to_string(&v)?)?;
-    }
-
+    // Load + optional secret-scan blobs; rekey when redaction changes bytes.
+    let scanner = if redact {
+        Some(SecretScanner::new(RedactionConfig::default()))
+    } else {
+        None
+    };
     let keys = collect_blob_keys(events);
+    let mut key_remap: HashMap<String, String> = HashMap::new();
     let mut blob_count = 0usize;
     for key in keys {
         let Some(bref) = BlobReference::try_new(key.clone(), 0) else {
@@ -149,20 +145,51 @@ pub async fn export_portable_dir(
         };
         match store.load_blob(&bref).await {
             Ok(bytes) => {
-                // Integrity: filename must match content hash.
                 let computed = content_key(&bytes);
                 if computed != key {
                     anyhow::bail!(
                         "export blob integrity: key {key} != content hash {computed}"
                     );
                 }
-                std::fs::write(blobs_dir.join(&key), &bytes)?;
+                let out_bytes = if let Some(ref sc) = scanner {
+                    if let Ok(text) = std::str::from_utf8(&bytes) {
+                        let red = sc.redact(text);
+                        if red != text {
+                            red.into_bytes()
+                        } else {
+                            bytes
+                        }
+                    } else {
+                        bytes
+                    }
+                } else {
+                    bytes
+                };
+                let out_key = content_key(&out_bytes);
+                if out_key != key {
+                    key_remap.insert(key, out_key.clone());
+                }
+                std::fs::write(blobs_dir.join(&out_key), &out_bytes)?;
                 blob_count += 1;
             }
             Err(e) => {
                 tracing::debug!(key = %key, error = %e, "portable dir export: skip missing blob");
             }
         }
+    }
+
+    let mut events_sorted: Vec<TraceEvent> = events.to_vec();
+    events_sorted.sort_by_key(|e| e.sequence);
+    let mut events_file = std::fs::File::create(dir.join("events.jsonl"))?;
+    for mut ev in events_sorted.iter().cloned() {
+        if !key_remap.is_empty() {
+            remap_event_blob_keys(&mut ev, &key_remap);
+        }
+        let mut v = serde_json::to_value(&ev)?;
+        if redact {
+            redact_event(&mut v);
+        }
+        writeln!(events_file, "{}", serde_json::to_string(&v)?)?;
     }
 
     let manifest = serde_json::json!({
@@ -172,12 +199,31 @@ pub async fn export_portable_dir(
         "events": events_sorted.len(),
         "blobs": blob_count,
         "run_id": run.id,
+        "redacted": redact,
     });
     std::fs::write(
         dir.join("manifest.json"),
         serde_json::to_string_pretty(&manifest)?,
     )?;
     Ok(())
+}
+
+fn remap_event_blob_keys(ev: &mut TraceEvent, remap: &HashMap<String, String>) {
+    if let Some(ref k) = ev.input_blob {
+        if let Some(n) = remap.get(k) {
+            ev.input_blob = Some(n.clone());
+        }
+    }
+    if let Some(ref k) = ev.output_blob {
+        if let Some(n) = remap.get(k) {
+            ev.output_blob = Some(n.clone());
+        }
+    }
+    if let Some(ref k) = ev.error_blob {
+        if let Some(n) = remap.get(k) {
+            ev.error_blob = Some(n.clone());
+        }
+    }
 }
 
 /// Import a directory archive written by [`export_portable_dir`].
@@ -206,6 +252,19 @@ pub async fn import_portable_dir(
     )?;
 
     let events_path = dir.join("events.jsonl");
+    {
+        let meta = std::fs::metadata(&events_path).context("stat events.jsonl")?;
+        if meta.len() as usize > MAX_ARCHIVE_BYTES {
+            anyhow::bail!(
+                "events.jsonl too large: {} bytes (max {})",
+                meta.len(),
+                MAX_ARCHIVE_BYTES
+            );
+        }
+        if meta.file_type().is_symlink() {
+            anyhow::bail!("events.jsonl must not be a symlink");
+        }
+    }
     let events_text = std::fs::read_to_string(&events_path).context("read events.jsonl")?;
     let mut events_val = Vec::new();
     for (i, line) in events_text.lines().enumerate() {
@@ -223,6 +282,7 @@ pub async fn import_portable_dir(
 
     let blobs_dir = dir.join("blobs");
     let mut blobs = serde_json::Map::new();
+    let mut total_blob_bytes = 0usize;
     if blobs_dir.is_dir() {
         for entry in std::fs::read_dir(&blobs_dir)? {
             let entry = entry?;
@@ -230,10 +290,24 @@ pub async fn import_portable_dir(
             if !is_valid_blob_key(&name) {
                 anyhow::bail!("invalid blob filename (expected sha256 hex): {name}");
             }
-            let bytes = std::fs::read(entry.path())?;
-            if bytes.len() > MAX_SINGLE_BLOB_BYTES {
+            let ftype = entry.file_type()?;
+            if ftype.is_symlink() || !ftype.is_file() {
+                anyhow::bail!("blob {name} must be a regular file (no symlinks)");
+            }
+            let meta = entry.metadata()?;
+            if meta.len() as usize > MAX_SINGLE_BLOB_BYTES {
                 anyhow::bail!("blob {name} too large");
             }
+            total_blob_bytes = total_blob_bytes.saturating_add(meta.len() as usize);
+            if total_blob_bytes > MAX_TOTAL_BLOB_BYTES {
+                anyhow::bail!(
+                    "portable dir total blob bytes exceed max {MAX_TOTAL_BLOB_BYTES}"
+                );
+            }
+            if blobs.len() >= MAX_BLOBS {
+                anyhow::bail!("portable dir has too many blobs (max {MAX_BLOBS})");
+            }
+            let bytes = std::fs::read(entry.path())?;
             let computed = content_key(&bytes);
             if computed != name {
                 anyhow::bail!(
@@ -310,6 +384,12 @@ pub async fn import_portable(
 
     if run.id.trim().is_empty() {
         anyhow::bail!("invalid run payload: empty run id");
+    }
+    if !crate::util::is_safe_id(&run.id) {
+        anyhow::bail!(
+            "invalid run id (must be alphanumeric/hyphen/underscore, no path separators): {}",
+            run.id
+        );
     }
 
     let mut events: Vec<TraceEvent> = serde_json::from_value(

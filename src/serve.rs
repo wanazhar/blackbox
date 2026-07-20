@@ -1723,8 +1723,14 @@ mod testing {
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
             .unwrap();
-        let runs: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
-        assert_eq!(runs.len(), 2, "should list both runs");
+        // Cursor-paginated envelope (1.5 P1): { runs, next_cursor, has_more, limit }
+        let page: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let runs = page
+            .get("runs")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(runs.len(), 2, "should list both runs: {page}");
 
         // ── Test GET /api/runs/{id} ──────────────────────────
         let resp = app

@@ -68,9 +68,10 @@ impl BlobReference {
     }
 }
 
-/// Check if a string is a valid blob key (64 lowercase hex chars = SHA-256).
+/// Check if a string is a valid blob key (64 **lowercase** hex chars = SHA-256).
 pub fn is_valid_blob_key(key: &str) -> bool {
-    key.len() == 64 && key.bytes().all(|b| b.is_ascii_hexdigit())
+    key.len() == 64
+        && key.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 #[cfg(test)]
@@ -137,6 +138,7 @@ mod tests {
         assert!(is_valid_blob_key(&"a".repeat(64)));
         assert!(is_valid_blob_key(&"f".repeat(64)));
         assert!(!is_valid_blob_key(&"g".repeat(64)));
+        assert!(!is_valid_blob_key(&"A".repeat(64))); // uppercase refused
         assert!(!is_valid_blob_key("short"));
         assert!(!is_valid_blob_key(&"a".repeat(63)));
         assert!(!is_valid_blob_key(&"a".repeat(65)));

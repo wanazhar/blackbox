@@ -4,6 +4,18 @@ All notable changes to **blackbox** are documented here.
 
 ## [Unreleased]
 
+### Security hardening (pre-1.5.0 tag)
+
+- Sealed export/backup packs require authenticated BBEN ciphertext (no plaintext passthrough)
+- PBKDF2 iteration count fixed (reject attacker-chosen DoS values)
+- Backup restore path allowlist + blob key validation (no `..` write escape)
+- Sync pull confining `entry.file` to `runs/<safe-id>.json`; refuse unsafe run ids on push
+- Shell wrap names sanitized before `--install-shell` (block rc injection from project config)
+- Portable-dir export redacts blob bodies and rekeys content hashes; JSON portable rekeys after H-08
+- Workspace/contained replay: block interpreters/launchers, absolute args; scrub child env
+- FS bookend snapshots skip symlink follow; nest marker dirs must be self-owned 0700
+- Blob decompress size cap; `move_blob` requires valid hex keys; blob keys lowercase-only
+
 ### 1.5.0 — Trace integrity & scale (in progress)
 
 Plan: [docs/plan/trace-integrity-1.5.md](docs/plan/trace-integrity-1.5.md). Epic: [issue #3](https://github.com/wanazhar/blackbox/issues/3).

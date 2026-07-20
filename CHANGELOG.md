@@ -15,6 +15,8 @@ All notable changes to **blackbox** are documented here.
 - Workspace/contained replay: block interpreters/launchers, absolute args; scrub child env
 - FS bookend snapshots skip symlink follow; nest marker dirs must be self-owned 0700
 - Blob decompress size cap; `move_blob` requires valid hex keys; blob keys lowercase-only
+- SSE concurrency permits held for stream lifetime; login rate limit; API events hard cap
+- Import redacts run command/cwd/name/tags; HTTP sync disables redirects + blocks IMDS hosts
 
 ### 1.5.0 — Trace integrity & scale (in progress)
 

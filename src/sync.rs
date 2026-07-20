@@ -196,6 +196,7 @@ pub async fn sync_push_http(
     token: Option<&str>,
     redact: bool,
 ) -> anyhow::Result<SyncReport> {
+    validate_sync_remote(base_url)?;
     let client = http_client()?;
     let base = base_url.trim_end_matches('/');
     let remote = http_get_manifest(&client, base, token).await?;
@@ -236,6 +237,7 @@ pub async fn sync_pull_http(
     base_url: &str,
     token: Option<&str>,
 ) -> anyhow::Result<SyncReport> {
+    validate_sync_remote(base_url)?;
     let client = http_client()?;
     let base = base_url.trim_end_matches('/');
     let remote = http_get_manifest(&client, base, token).await?;
@@ -287,15 +289,38 @@ pub async fn sync_pull_http(
 /// Build an HTTP client for sync operations.
 ///
 /// TLS uses the system-native certificate store (via `rustls-tls` in reqwest).
-/// No custom certificate pinning or root CA configuration is applied — the
-/// platform defaults (e.g. `/etc/ssl/certs` on Linux, system keychain on macOS)
-/// are trusted. This is appropriate for most deployments but should be
-/// documented for air-gapped or certificate-restricted environments.
+/// Redirects are disabled (SSRF mitigation). Cloud metadata hosts are refused
+/// by [`validate_sync_remote`].
 fn http_client() -> anyhow::Result<reqwest::Client> {
     reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(120))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .context("build http client")
+}
+
+/// Refuse cloud metadata and non-HTTP remotes (basic SSRF hardening).
+pub fn validate_sync_remote(base: &str) -> anyhow::Result<()> {
+    let url = reqwest::Url::parse(base).context("invalid sync remote URL")?;
+    match url.scheme() {
+        "http" | "https" => {}
+        other => anyhow::bail!("sync remote scheme must be http or https (got {other})"),
+    }
+    let host = url.host_str().unwrap_or("").to_ascii_lowercase();
+    // Classic cloud IMDS endpoints.
+    if host == "169.254.169.254"
+        || host == "metadata.google.internal"
+        || host == "metadata"
+        || host.ends_with(".metadata.google.internal")
+    {
+        anyhow::bail!("sync remote host refused (cloud metadata): {host}");
+    }
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        if matches!(ip, std::net::IpAddr::V4(v4) if v4.octets() == [169, 254, 169, 254]) {
+            anyhow::bail!("sync remote host refused (link-local metadata IP)");
+        }
+    }
+    Ok(())
 }
 
 fn auth_headers(token: Option<&str>) -> reqwest::header::HeaderMap {
@@ -741,6 +766,44 @@ mod tests {
         assert_eq!(b2, "bucket-only");
         assert!(p2.is_empty());
     }
+    #[test]
+    fn validate_sync_remote_blocks_metadata() {
+        assert!(validate_sync_remote("https://example.com/sync").is_ok());
+        assert!(validate_sync_remote("http://127.0.0.1:7788").is_ok());
+        assert!(validate_sync_remote("http://169.254.169.254/latest").is_err());
+        assert!(validate_sync_remote("http://metadata.google.internal/").is_err());
+        assert!(validate_sync_remote("file:///etc/passwd").is_err());
+    }
+
+    #[tokio::test]
+    async fn sync_pull_refuses_path_escape_in_manifest() {
+        let store = Arc::new(SqliteStore::open_memory().unwrap());
+        let dir = std::env::temp_dir().join(format!("bb-sync-escape-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("runs")).unwrap();
+        let man = serde_json::json!({
+            "version": 1,
+            "runs": {
+                "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee": {
+                    "file": "../../etc/passwd",
+                    "sha256": "00",
+                    "exported_at": "2020-01-01T00:00:00Z",
+                    "name": null,
+                    "command": [],
+                    "status": "Succeeded"
+                }
+            }
+        });
+        std::fs::write(dir.join("manifest.json"), man.to_string()).unwrap();
+        let pull = sync_pull(store.as_ref(), &dir).await.unwrap();
+        assert_eq!(pull.pulled, 0);
+        assert!(
+            pull.errors.iter().any(|e| e.contains("unsafe") || e.contains("refused")),
+            "errors: {:?}",
+            pull.errors
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[tokio::test]
     async fn test_sync_checksum() {
         let store = Arc::new(SqliteStore::open_memory().unwrap());

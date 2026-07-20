@@ -24,12 +24,18 @@ use axum::{Form, Json, Router};
 use futures_util::stream::{self, Stream};
 use parking_lot::Mutex;
 use serde::Deserialize;
-use tokio::sync::Semaphore;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 /// Browser session cookie name (HttpOnly; not readable by JS).
 pub const SESSION_COOKIE: &str = "blackbox_session";
 /// Default browser session TTL.
 const SESSION_TTL: Duration = Duration::from_secs(12 * 3600);
+/// Failed login attempts retained for rate limiting.
+const LOGIN_FAIL_WINDOW: Duration = Duration::from_secs(60);
+/// Max failed POSTs /session in the window before 429.
+const LOGIN_FAIL_MAX: usize = 20;
+/// Hard cap for `GET /api/runs/{id}/events` (no unlimited dumps).
+const API_EVENTS_HARD_CAP: usize = 50_000;
 
 #[derive(Clone)]
 struct AppState {
@@ -40,6 +46,8 @@ struct AppState {
     sse_semaphore: Arc<Semaphore>,
     /// Server-side browser sessions (id → expiry).
     sessions: Arc<Mutex<HashMap<String, Instant>>>,
+    /// Failed login timestamps (sliding window rate limit).
+    login_failures: Arc<Mutex<Vec<Instant>>>,
     /// Set Secure flag on session cookies (TLS / explicit).
     secure_cookies: bool,
 }
@@ -77,6 +85,7 @@ pub async fn serve(store: Arc<SqliteStore>, opts: ServeOptions) -> anyhow::Resul
         token: opts.token.clone(),
         sse_semaphore: Arc::new(Semaphore::new(100)),
         sessions: Arc::new(Mutex::new(HashMap::new())),
+        login_failures: Arc::new(Mutex::new(Vec::new())),
         secure_cookies,
     };
 
@@ -331,13 +340,31 @@ async fn create_session(
     let Some(expected) = state.token.as_deref() else {
         return Redirect::temporary("/").into_response();
     };
+    // Sliding-window rate limit failed logins (token brute-force mitigation).
+    {
+        let mut fails = state.login_failures.lock();
+        let cutoff = Instant::now() - LOGIN_FAIL_WINDOW;
+        fails.retain(|t| *t > cutoff);
+        if fails.len() >= LOGIN_FAIL_MAX {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                Html(login_html(Some(
+                    "Too many failed sign-in attempts. Wait a minute and try again.",
+                ))),
+            )
+                .into_response();
+        }
+    }
     if !constant_time_eq(form.token.trim().as_bytes(), expected.as_bytes()) {
+        state.login_failures.lock().push(Instant::now());
         return (
             StatusCode::UNAUTHORIZED,
             Html(login_html(Some("Invalid token"))),
         )
             .into_response();
     }
+    // Successful login: clear failure window.
+    state.login_failures.lock().clear();
     let sid = uuid::Uuid::new_v4().to_string();
     {
         let mut sessions = state.sessions.lock();
@@ -1124,7 +1151,7 @@ async fn api_events_page(
 async fn api_runs_stream(
     State(state): State<AppState>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, AppError> {
-    let _permit = state
+    let permit = state
         .sse_semaphore
         .clone()
         .acquire_owned()
@@ -1136,6 +1163,7 @@ async fn api_runs_stream(
             store,
             known: std::collections::HashMap::new(),
             bootstrapped: false,
+            _permit: permit,
         },
         |mut st| async move {
             let runs = match st.store.list_runs().await {
@@ -1198,6 +1226,8 @@ struct RunsStreamState {
     known: std::collections::HashMap<String, String>,
     #[allow(dead_code)]
     bootstrapped: bool,
+    /// Held for the lifetime of the stream so the concurrency limit is real.
+    _permit: OwnedSemaphorePermit,
 }
 
 async fn api_run(
@@ -1217,13 +1247,12 @@ async fn api_events(
     Query(q): Query<EventsQuery>,
 ) -> Result<Response, AppError> {
     let run_id = resolve_prefix(state.store.as_ref(), &id).await?;
-    // Default cap protects dashboard RAM on huge runs; ?limit=0 means all.
-    let limit = q.limit.unwrap_or(5_000);
-    let events = if limit == 0 {
-        state.store.get_events(&run_id).await?
-    } else {
-        state.store.get_events_limited(&run_id, limit).await?.0
-    };
+    // Cap protects dashboard RAM; limit=0 no longer means unlimited.
+    let limit = q
+        .limit
+        .unwrap_or(5_000)
+        .clamp(1, API_EVENTS_HARD_CAP);
+    let events = state.store.get_events_limited(&run_id, limit).await?.0;
     Ok(Json(serde_json::to_value(events)?).into_response())
 }
 
@@ -1262,7 +1291,7 @@ async fn api_event_stream(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, AppError> {
-    let _permit = state
+    let permit = state
         .sse_semaphore
         .clone()
         .acquire_owned()
@@ -1279,6 +1308,7 @@ async fn api_event_stream(
             queue: VecDeque::new(),
             ticks_idle: 0,
             finished: false,
+            _permit: permit,
         },
         |mut st| async move {
             // Drain queued events first
@@ -1354,6 +1384,8 @@ struct StreamState {
     queue: VecDeque<Event>,
     ticks_idle: u32,
     finished: bool,
+    /// Held for the lifetime of the stream so the concurrency limit is real.
+    _permit: OwnedSemaphorePermit,
 }
 
 async fn api_search(
@@ -1659,6 +1691,7 @@ mod testing {
                 token: None,
                 sse_semaphore: Arc::new(Semaphore::new(100)),
                 sessions: Arc::new(Mutex::new(HashMap::new())),
+                login_failures: Arc::new(Mutex::new(Vec::new())),
                 secure_cookies: false,
             }
         }
@@ -1824,6 +1857,7 @@ mod testing {
             token: token.map(|s| s.to_string()),
             sse_semaphore: Arc::new(Semaphore::new(100)),
             sessions: Arc::new(Mutex::new(HashMap::new())),
+            login_failures: Arc::new(Mutex::new(Vec::new())),
             secure_cookies: false,
         }
     }

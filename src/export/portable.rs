@@ -478,13 +478,24 @@ pub async fn import_portable(
 
     events.sort_by_key(|e| e.sequence);
 
-    // ── Recursive redaction of nested metadata ──
+    // ── Recursive redaction of nested metadata + free-form run fields ──
     let scanner = SecretScanner::new(RedactionConfig::default());
     for ev in &mut events {
         redact_event_metadata(&scanner, &mut ev.metadata);
     }
     if let Some(ref mut notes) = run.notes {
         *notes = scanner.redact(notes);
+    }
+    if let Some(ref mut name) = run.name {
+        *name = scanner.redact(name);
+    }
+    run.cwd = scanner.redact(&run.cwd);
+    run.project_dir = scanner.redact(&run.project_dir);
+    for arg in &mut run.command {
+        *arg = scanner.redact(arg);
+    }
+    for tag in &mut run.tags {
+        *tag = scanner.redact(tag);
     }
 
     // ── Permanent writes with rollback journal ──

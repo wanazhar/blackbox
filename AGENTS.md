@@ -176,6 +176,7 @@ Operator-facing notes for shipped harnesses: [docs/guide/adapters.md](docs/guide
 | `tests/tool_dedup.rs` | 1.5 D1: ID-less retries preserved; cross-source merge |
 | `tests/portable_import_atomicity.rs` | 1.5 A1: hash validation, rollback, nested redaction |
 | `tests/patch_path_safety.rs` | 1.5 R1: absolute/traversal patch rejection; honest capabilities |
+| `tests/storage_batch_faults.rs` | 1.5 S1: batch barriers, flush/shutdown durability, backpressure |
 
 ## Docs map
 

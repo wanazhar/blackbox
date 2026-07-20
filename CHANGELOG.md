@@ -27,6 +27,12 @@ Plan: [docs/plan/trace-integrity-1.5.md](docs/plan/trace-integrity-1.5.md). Epic
 - Capability preflight lists temporary-directory limits; no overstated sandbox claims
 - Path-safe transactional patch apply: reject absolute/traversal paths; stage then promote; no `--unsafe-paths`
 
+#### Batched storage ingest (S1)
+- Live capture uses `EventWriter::new_batched`: bounded queue + dedicated micro-batch SQLite writer
+- Flush on size (64), interval (10ms), barrier kinds (`run.*`, `capture.coverage`, …), explicit flush/shutdown
+- No silent queue drops — full queue applies backpressure; health exposes queue high-water and write failures
+- `capture.coverage` writer_health / backpressure includes batch counters
+
 ## [1.4.0] — 2026-07-19
 
 **Trust Proof (Unix)** — recorder mode can stay on without silently changing the child or overstating causality; secrets are holdback-redacted before persist; coverage and postmortem claims stay weaker than or equal to evidence.

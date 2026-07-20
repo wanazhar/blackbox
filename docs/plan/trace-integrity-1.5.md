@@ -108,11 +108,12 @@ Full acceptance criteria: [issue #3 comments](https://github.com/wanazhar/blackb
 ### Phase C — Durable storage / imports
 
 - [x] Hash-validated atomic portable import (hash match required; batch events; rollback journal)
-- [ ] Batched SQLite writer + barriers + observability
+- [x] Batched SQLite writer + barriers + observability (`BatchIngestor` / `EventWriter::new_batched`)
 - [ ] Cursor pagination APIs
 - [ ] Blob compression before encryption; streaming portable format
 - [x] Gate: `tests/portable_import_atomicity.rs`
-- [ ] Gates: `tests/storage_batch_faults.rs`, `tests/pagination_scale.rs`
+- [x] Gate: `tests/storage_batch_faults.rs`
+- [ ] Gate: `tests/pagination_scale.rs`
 
 ### Phase D — Capture / platform operations
 

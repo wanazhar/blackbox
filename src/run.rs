@@ -174,7 +174,11 @@ impl RunSupervisor {
         // PID marker in runtime dir — not child-visible BLACKBOX_ACTIVE_RUN.
         let _active_supervisor = crate::nest::ActiveSupervisorGuard::acquire(&run.id);
 
-        let writer = Arc::new(EventWriter::new(self.store.clone(), run.id.clone()));
+        // 1.5 S1: live capture uses bounded batch ingest (not per-event SQLite).
+        let writer = Arc::new(EventWriter::new_batched(
+            self.store.clone(),
+            run.id.clone(),
+        ));
 
         // ── Capture and redact environment variables (single map; value+name scan) ──
         let env_redactor = EnvironmentRedactor::new(redact_cfg.clone());
@@ -892,6 +896,10 @@ impl RunSupervisor {
                 }
             };
         let _ = tokio::time::timeout(Duration::from_secs(2), event_writer_handle).await;
+        // Drain any non-barrier events still in the batch queue before end-of-run.
+        if let Err(e) = writer.flush().await {
+            tracing::warn!(error = %e, "batch ingest flush before run.completed failed");
+        }
 
         tracing::info!(
             exit_code = exit_status.exit_code(),
@@ -921,6 +929,7 @@ impl RunSupervisor {
                 serde_json::json!(total_redactions),
             );
         }
+        // Barrier kind: write waits for durable flush.
         let end_ev = writer.write(end_ev).await?;
 
         // Single end-of-run event load (coverage + session + usage). Cap for RAM.
@@ -1104,24 +1113,41 @@ impl RunSupervisor {
             "total_events".to_string(),
             serde_json::json!(coverage.total_events),
         );
+        let mut writer_health = serde_json::json!({
+            "events_written": health.events_written,
+            "events_deduped": health.events_deduped,
+            "slow_writes": health.slow_writes,
+            "max_write_ms": health.max_write_ms,
+            "batched": health.batch.is_some(),
+        });
+        if let Some(ref b) = health.batch {
+            writer_health["batch"] = serde_json::json!({
+                "events_enqueued": b.events_enqueued,
+                "events_flushed": b.events_flushed,
+                "batches": b.batches,
+                "barriers": b.barriers,
+                "max_batch_size": b.max_batch_size,
+                "max_flush_ms": b.max_flush_ms,
+                "queue_high_water": b.queue_high_water,
+                "write_failures": b.write_failures,
+                "pending": b.pending,
+            });
+        }
         cov_ev.metadata.insert(
             "writer_health".to_string(),
-            serde_json::json!({
-                "events_written": health.events_written,
-                "events_deduped": health.events_deduped,
-                "slow_writes": health.slow_writes,
-                "max_write_ms": health.max_write_ms,
-            }),
+            writer_health,
         );
         // Explicit backpressure honesty (1.4 Phase D): lag samples ≠ drops.
-        cov_ev.metadata.insert(
-            "backpressure".to_string(),
-            serde_json::json!({
-                "merge_lag_samples": merge_lag,
-                "merge_send_failures": merge_send_fail,
-                "policy": "no_silent_drops_on_merge; lag samples count blocked sends ≥50ms",
-            }),
-        );
+        let mut bp = serde_json::json!({
+            "merge_lag_samples": merge_lag,
+            "merge_send_failures": merge_send_fail,
+            "policy": "no_silent_drops_on_merge; lag samples count blocked sends ≥50ms; batch queue applies backpressure",
+        });
+        if let Some(ref b) = health.batch {
+            bp["batch_queue_high_water"] = serde_json::json!(b.queue_high_water);
+            bp["batch_write_failures"] = serde_json::json!(b.write_failures);
+        }
+        cov_ev.metadata.insert("backpressure".to_string(), bp);
         if let Some(ref a) = adapter_guess {
             cov_ev
                 .metadata
@@ -1163,6 +1189,10 @@ impl RunSupervisor {
             let lag_ev = crate::capture::health::layer_lag(&run.id, "merge", lag);
             let _ = writer.write(lag_ev).await;
             eprintln!("warning: {lag}");
+        }
+        // Final durable barrier: stop batch worker after last end-of-run events.
+        if let Err(e) = writer.shutdown().await {
+            tracing::warn!(error = %e, "batch ingest shutdown failed");
         }
         let session_id = adapter.discover_session_id(&all_events);
         if let Some(ref sid) = session_id {

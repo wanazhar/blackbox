@@ -11,6 +11,9 @@
 //!
 //! Tracks soft capture-health signals (write latency / lag) for daily-driver
 //! trust: slow SQLite inserts surface as warnings rather than silent stall.
+//!
+//! Live capture (1.5 S1) uses a bounded batch queue + dedicated writer via
+//! [`EventWriter::new_batched`]; unit tests keep the synchronous path.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -18,6 +21,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::core::event::TraceEvent;
+use crate::pipeline::batch_ingest::{
+    is_barrier_kind, BatchIngestConfig, BatchIngestHealth, BatchIngestor,
+};
 use crate::storage::TraceStore;
 
 /// Soft threshold: a single event persist above this is a lag sample.
@@ -38,11 +44,33 @@ pub struct WriterHealth {
     pub slow_writes: u64,
     pub max_write_ms: u64,
     pub total_write_ms: u64,
+    /// Present when using batched ingest.
+    pub batch: Option<BatchIngestHealth>,
 }
 
 impl WriterHealth {
     /// Soft warning text when capture appears to lag under load.
     pub fn soft_warning(&self) -> Option<String> {
+        if let Some(ref b) = self.batch {
+            if b.write_failures > 0 {
+                return Some(format!(
+                    "capture lag: batch ingest write_failures={} (store may have lost events)",
+                    b.write_failures
+                ));
+            }
+            if b.queue_high_water >= 2_000 {
+                return Some(format!(
+                    "capture lag: batch queue high-water {} (ingest falling behind)",
+                    b.queue_high_water
+                ));
+            }
+            if b.max_flush_ms >= 750 {
+                return Some(format!(
+                    "capture lag: peak batch flush {}ms (SQLite pressure)",
+                    b.max_flush_ms
+                ));
+            }
+        }
         if self.slow_writes >= LAG_WARN_COUNT {
             return Some(format!(
                 "capture lag: {} slow event writes (max {}ms, avg {:.1}ms) — store may be falling behind",
@@ -155,12 +183,22 @@ pub struct EventWriter {
     tool_seen: Mutex<ToolDedupeCache>,
     /// Soft health counters.
     health: Mutex<WriterHealth>,
+    /// When set, events go through the dedicated batch writer.
+    batch: Option<BatchIngestor>,
 }
 
 impl EventWriter {
-    /// Create a writer starting at sequence `1` (0 reserved / unused).
+    /// Create a synchronous writer starting at sequence `1` (0 reserved / unused).
+    ///
+    /// Prefer [`Self::new_batched`] for live capture so hot paths do not block
+    /// on per-event SQLite transactions.
     pub fn new(store: Arc<dyn TraceStore>, run_id: impl Into<String>) -> Self {
         Self::with_start(store, run_id, 1)
+    }
+
+    /// Live-capture writer: bounded queue + micro-batch flushes (1.5 S1).
+    pub fn new_batched(store: Arc<dyn TraceStore>, run_id: impl Into<String>) -> Self {
+        Self::with_start_batched(store, run_id, 1, BatchIngestConfig::default())
     }
 
     /// Create a writer that continues from `start` (next allocated sequence).
@@ -171,6 +209,25 @@ impl EventWriter {
             run_id: run_id.into(),
             tool_seen: Mutex::new(ToolDedupeCache::new()),
             health: Mutex::new(WriterHealth::default()),
+            batch: None,
+        }
+    }
+
+    /// Batched writer continuing from `start`.
+    pub fn with_start_batched(
+        store: Arc<dyn TraceStore>,
+        run_id: impl Into<String>,
+        start: u64,
+        config: BatchIngestConfig,
+    ) -> Self {
+        let batch = BatchIngestor::spawn(store.clone(), config);
+        Self {
+            store,
+            seq: AtomicU64::new(start.max(1)),
+            run_id: run_id.into(),
+            tool_seen: Mutex::new(ToolDedupeCache::new()),
+            health: Mutex::new(WriterHealth::default()),
+            batch: Some(batch),
         }
     }
 
@@ -190,10 +247,36 @@ impl EventWriter {
 
     /// Soft capture-health snapshot for this writer.
     pub fn health_snapshot(&self) -> WriterHealth {
-        self.health
+        let mut h = self
+            .health
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .clone()
+            .clone();
+        if let Some(ref b) = self.batch {
+            h.batch = Some(b.health_snapshot());
+        }
+        h
+    }
+
+    /// Whether this writer uses batched ingest.
+    pub fn is_batched(&self) -> bool {
+        self.batch.is_some()
+    }
+
+    /// Flush pending batched events (no-op for sync writers).
+    pub async fn flush(&self) -> anyhow::Result<()> {
+        if let Some(ref b) = self.batch {
+            b.flush().await?;
+        }
+        Ok(())
+    }
+
+    /// Flush and stop the batch worker (no-op for sync writers).
+    pub async fn shutdown(&self) -> anyhow::Result<()> {
+        if let Some(ref b) = self.batch {
+            b.shutdown().await?;
+        }
+        Ok(())
     }
 
     /// Persist an event, assigning a sequence if `event.sequence == 0`.
@@ -201,6 +284,9 @@ impl EventWriter {
     /// Tool dedupe (1.5 D1): only skip insert when a stable tool-use ID matches
     /// a prior event with the same kind + payload hash inside the duplicate
     /// window. ID-less tool calls always persist (legitimate retries).
+    ///
+    /// With batched ingest, non-barrier events return after queue accept;
+    /// barrier kinds wait for durable flush.
     pub async fn write(&self, mut event: TraceEvent) -> anyhow::Result<TraceEvent> {
         if event.run_id.is_empty() {
             event.run_id = self.run_id.clone();
@@ -234,6 +320,8 @@ impl EventWriter {
                         serde_json::json!(provenances),
                     );
                     // Annotate the kept event with merged provenance (best-effort).
+                    // Flush first so the original is visible if still in the batch queue.
+                    let _ = self.flush().await;
                     if let Ok(Some(mut kept)) = self.store.get_event(&original_id).await {
                         kept.metadata.insert(
                             "capture_provenance".to_string(),
@@ -257,11 +345,7 @@ impl EventWriter {
             event.sequence = self.allocate_sequence();
         }
 
-        let t0 = Instant::now();
-        self.store.insert_event(&event).await?;
-        let ms = t0.elapsed().as_millis();
-
-        // Record fingerprint only after a successful write (ID-bearing tools).
+        // Record fingerprint when we accept the event for persist (before/after batch).
         if let Some((fp, payload_hash, prov)) = tool_dedupe_key(&event) {
             let mut cache = self.tool_seen.lock().unwrap_or_else(|e| e.into_inner());
             cache.insert(
@@ -274,6 +358,15 @@ impl EventWriter {
                 },
             );
         }
+
+        let t0 = Instant::now();
+        if let Some(ref batch) = self.batch {
+            let barrier = is_barrier_kind(&event.kind);
+            batch.enqueue(event.clone(), barrier).await?;
+        } else {
+            self.store.insert_event(&event).await?;
+        }
+        let ms = t0.elapsed().as_millis();
 
         if let Ok(mut h) = self.health.lock() {
             h.events_written = h.events_written.saturating_add(1);
@@ -534,8 +627,34 @@ mod tests {
             slow_writes: 12,
             max_write_ms: 200,
             total_write_ms: 3000,
+            batch: None,
         };
         assert!(h.soft_warning().unwrap().contains("capture lag"));
         assert!(!h.is_healthy());
+    }
+
+    #[tokio::test]
+    async fn batched_write_and_flush() {
+        let store = Arc::new(SqliteStore::open_memory().unwrap());
+        let run = crate::core::run::Run::new(vec!["x".into()], "/tmp".into());
+        store.insert_run(&run).await.unwrap();
+        let writer = EventWriter::new_batched(store.clone(), run.id.clone());
+        assert!(writer.is_batched());
+
+        for i in 0..40 {
+            let mut e = TraceEvent::new(&run.id, EventSource::Terminal, "terminal.output");
+            e.metadata
+                .insert("i".into(), serde_json::json!(i));
+            writer.write(e).await.unwrap();
+        }
+        // Barrier event must be durable before write returns.
+        let done = TraceEvent::new(&run.id, EventSource::System, "run.completed");
+        writer.write(done).await.unwrap();
+
+        assert_eq!(store.count_events(&run.id).await.unwrap(), 41);
+        let h = writer.health_snapshot();
+        assert_eq!(h.events_written, 41);
+        assert!(h.batch.is_some());
+        writer.shutdown().await.unwrap();
     }
 }

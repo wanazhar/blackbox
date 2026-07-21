@@ -15,7 +15,7 @@ fn filesystem_events_count_as_file_ops() {
     .iter()
     .enumerate()
     {
-        let mut e = TraceEvent::new("r", EventSource::Filesystem, *kind);
+        let mut e = TraceEvent::new("r", EventSource::Filesystem, kind);
         e.sequence = (i + 1) as u64;
         e.metadata
             .insert("path".into(), serde_json::json!(format!("p{i}")));
@@ -26,7 +26,7 @@ fn filesystem_events_count_as_file_ops() {
         .iter()
         .enumerate()
     {
-        let mut e = TraceEvent::new("r", EventSource::Filesystem, *kind);
+        let mut e = TraceEvent::new("r", EventSource::Filesystem, kind);
         e.sequence = 10 + i as u64;
         agg.observe(&e);
     }

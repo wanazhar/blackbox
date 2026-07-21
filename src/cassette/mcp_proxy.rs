@@ -211,9 +211,9 @@ fn run_replay(config: ProxyConfig) -> anyhow::Result<ProxyReport> {
     let mut unmatched = 0usize;
     let mut live_passthrough = 0usize;
 
+    type LiveIo = (std::process::ChildStdin, BufReader<std::process::ChildStdout>);
     let mut live_child: Option<Child> = None;
-    let live_io: Arc<Mutex<Option<(std::process::ChildStdin, BufReader<std::process::ChildStdout>)>>> =
-        Arc::new(Mutex::new(None));
+    let live_io: Arc<Mutex<Option<LiveIo>>> = Arc::new(Mutex::new(None));
 
     if matches!(config.on_unknown, UnknownPolicy::Live) {
         if config.server_argv.is_empty() {

@@ -78,6 +78,9 @@ pub struct RunAggregates {
     pub providers: Vec<String>,
     pub capture_lag_samples: u64,
     pub capture_send_failures: u64,
+    /// Capture-layer failure events (`capture.layer.failed`, etc.) — not generic run failures.
+    #[serde(default)]
+    pub capture_failures: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_timestamp: Option<DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -117,6 +120,7 @@ impl RunAggregates {
             providers: Vec::new(),
             capture_lag_samples: 0,
             capture_send_failures: 0,
+            capture_failures: 0,
             first_timestamp: None,
             last_timestamp: None,
             last_sequence: 0,
@@ -242,6 +246,16 @@ impl RunAggregates {
             }
             if event.kind == "capture.layer.failed" {
                 self.capture_send_failures = self.capture_send_failures.saturating_add(1);
+                self.capture_failures = self.capture_failures.saturating_add(1);
+            }
+            if event.kind == "capture.layer.failed"
+                || event.kind == "capture.failed"
+                || event.kind.ends_with(".capture_failed")
+            {
+                // capture_failures already counted for layer.failed above
+                if event.kind != "capture.layer.failed" {
+                    self.capture_failures = self.capture_failures.saturating_add(1);
+                }
             }
         }
 
@@ -571,7 +585,7 @@ mod tests {
         .iter()
         .enumerate()
         {
-            let mut e = TraceEvent::new(run, EventSource::Filesystem, *kind);
+            let mut e = TraceEvent::new(run, EventSource::Filesystem, kind);
             e.sequence = (i + 1) as u64;
             e.metadata
                 .insert("path".into(), serde_json::json!(format!("src/f{i}.rs")));
@@ -592,6 +606,24 @@ mod tests {
 
         assert_eq!(agg.file_ops, 5);
         assert_eq!(agg.files_touched_unique, 4);
+    }
+
+    #[test]
+    fn capture_failures_count_layer_and_capture_failed() {
+        let run = "r-cap";
+        let mut agg = RunAggregates::new(run);
+        let mut layer = TraceEvent::new(run, EventSource::System, "capture.layer.failed");
+        layer.sequence = 1;
+        agg.observe(&layer);
+        let mut cap = TraceEvent::new(run, EventSource::System, "capture.failed");
+        cap.sequence = 2;
+        agg.observe(&cap);
+        // Only kinds under the capture.* prefix are counted.
+        let mut other = TraceEvent::new(run, EventSource::System, "capture.pty.capture_failed");
+        other.sequence = 3;
+        agg.observe(&other);
+        assert_eq!(agg.capture_failures, 3);
+        assert_eq!(agg.capture_send_failures, 1); // layer.failed only
     }
 
     #[test]

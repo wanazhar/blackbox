@@ -5,4 +5,6 @@ pub mod validation;
 
 pub use manifest::{AdapterManifest, ADAPTER_PROTOCOL};
 // re-export for tests/docs
-pub use validation::{validate_adapter_event, validate_adapter_manifest, ValidationReport};
+pub use validation::{
+    run_live_conformance, validate_adapter_event, validate_adapter_manifest, ValidationReport,
+};

@@ -751,6 +751,7 @@ pub async fn restore_workspace_manifest(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn classify_restore_completeness(
     expected: usize,
     restored: usize,
@@ -901,7 +902,7 @@ fn read_regular_file_no_follow(path: &Path) -> anyhow::Result<Vec<u8>> {
             .with_context(|| format!("open(O_NOFOLLOW) {}", path.display()))?;
         let mut buf = Vec::new();
         f.read_to_end(&mut buf)?;
-        return Ok(buf);
+        Ok(buf)
     }
     #[cfg(not(unix))]
     {

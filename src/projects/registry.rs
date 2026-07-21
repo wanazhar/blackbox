@@ -83,11 +83,25 @@ impl ProjectRegistry {
                     .contains(&s)
             });
         }
-        out.sort_by(|a, b| b.indexed_at.cmp(&a.indexed_at));
+        out.sort_by_key(|e| std::cmp::Reverse(e.indexed_at));
         if let Some(lim) = q.limit {
             out.truncate(lim);
         }
         out
+    }
+
+    /// Drop entries whose store file is missing. Returns count removed.
+    pub fn prune_missing(&mut self) -> usize {
+        let before = self.entries.len();
+        self.entries.retain(|e| e.store_path.is_file());
+        before.saturating_sub(self.entries.len())
+    }
+
+    /// Remove a project root entry (exact path match). Returns true if removed.
+    pub fn remove_root(&mut self, project_root: &Path) -> bool {
+        let before = self.entries.len();
+        self.entries.retain(|e| e.project_root != project_root);
+        before != self.entries.len()
     }
 }
 

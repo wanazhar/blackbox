@@ -76,38 +76,39 @@ jobs:
 
   release:
     name: github release
-    # Publish whatever matrix legs succeeded (e.g. Linux OK, mac failed)
-    # instead of skipping the whole release and leaving "Latest" on the prior tag.
+    # Fail-closed (1.6): every matrix target must succeed before publishing a release.
     needs: build
-    if: always() && !cancelled()
+    if: success()
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download available artifacts
+      - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
           merge-multiple: true
-        continue-on-error: true
 
-      - name: Collect tarballs
+      - name: Collect tarballs (require full matrix)
         id: pack
         run: |
+          set -euo pipefail
           mkdir -p dist
-          find artifacts -name '*.tar.gz' -exec cp {} dist/ \; 2>/dev/null || true
-          ls -la dist || true
-          count=$(find dist -name '*.tar.gz' 2>/dev/null | wc -l | tr -d ' ')
+          find artifacts -name '*.tar.gz' -exec cp {} dist/ \;
+          ls -la dist
+          count=$(find dist -name '*.tar.gz' | wc -l | tr -d ' ')
           echo "count=$count" >> "$GITHUB_OUTPUT"
-          if [ "$count" = "0" ]; then
-            echo "No binary artifacts — release will note crates.io only"
+          expected=4
+          if [ "$count" -lt "$expected" ]; then
+            echo "Fail-closed: expected $expected platform artifacts, found $count"
+            exit 1
           fi
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
-          fail_on_unmatched_files: false
+          fail_on_unmatched_files: true
           generate_release_notes: true
           body: |
             ## Install
@@ -122,6 +123,6 @@ jobs:
 
             Binary: `blackbox` · crate: `blackbox-recorder`
 
-            If a platform asset is missing from this release, use `cargo install blackbox-recorder`.
+            All matrix targets (linux x86_64/aarch64, macOS aarch64/x86_64) must ship for this tag.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

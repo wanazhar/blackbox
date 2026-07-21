@@ -1,0 +1,913 @@
+//! CLI handlers for Blackbox 1.6 commands (fsck, verify, experiment, report, gate, capsule, …).
+
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use clap::{Args, Subcommand};
+
+use crate::adapter_protocol::{validate_adapter_event, validate_adapter_manifest, AdapterManifest};
+use crate::budget::{evaluate_budgets, BudgetPolicy, ObservedBudgets};
+use crate::capsule::{create_capsule, CapsuleCreateOpts};
+use crate::capsule::inspect_capsule;
+use crate::cassette::CassetteFile;
+use crate::cassette::{match_request, MatchMode};
+use crate::experiment::{evaluate_gate, GateConfig};
+use crate::experiment::{ExperimentManifest, ExperimentRole, RunExperimentMeta};
+use crate::experiment::{build_experiment_report, RunReportInput};
+use crate::ingest::EventSpool;
+use crate::ingest::{recover_spool_on_open, RecoveryStats};
+use crate::integrity::{fsck_store, FsckMode, FsckOptions};
+use crate::output::{self, OutputMode};
+use crate::projects::{default_index_path, discover_project_stores, ProjectIndexQuery, ProjectRegistry};
+use crate::storage::sqlite::SqliteStore;
+use crate::storage::TraceStore;
+use crate::verification::verify_command;
+use crate::verification::{parse_junit_xml, receipt_from_junit};
+use crate::verification::build_outcome_view;
+use crate::verification::{
+    VerificationConfidence, VerificationReceipt, VerificationStatus, VerifierType,
+};
+use crate::verification::{parse_tap, receipt_from_tap};
+
+// ── Arg structs ───────────────────────────────────────────────────
+
+#[derive(Args)]
+pub struct FsckArgs {
+    /// Deep mode: load and re-hash every referenced blob
+    #[arg(long)]
+    pub deep: bool,
+    /// Generate repair plan, write recovery artifact, apply auto-safe repairs
+    #[arg(long)]
+    pub repair: bool,
+}
+
+#[derive(Args)]
+pub struct VerifyArgs {
+    /// Run ID, prefix, or "latest"
+    pub run_id: String,
+    /// Parse JUnit XML result file
+    #[arg(long)]
+    pub junit: Option<PathBuf>,
+    /// Parse TAP result file
+    #[arg(long)]
+    pub tap: Option<PathBuf>,
+    /// Assert a relative file exists
+    #[arg(long)]
+    pub assert_file: Option<PathBuf>,
+    /// Assert git working tree is clean
+    #[arg(long)]
+    pub assert_git_clean: bool,
+    /// Explicit verification scope label
+    #[arg(long)]
+    pub scope: Option<String>,
+    /// Parent receipt id for re-verification lineage
+    #[arg(long)]
+    pub parent: Option<String>,
+    /// Command argv after `--`
+    #[arg(last = true)]
+    pub command: Vec<String>,
+}
+
+#[derive(Args)]
+pub struct ExperimentArgs {
+    #[command(subcommand)]
+    pub action: ExperimentAction,
+}
+
+#[derive(Subcommand)]
+pub enum ExperimentAction {
+    /// Create a new experiment
+    Init {
+        name: String,
+        #[arg(long)]
+        id: Option<String>,
+    },
+    /// Show experiment manifest
+    Show { id: String },
+    /// List experiments
+    List,
+    /// Validate experiment has runs / required fields
+    Validate { id: String },
+    /// Attach experiment metadata to a run
+    Link {
+        experiment: String,
+        run_id: String,
+        #[arg(long)]
+        task: Option<String>,
+        #[arg(long)]
+        variant: Option<String>,
+        #[arg(long)]
+        attempt: Option<u32>,
+        #[arg(long)]
+        role: Option<String>,
+        #[arg(long)]
+        model: Option<String>,
+    },
+}
+
+#[derive(Args)]
+pub struct ReportArgs {
+    #[arg(long)]
+    pub experiment: String,
+    #[arg(long, default_value = "variant")]
+    pub group_by: String,
+    #[arg(long, default_value_t = 3)]
+    pub min_samples: usize,
+}
+
+#[derive(Args)]
+pub struct GateArgs {
+    #[arg(long)]
+    pub experiment: String,
+    #[arg(long)]
+    pub baseline: Option<String>,
+    #[arg(long)]
+    pub candidate: Option<String>,
+    #[arg(long)]
+    pub min_verified_rate: Option<f64>,
+    #[arg(long)]
+    pub max_p95_duration_regression: Option<String>,
+    #[arg(long)]
+    pub require_capture_complete: bool,
+    #[arg(long, default_value_t = 3)]
+    pub min_attempts: usize,
+    #[arg(long, default_value = "variant")]
+    pub group_by: String,
+}
+
+#[derive(Args, Clone)]
+pub struct CapsuleArgs {
+    #[command(subcommand)]
+    pub action: CapsuleAction,
+}
+
+#[derive(Subcommand, Clone)]
+pub enum CapsuleAction {
+    Create {
+        run_id: String,
+        #[arg(short = 'o', long, default_value = "capsule.bbx.json")]
+        output: PathBuf,
+    },
+    Inspect {
+        path: PathBuf,
+    },
+    Verify {
+        path: PathBuf,
+    },
+}
+
+#[derive(Args)]
+pub struct CassetteArgs {
+    #[command(subcommand)]
+    pub action: CassetteAction,
+}
+
+#[derive(Subcommand)]
+pub enum CassetteAction {
+    /// Inspect a cassette file (experimental)
+    Inspect { path: PathBuf },
+    /// Match a sample JSON-RPC request against a cassette (experimental)
+    Match {
+        path: PathBuf,
+        /// Path to JSON request
+        request: PathBuf,
+        #[arg(long, default_value = "normalized")]
+        mode: String,
+        #[arg(long, default_value = "tools/call")]
+        tool: String,
+    },
+}
+
+#[derive(Args)]
+pub struct BudgetArgs {
+    /// Max wall-clock seconds
+    #[arg(long)]
+    pub max_wall: Option<u64>,
+    #[arg(long)]
+    pub max_processes: Option<u64>,
+    #[arg(long)]
+    pub max_output: Option<u64>,
+    #[arg(long)]
+    pub max_store_growth: Option<u64>,
+    #[arg(long)]
+    pub max_tool_calls: Option<u64>,
+    #[arg(long)]
+    pub max_tokens: Option<u64>,
+    #[arg(long)]
+    pub contained: bool,
+    /// Optional observed values for evaluation demo
+    #[arg(long)]
+    pub observed_wall: Option<u64>,
+    #[arg(long)]
+    pub observed_processes: Option<u64>,
+}
+
+#[derive(Args)]
+pub struct AdapterArgs {
+    #[command(subcommand)]
+    pub action: AdapterAction,
+}
+
+#[derive(Subcommand)]
+pub enum AdapterAction {
+    Validate { manifest: PathBuf },
+    Test {
+        manifest: PathBuf,
+        /// NDJSON fixture file of adapter events
+        #[arg(long)]
+        fixtures: Option<PathBuf>,
+    },
+}
+
+#[derive(Args)]
+pub struct ProjectsArgs {
+    #[command(subcommand)]
+    pub action: ProjectsAction,
+}
+
+#[derive(Subcommand)]
+pub enum ProjectsAction {
+    /// Scan roots and update the metadata-only global index
+    Scan {
+        #[arg(default_value = ".")]
+        roots: Vec<PathBuf>,
+    },
+    /// Query the global project index
+    List {
+        #[arg(long)]
+        query: Option<String>,
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+    },
+}
+
+// ── Handlers ──────────────────────────────────────────────────────
+
+pub async fn cmd_fsck(
+    store: Arc<dyn TraceStore>,
+    blob_dir: PathBuf,
+    spool_dir: PathBuf,
+    recovery_dir: PathBuf,
+    args: &FsckArgs,
+    json: bool,
+) -> anyhow::Result<()> {
+    let opts = FsckOptions {
+        mode: if args.deep {
+            FsckMode::Deep
+        } else {
+            FsckMode::Fast
+        },
+        repair: args.repair,
+        blob_dir: Some(blob_dir),
+        spool_dir: Some(spool_dir.clone()),
+        recovery_dir: if args.repair {
+            Some(recovery_dir)
+        } else {
+            None
+        },
+    };
+    // Optional spool replay before repair.
+    if args.repair && spool_dir.exists() {
+        let stats: RecoveryStats = recover_spool_on_open(store.clone(), &spool_dir).await?;
+        if stats.batches_seen > 0 {
+            tracing::info!(
+                replayed = stats.batches_replayed,
+                inserted = stats.events_inserted,
+                "fsck spool recovery"
+            );
+        }
+    }
+    let report = fsck_store(store, opts).await?;
+    if json {
+        return output::emit_ok("fsck", &report);
+    }
+    print!("{}", report.format_text());
+    if !report.ok {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+pub async fn cmd_verify(
+    store: Arc<dyn TraceStore>,
+    run_id: &str,
+    cwd: &std::path::Path,
+    args: &VerifyArgs,
+    json: bool,
+) -> anyhow::Result<()> {
+    let mut receipt = if let Some(ref junit_path) = args.junit {
+        let xml = std::fs::read_to_string(junit_path)?;
+        let summary = parse_junit_xml(&xml)?;
+        receipt_from_junit(run_id, &summary, &junit_path.display().to_string())
+    } else if let Some(ref tap_path) = args.tap {
+        let text = std::fs::read_to_string(tap_path)?;
+        let summary = parse_tap(&text);
+        receipt_from_tap(run_id, &summary, &tap_path.display().to_string())
+    } else if let Some(ref file) = args.assert_file {
+        let mut r = VerificationReceipt::new(run_id, VerifierType::FileAssertion);
+        let path = cwd.join(file);
+        if path.is_file() {
+            r.status = VerificationStatus::Passed;
+            r.summary = Some(format!("file exists: {}", file.display()));
+        } else {
+            r.status = VerificationStatus::Failed;
+            r.summary = Some(format!("file missing: {}", file.display()));
+        }
+        r.confidence = VerificationConfidence::Confirmed;
+        r.verified_scope = args.scope.clone();
+        r
+    } else if args.assert_git_clean {
+        let mut r = VerificationReceipt::new(run_id, VerifierType::GitState);
+        let out = std::process::Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(cwd)
+            .output()?;
+        let dirty = !out.stdout.is_empty();
+        r.status = if dirty {
+            VerificationStatus::Failed
+        } else {
+            VerificationStatus::Passed
+        };
+        r.summary = Some(if dirty {
+            "git working tree dirty".into()
+        } else {
+            "git working tree clean".into()
+        });
+        r.confidence = VerificationConfidence::Confirmed;
+        r
+    } else if !args.command.is_empty() {
+        verify_command(
+            store.as_ref(),
+            run_id,
+            &args.command,
+            cwd,
+            args.parent.clone(),
+            args.scope.clone(),
+        )
+        .await?
+    } else {
+        anyhow::bail!(
+            "specify a verifier: -- command ..., --junit, --tap, --assert-file, or --assert-git-clean"
+        );
+    };
+
+    if let Some(ref p) = args.parent {
+        receipt.parent_receipt_id = Some(p.clone());
+    }
+    store.insert_verification_receipt(&receipt).await?;
+
+    let run = store
+        .get_run(run_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("run not found"))?;
+    let receipts = store.list_verification_receipts(run_id).await?;
+    let outcome = build_outcome_view(&run, &receipts, None);
+
+    if json {
+        return output::emit_ok(
+            "verify",
+            &serde_json::json!({
+                "receipt": receipt,
+                "outcome": outcome,
+            }),
+        );
+    }
+    println!(
+        "verification {} status={:?} confidence={:?}",
+        crate::util::short_id(&receipt.id),
+        receipt.status,
+        receipt.confidence
+    );
+    if let Some(ref s) = receipt.summary {
+        println!("  {s}");
+    }
+    println!(
+        "outcome: execution={:?} verification={:?} capture={:?}",
+        outcome.execution.status, outcome.verification.status, outcome.capture.status
+    );
+    Ok(())
+}
+
+pub async fn cmd_experiment(
+    store: Arc<dyn TraceStore>,
+    args: &ExperimentArgs,
+    json: bool,
+) -> anyhow::Result<()> {
+    match &args.action {
+        ExperimentAction::Init { name, id } => {
+            let id = id
+                .clone()
+                .unwrap_or_else(|| name.to_lowercase().replace(' ', "-"));
+            let m = ExperimentManifest::new(&id, name);
+            store.upsert_experiment(&m).await?;
+            if json {
+                return output::emit_ok("experiment_init", &m);
+            }
+            println!("experiment {} created", m.id);
+        }
+        ExperimentAction::Show { id } => {
+            let m = store
+                .get_experiment(id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("experiment not found: {id}"))?;
+            if json {
+                return output::emit_ok("experiment_show", &m);
+            }
+            println!("{} — {}", m.id, m.name);
+            println!("tasks: {:?}", m.tasks);
+            println!("variants: {:?}", m.variants);
+        }
+        ExperimentAction::List => {
+            let list = store.list_experiments().await?;
+            if json {
+                return output::emit_ok("experiment_list", &list);
+            }
+            for m in list {
+                println!("{}  {}", m.id, m.name);
+            }
+        }
+        ExperimentAction::Validate { id } => {
+            let m = store
+                .get_experiment(id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("experiment not found: {id}"))?;
+            let runs = store.list_runs_for_experiment(id).await?;
+            let ok = !runs.is_empty();
+            let view = serde_json::json!({
+                "experiment": m,
+                "run_count": runs.len(),
+                "ok": ok,
+                "missing": if ok { Vec::<String>::new() } else { vec!["no linked runs".to_string()] },
+            });
+            if json {
+                return output::emit_ok("experiment_validate", &view);
+            }
+            println!(
+                "experiment {} — {} run(s) — {}",
+                id,
+                runs.len(),
+                if ok { "ok" } else { "incomplete" }
+            );
+        }
+        ExperimentAction::Link {
+            experiment,
+            run_id,
+            task,
+            variant,
+            attempt,
+            role,
+            model,
+        } => {
+            let _ = store
+                .get_experiment(experiment)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("experiment not found: {experiment}"))?;
+            let role = match role.as_deref() {
+                Some("baseline") => ExperimentRole::Baseline,
+                Some("candidate") => ExperimentRole::Candidate,
+                Some("control") => ExperimentRole::Control,
+                Some("treatment") => ExperimentRole::Treatment,
+                _ => ExperimentRole::Unknown,
+            };
+            let meta = RunExperimentMeta {
+                experiment_id: Some(experiment.clone()),
+                task_id: task.clone(),
+                variant: variant.clone(),
+                attempt: *attempt,
+                role,
+                model: model.clone(),
+                ..Default::default()
+            };
+            store.put_run_experiment_meta(run_id, &meta).await?;
+            if json {
+                return output::emit_ok("experiment_link", &meta);
+            }
+            println!("linked run {} → experiment {}", run_id, experiment);
+        }
+    }
+    Ok(())
+}
+
+pub async fn cmd_report(
+    store: Arc<dyn TraceStore>,
+    args: &ReportArgs,
+    json: bool,
+) -> anyhow::Result<()> {
+    let run_ids = store.list_runs_for_experiment(&args.experiment).await?;
+    let mut rows = Vec::new();
+    for rid in run_ids {
+        let Some(run) = store.get_run(&rid).await? else {
+            continue;
+        };
+        let meta = store
+            .get_run_experiment_meta(&rid)
+            .await?
+            .unwrap_or_default();
+        let receipts = store.list_verification_receipts(&rid).await?;
+        let duration_ms = run.duration_ms.or_else(|| {
+            run.ended_at
+                .map(|e| (e - run.started_at).num_milliseconds().max(0) as u64)
+        });
+        rows.push(RunReportInput {
+            run,
+            meta,
+            receipts,
+            capture_complete: true, // conservative default without coverage event
+            duration_ms,
+        });
+    }
+    let report = build_experiment_report(
+        &args.experiment,
+        &args.group_by,
+        &rows,
+        args.min_samples,
+    );
+    if json {
+        return output::emit_ok("report", &report);
+    }
+    println!(
+        "experiment {} group_by={} verdict={:?} n={}",
+        report.experiment_id, report.group_by, report.verdict, report.sample_size_total
+    );
+    for v in &report.variants {
+        println!(
+            "  {}: runs={} verified={}/{} p95_ms={:?}",
+            v.key, v.run_count, v.verified_success, v.run_count, v.duration_p95_ms
+        );
+    }
+    for lim in &report.limitations {
+        println!("  note: {lim}");
+    }
+    Ok(())
+}
+
+pub async fn cmd_gate(
+    store: Arc<dyn TraceStore>,
+    args: &GateArgs,
+    json: bool,
+) -> anyhow::Result<()> {
+    let report_args = ReportArgs {
+        experiment: args.experiment.clone(),
+        group_by: args.group_by.clone(),
+        min_samples: args.min_attempts,
+    };
+    // Build report then gate.
+    let run_ids = store.list_runs_for_experiment(&args.experiment).await?;
+    let mut rows = Vec::new();
+    for rid in run_ids {
+        let Some(run) = store.get_run(&rid).await? else {
+            continue;
+        };
+        let meta = store
+            .get_run_experiment_meta(&rid)
+            .await?
+            .unwrap_or_default();
+        let receipts = store.list_verification_receipts(&rid).await?;
+        let duration_ms = run.duration_ms.or_else(|| {
+            run.ended_at
+                .map(|e| (e - run.started_at).num_milliseconds().max(0) as u64)
+        });
+        rows.push(RunReportInput {
+            run,
+            meta,
+            receipts,
+            capture_complete: true,
+            duration_ms,
+        });
+    }
+    let report = build_experiment_report(
+        &args.experiment,
+        &args.group_by,
+        &rows,
+        args.min_attempts,
+    );
+    let mut config = GateConfig {
+        min_attempts: Some(args.min_attempts),
+        min_verified_rate: args.min_verified_rate,
+        require_capture_complete: args.require_capture_complete,
+        fail_on_insufficient_evidence: true,
+        baseline_key: args.baseline.clone(),
+        candidate_key: args.candidate.clone(),
+        ..Default::default()
+    };
+    if let Some(ref s) = args.max_p95_duration_regression {
+        let s = s.trim().trim_end_matches('%');
+        let v: f64 = s.parse().unwrap_or(0.0);
+        config.max_p95_duration_regression = Some(if v > 1.0 { v / 100.0 } else { v });
+    }
+    let result = evaluate_gate(&report, &config);
+    if json {
+        let _ = report_args;
+        output::emit_ok("gate", &result)?;
+    } else {
+        println!(
+            "gate {} — {}",
+            if result.passed { "PASS" } else { "FAIL" },
+            format!("{:?}", result.verdict)
+        );
+        for f in &result.failures {
+            println!("  FAIL {}: {}", f.rule, f.message);
+        }
+    }
+    if !result.passed {
+        std::process::exit(result.exit_code);
+    }
+    Ok(())
+}
+
+pub async fn cmd_capsule(
+    store: Arc<dyn TraceStore>,
+    args: &CapsuleArgs,
+    json: bool,
+) -> anyhow::Result<()> {
+    match &args.action {
+        CapsuleAction::Create { run_id, output } => {
+            let run = store
+                .get_run(run_id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("run not found"))?;
+            // allow prefix resolution done by caller
+            let receipts = store.list_verification_receipts(&run.id).await?;
+            let json_doc = create_capsule(
+                store.as_ref(),
+                &run,
+                &receipts,
+                None,
+                CapsuleCreateOpts {
+                    include_receipts: true,
+                    ..Default::default()
+                },
+            )
+            .await?;
+            std::fs::write(output, &json_doc)?;
+            let report = inspect_capsule(&json_doc)?;
+            if json {
+                return output::emit_ok(
+                    "capsule_create",
+                    &serde_json::json!({
+                        "path": output,
+                        "manifest": report.manifest,
+                    }),
+                );
+            }
+            println!(
+                "capsule written to {} (completeness={:?})",
+                output.display(),
+                report.completeness
+            );
+        }
+        CapsuleAction::Inspect { path } => {
+            let s = std::fs::read_to_string(path)?;
+            let report = inspect_capsule(&s)?;
+            if json {
+                return output::emit_ok("capsule_inspect", &report);
+            }
+            println!(
+                "capsule source_run={} completeness={:?} integrity_ok={}",
+                report.manifest.source_run_id, report.completeness, report.integrity_ok
+            );
+            for i in &report.issues {
+                println!("  issue: {i}");
+            }
+            println!(
+                "model_replay_deterministic={}",
+                report.model_replay_deterministic
+            );
+        }
+        CapsuleAction::Verify { path } => {
+            let s = std::fs::read_to_string(path)?;
+            let report = inspect_capsule(&s)?;
+            if json {
+                return output::emit_ok("capsule_verify", &report);
+            }
+            if report.integrity_ok {
+                println!("capsule OK");
+            } else {
+                println!("capsule FAILED integrity");
+                for i in &report.issues {
+                    println!("  {i}");
+                }
+                std::process::exit(1);
+            }
+        }
+    }
+    Ok(())
+}
+
+pub async fn cmd_cassette(args: &CassetteArgs, json: bool) -> anyhow::Result<()> {
+    match &args.action {
+        CassetteAction::Inspect { path } => {
+            let s = std::fs::read_to_string(path)?;
+            let cass = CassetteFile::from_json(&s)?;
+            if json {
+                return output::emit_ok("cassette_inspect", &cass);
+            }
+            println!(
+                "cassette protocol={} entries={} experimental={}",
+                cass.protocol,
+                cass.entries.len(),
+                cass.experimental
+            );
+            for lim in &cass.limitations {
+                println!("  limit: {lim}");
+            }
+        }
+        CassetteAction::Match {
+            path,
+            request,
+            mode,
+            tool,
+        } => {
+            let cass = CassetteFile::from_json(&std::fs::read_to_string(path)?)?;
+            let req: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(request)?)?;
+            let mode = match mode.as_str() {
+                "strict" => MatchMode::Strict,
+                "ordered" => MatchMode::Ordered,
+                "allow_extra" => MatchMode::AllowExtra,
+                _ => MatchMode::Normalized,
+            };
+            let (result, _) = match_request(mode, &cass.entries, 0, &req, tool);
+            if json {
+                return output::emit_ok("cassette_match", &result);
+            }
+            println!("matched={} mode={:?}", result.matched, result.mode);
+            if let Some(d) = &result.diff {
+                println!("diff: {d}");
+            }
+        }
+    }
+    Ok(())
+}
+
+pub async fn cmd_budget(args: &BudgetArgs, json: bool) -> anyhow::Result<()> {
+    let policy = BudgetPolicy {
+        max_wall_secs: args.max_wall,
+        max_processes: args.max_processes,
+        max_output_bytes: args.max_output,
+        max_store_growth_bytes: args.max_store_growth,
+        max_tool_calls: args.max_tool_calls,
+        max_tokens: args.max_tokens,
+        contained: args.contained,
+    };
+    let observed = ObservedBudgets {
+        wall_secs: args.observed_wall,
+        processes: args.observed_processes,
+        ..Default::default()
+    };
+    let report = evaluate_budgets(&policy, &observed);
+    if json {
+        return output::emit_ok("budget", &report);
+    }
+    println!("budget capabilities:");
+    for c in &report.capabilities {
+        println!(
+            "  {} {:?} limit={:?} observed={:?}",
+            c.name, c.capability, c.limit, c.observed
+        );
+    }
+    if let Some(ref reason) = report.breach_reason {
+        println!("breach: {reason}");
+    }
+    Ok(())
+}
+
+pub async fn cmd_adapter(args: &AdapterArgs, json: bool) -> anyhow::Result<()> {
+    match &args.action {
+        AdapterAction::Validate { manifest } => {
+            let text = std::fs::read_to_string(manifest)?;
+            let m = if manifest.extension().and_then(|e| e.to_str()) == Some("json") {
+                AdapterManifest::from_json(&text)?
+            } else {
+                AdapterManifest::from_toml(&text)?
+            };
+            let report = validate_adapter_manifest(&m);
+            if json {
+                return output::emit_ok("adapter_validate", &report);
+            }
+            println!(
+                "adapter {} — {}",
+                m.name,
+                if report.ok { "ok" } else { "INVALID" }
+            );
+            for e in &report.errors {
+                println!("  error: {e}");
+            }
+            if !report.ok {
+                std::process::exit(1);
+            }
+        }
+        AdapterAction::Test { manifest, fixtures } => {
+            let text = std::fs::read_to_string(manifest)?;
+            let m = if manifest.extension().and_then(|e| e.to_str()) == Some("json") {
+                AdapterManifest::from_json(&text)?
+            } else {
+                AdapterManifest::from_toml(&text)?
+            };
+            let mut report = validate_adapter_manifest(&m);
+            if let Some(fix) = fixtures {
+                let body = std::fs::read_to_string(fix)?;
+                for (i, line) in body.lines().enumerate() {
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    let ev = validate_adapter_event(line);
+                    if !ev.ok {
+                        report.ok = false;
+                        for e in ev.errors {
+                            report.errors.push(format!("line {}: {e}", i + 1));
+                        }
+                    }
+                }
+            }
+            if json {
+                return output::emit_ok("adapter_test", &report);
+            }
+            println!(
+                "adapter test {} — {}",
+                m.name,
+                if report.ok { "ok" } else { "FAILED" }
+            );
+            for e in &report.errors {
+                println!("  {e}");
+            }
+            if !report.ok {
+                std::process::exit(1);
+            }
+        }
+    }
+    Ok(())
+}
+
+pub async fn cmd_projects(args: &ProjectsArgs, json: bool) -> anyhow::Result<()> {
+    let index_path = default_index_path();
+    match &args.action {
+        ProjectsAction::Scan { roots } => {
+            let found = discover_project_stores(roots);
+            let mut reg = ProjectRegistry::load(&index_path).unwrap_or_else(|_| ProjectRegistry::empty());
+            for e in found {
+                reg.upsert(e);
+            }
+            reg.save(&index_path)?;
+            if json {
+                return output::emit_ok("projects_scan", &reg);
+            }
+            println!(
+                "indexed {} project store(s) → {}",
+                reg.entries.len(),
+                index_path.display()
+            );
+            println!("note: index is metadata-only; stores remain authoritative");
+        }
+        ProjectsAction::List { query, limit } => {
+            let reg = ProjectRegistry::load(&index_path).unwrap_or_else(|_| ProjectRegistry::empty());
+            let q = ProjectIndexQuery {
+                name_substr: query.clone(),
+                limit: Some(*limit),
+            };
+            let hits: Vec<_> = reg.query(&q).into_iter().cloned().collect();
+            if json {
+                return output::emit_ok("projects_list", &hits);
+            }
+            for e in hits {
+                println!(
+                    "{}  store={}",
+                    e.project_root.display(),
+                    e.store_path.display()
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Open store as Arc for shared handlers.
+pub fn store_arc(store: SqliteStore) -> Arc<dyn TraceStore> {
+    Arc::new(store)
+}
+
+/// Spool directory next to blobs: `<blackbox_root>/spool`.
+pub fn spool_dir_from_blob_dir(blob_dir: &std::path::Path) -> PathBuf {
+    blob_dir
+        .parent()
+        .unwrap_or(blob_dir)
+        .join("spool")
+}
+
+/// Recovery artifacts directory.
+pub fn recovery_dir_from_blob_dir(blob_dir: &std::path::Path) -> PathBuf {
+    blob_dir
+        .parent()
+        .unwrap_or(blob_dir)
+        .join("recovery")
+}
+
+/// Ensure spool exists (best-effort).
+pub fn ensure_spool(blob_dir: &std::path::Path) -> anyhow::Result<EventSpool> {
+    EventSpool::open(spool_dir_from_blob_dir(blob_dir))
+}
+
+/// Mode helper
+pub fn is_json(mode: OutputMode) -> bool {
+    matches!(mode, OutputMode::Json)
+}

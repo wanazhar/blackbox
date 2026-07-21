@@ -121,6 +121,26 @@ pub enum Command {
     Backup(BackupArgs),
     /// Restore a sealed store backup
     Restore(RestoreArgs),
+    /// Store integrity check (1.6)
+    Fsck(crate::cli_ext::FsckArgs),
+    /// Verify a run with an immutable receipt (1.6)
+    Verify(crate::cli_ext::VerifyArgs),
+    /// Structured experiments (1.6)
+    Experiment(crate::cli_ext::ExperimentArgs),
+    /// Multi-run experiment report (1.6)
+    Report(crate::cli_ext::ReportArgs),
+    /// CI regression gate (1.6)
+    Gate(crate::cli_ext::GateArgs),
+    /// Reproducibility capsule (1.6)
+    Capsule(crate::cli_ext::CapsuleArgs),
+    /// MCP cassette tools (experimental, 1.6)
+    Cassette(crate::cli_ext::CassetteArgs),
+    /// Show execution budget capabilities (1.6)
+    Budget(crate::cli_ext::BudgetArgs),
+    /// External adapter protocol (1.6)
+    Adapter(crate::cli_ext::AdapterArgs),
+    /// Multi-project metadata index (1.6)
+    Projects(crate::cli_ext::ProjectsArgs),
 }
 
 #[derive(Args, Clone)]
@@ -904,6 +924,59 @@ impl Cli {
             Command::Mcp => cmd_mcp(self).await,
             Command::Backup(args) => cmd_backup(self, args).await,
             Command::Restore(args) => cmd_restore(self, args).await,
+            Command::Fsck(args) => {
+                let store = open_store(self)?;
+                let blob_dir = store.blob_dir().to_path_buf();
+                let spool = crate::cli_ext::spool_dir_from_blob_dir(&blob_dir);
+                let recovery = crate::cli_ext::recovery_dir_from_blob_dir(&blob_dir);
+                crate::cli_ext::cmd_fsck(
+                    std::sync::Arc::new(store),
+                    blob_dir,
+                    spool,
+                    recovery,
+                    args,
+                    self.json,
+                )
+                .await
+            }
+            Command::Verify(args) => {
+                let store = open_store(self)?;
+                let run_id = resolve_run_id(&store, &args.run_id).await?;
+                let cwd = std::env::current_dir()?;
+                crate::cli_ext::cmd_verify(
+                    std::sync::Arc::new(store),
+                    &run_id,
+                    &cwd,
+                    args,
+                    self.json,
+                )
+                .await
+            }
+            Command::Experiment(args) => {
+                let store = open_store(self)?;
+                crate::cli_ext::cmd_experiment(std::sync::Arc::new(store), args, self.json).await
+            }
+            Command::Report(args) => {
+                let store = open_store(self)?;
+                crate::cli_ext::cmd_report(std::sync::Arc::new(store), args, self.json).await
+            }
+            Command::Gate(args) => {
+                let store = open_store(self)?;
+                crate::cli_ext::cmd_gate(std::sync::Arc::new(store), args, self.json).await
+            }
+            Command::Capsule(args) => {
+                let store = open_store(self)?;
+                // Resolve run id for create subcommand when needed
+                let mut args = args.clone();
+                if let crate::cli_ext::CapsuleAction::Create { ref mut run_id, .. } = args.action {
+                    *run_id = resolve_run_id(&store, run_id).await?;
+                }
+                crate::cli_ext::cmd_capsule(std::sync::Arc::new(store), &args, self.json).await
+            }
+            Command::Cassette(args) => crate::cli_ext::cmd_cassette(args, self.json).await,
+            Command::Budget(args) => crate::cli_ext::cmd_budget(args, self.json).await,
+            Command::Adapter(args) => crate::cli_ext::cmd_adapter(args, self.json).await,
+            Command::Projects(args) => crate::cli_ext::cmd_projects(args, self.json).await,
         }
     }
 }

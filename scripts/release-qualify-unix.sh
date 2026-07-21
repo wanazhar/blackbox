@@ -140,9 +140,9 @@ else
   run_gate "docs first-run + envelope + commands" \
     cargo test --test docs_first_run --test docs_cli_envelope --test docs_commands -- --quiet || true
   # 1.6 integrity + verification suite (non-endurance)
-  run_gate "1.6: integrity suite" cargo test --test fsck_corruption --test ingest_spool_recovery --test verification_receipts --test experiment_reports --test regression_gate --test capsule_integrity --test workspace_symlink_safety --test portable_v2_references --test pagination_filtered_scale --test blob_reference_rewrite --test aggregate_semantics -- --quiet || true
+  run_gate "1.6: integrity suite" cargo test --test fsck_corruption --test ingest_spool_recovery --test verification_receipts --test experiment_reports --test regression_gate --test capsule_integrity --test workspace_symlink_safety --test portable_v2_references --test pagination_filtered_scale --test blob_reference_rewrite --test aggregate_semantics --test mcp_record_e2e --test budget_cgroup_linux -- --quiet || true
   # Real 100k-event endurance (ignored by default unit filter; force with --ignored)
-  run_gate "1.6: endurance_100k" cargo test --test endurance_100k -- --ignored --quiet || true
+  run_gate "1.6: endurance_100k" cargo test --test endurance_100k -- --quiet || true
 fi
 
 if [ "$DO_RELEASE_BUILD" -eq 1 ]; then

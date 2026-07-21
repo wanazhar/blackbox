@@ -217,6 +217,10 @@ pub struct BudgetArgs {
     #[arg(long)]
     pub max_tokens: Option<u64>,
     #[arg(long)]
+    pub max_memory: Option<u64>,
+    #[arg(long)]
+    pub max_cpu_percent: Option<u32>,
+    #[arg(long)]
     pub contained: bool,
     /// Optional observed values for evaluation demo
     #[arg(long)]
@@ -819,6 +823,8 @@ pub async fn cmd_budget(args: &BudgetArgs, json: bool) -> anyhow::Result<()> {
         max_store_growth_bytes: args.max_store_growth,
         max_tool_calls: args.max_tool_calls,
         max_tokens: args.max_tokens,
+        max_memory_bytes: args.max_memory,
+        max_cpu_percent: args.max_cpu_percent,
         contained: args.contained,
     };
     let observed = ObservedBudgets {

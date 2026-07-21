@@ -441,10 +441,16 @@ impl RunSupervisor {
         process_capture.set_pid(child_pid);
         process_capture.emit_spawned().await;
 
-        // 1.6 budgets: apply rlimits (Linux) + wall/process watchdogs.
+        // 1.6 budgets: rlimits + cgroup v2 (when writable) + wall/process watchdogs.
         let budget_notes = crate::budget::apply_process_rlimits(&self.budget);
         if !budget_notes.is_empty() {
             tracing::debug!(?budget_notes, "budget rlimit notes");
+        }
+        // Hold cgroup leaf for the child lifetime (Drop cleans up).
+        let cgroup_scope = crate::budget::CgroupScope::create_for_pid(child_pid, &self.budget);
+        let cgroup_report = cgroup_scope.as_ref().map(|(_, r)| r.clone());
+        if let Some((_, ref rep)) = cgroup_scope {
+            tracing::debug!(?rep.notes, "cgroup budget applied");
         }
         let mut wall_watch = None;
         let mut proc_watch = None;
@@ -469,7 +475,10 @@ impl RunSupervisor {
         {
             let mut be = TraceEvent::new(&run.id, EventSource::System, "run.budget.capabilities");
             be.status = EventStatus::Success;
-            let caps = crate::budget::linux_enforcement_status(&self.budget);
+            let caps = crate::budget::linux_enforcement_status_with_cgroup(
+                &self.budget,
+                cgroup_report.as_ref(),
+            );
             be.metadata.insert(
                 "capabilities".into(),
                 serde_json::to_value(&caps).unwrap_or_default(),
@@ -478,8 +487,22 @@ impl RunSupervisor {
                 "policy".into(),
                 serde_json::to_value(&self.budget).unwrap_or_default(),
             );
+            if let Some(ref rep) = cgroup_report {
+                be.metadata.insert(
+                    "cgroup".into(),
+                    serde_json::json!({
+                        "path": rep.path.as_ref().map(|p| p.display().to_string()),
+                        "memory_enforced": rep.memory_enforced,
+                        "cpu_enforced": rep.cpu_enforced,
+                        "pids_enforced": rep.pids_enforced,
+                        "notes": rep.notes,
+                    }),
+                );
+            }
             let _ = writer.write(be).await;
         }
+        // Keep scope alive until child exit (explicit use).
+        let _cgroup_scope = cgroup_scope;
 
         // Share master so we can resize on SIGWINCH while I/O runs.
         let master = std::sync::Arc::new(std::sync::Mutex::new(pair.master));

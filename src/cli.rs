@@ -565,6 +565,12 @@ pub struct RunArgs {
     /// Max observed tokens (observed-only unless harness enforces)
     #[arg(long)]
     pub max_tokens: Option<u64>,
+    /// Max memory bytes (cgroup v2 memory.max when available; else RLIMIT_AS)
+    #[arg(long)]
+    pub max_memory: Option<u64>,
+    /// Max CPU bandwidth as percent of one core (cgroup v2 cpu.max), e.g. 50
+    #[arg(long)]
+    pub max_cpu_percent: Option<u32>,
     /// Prefer contained launch backends where available (budget capability report)
     #[arg(long)]
     pub contained: bool,
@@ -1366,6 +1372,8 @@ async fn cmd_run(cli: &Cli, args: &RunArgs) -> anyhow::Result<()> {
         max_output_bytes: args.max_output,
         max_tool_calls: args.max_tool_calls,
         max_tokens: args.max_tokens,
+        max_memory_bytes: args.max_memory,
+        max_cpu_percent: args.max_cpu_percent,
         contained: args.contained,
         ..Default::default()
     };

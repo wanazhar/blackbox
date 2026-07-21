@@ -28,8 +28,15 @@ pub fn apply_process_rlimits(policy: &BudgetPolicy) -> Vec<String> {
             notes.push(format!("RLIMIT_NPROC={n} applied"));
         }
     }
-    // Address space as a crude memory ceiling when max_output is huge we skip;
-    // use max_output_bytes only for observed output, not AS.
+    // Address-space ceiling as portable memory backstop when cgroup memory.max
+    // is not writable. Not exact RSS; still useful.
+    if let Some(bytes) = policy.max_memory_bytes {
+        if let Err(e) = set_rlimit(libc::RLIMIT_AS, bytes, bytes) {
+            notes.push(format!("RLIMIT_AS unavailable: {e}"));
+        } else {
+            notes.push(format!("RLIMIT_AS={bytes} applied (address-space backstop)"));
+        }
+    }
     let _ = policy.max_output_bytes;
     notes
 }
@@ -196,6 +203,14 @@ pub fn spawn_process_count_watchdog(
 
 /// Enrich capability notes after applying Linux backends.
 pub fn linux_enforcement_status(policy: &BudgetPolicy) -> Vec<BudgetStatus> {
+    linux_enforcement_status_with_cgroup(policy, None)
+}
+
+/// Same as [`linux_enforcement_status`] but folds an applied cgroup report.
+pub fn linux_enforcement_status_with_cgroup(
+    policy: &BudgetPolicy,
+    cgroup: Option<&crate::budget::cgroup::CgroupApplyReport>,
+) -> Vec<BudgetStatus> {
     let mut caps = policy.capability_report();
     for c in &mut caps {
         if c.name == "process_count" && policy.max_processes.is_some() {
@@ -215,6 +230,7 @@ pub fn linux_enforcement_status(policy: &BudgetPolicy) -> Vec<BudgetStatus> {
             c.note = Some("wall watchdog SIGKILL".into());
         }
     }
+    crate::budget::cgroup::enrich_capabilities_with_cgroup(policy, &mut caps, cgroup);
     caps
 }
 

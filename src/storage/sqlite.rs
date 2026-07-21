@@ -1642,7 +1642,8 @@ impl TraceStore for SqliteStore {
                     ],
                 )
                 .context("failed to insert event in batch")?;
-                let _ = fts_upsert_in_tx(&tx, event);
+                // Batch inserts are new event IDs — insert-only FTS (skip DELETE).
+                let _ = fts_insert_in_tx(&tx, event);
                 let agg = agg_cache.entry(event.run_id.clone()).or_insert_with(|| {
                     load_aggregates(&tx, &event.run_id)
                         .ok()
@@ -1659,10 +1660,8 @@ impl TraceStore for SqliteStore {
             tx.commit()
                 .context("failed to commit insert_events_batch transaction")?;
         }
-        // Flush WAL after batch write to keep WAL size bounded.
-        if let Err(e) = self.wal_checkpoint() {
-            tracing::warn!(error = %e, "post-batch WAL checkpoint failed (non-fatal)");
-        }
+        // Checkpoint occasionally — every batch is too expensive at 100k scale.
+        // Callers that need a tight WAL (export/backup) still call wal_checkpoint.
         tokio::task::yield_now().await;
         Ok(())
     }
@@ -2233,6 +2232,26 @@ fn fts_upsert_in_tx(tx: &rusqlite::Transaction, event: &TraceEvent) -> anyhow::R
         ],
     )
     .context("failed to upsert events_fts")?;
+    Ok(())
+}
+
+/// FTS insert for brand-new event IDs (batch ingest hot path — no DELETE).
+fn fts_insert_in_tx(tx: &rusqlite::Transaction, event: &TraceEvent) -> anyhow::Result<()> {
+    let source_str = serde_json::to_string(&event.source).unwrap_or_else(|_| "Unknown".to_string());
+    let status_str = serde_json::to_string(&event.status).unwrap_or_else(|_| "Unknown".to_string());
+    tx.execute(
+        "INSERT INTO events_fts(event_id, run_id, kind, source, status, body)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            event.id,
+            event.run_id,
+            event.kind,
+            source_str,
+            status_str,
+            event_search_body(event),
+        ],
+    )
+    .context("failed to insert events_fts")?;
     Ok(())
 }
 

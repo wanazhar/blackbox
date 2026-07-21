@@ -39,6 +39,12 @@ pub struct BudgetPolicy {
     pub max_tool_calls: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u64>,
+    /// RSS/address-space budget (cgroup v2 `memory.max` when available).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_memory_bytes: Option<u64>,
+    /// CPU bandwidth as percent of one CPU (cgroup v2 `cpu.max`); e.g. 50 = half a core.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_cpu_percent: Option<u32>,
     #[serde(default)]
     pub contained: bool,
 }
@@ -133,6 +139,51 @@ impl BudgetPolicy {
             observed: None,
             unit: Some("tokens".into()),
             note: Some("token budgets are observed-only unless harness enforces".into()),
+        });
+
+        out.push(BudgetStatus {
+            name: "memory".into(),
+            capability: if self.max_memory_bytes.is_some() {
+                if linux {
+                    // Refined later by cgroup probe / apply report.
+                    BudgetCapability::ObservedOnly
+                } else {
+                    BudgetCapability::Unavailable
+                }
+            } else {
+                BudgetCapability::NotApplicable
+            },
+            limit: self.max_memory_bytes,
+            observed: None,
+            unit: Some("bytes".into()),
+            note: if self.max_memory_bytes.is_some() && linux {
+                Some("prefers cgroup v2 memory.max; else RLIMIT_AS".into())
+            } else if self.max_memory_bytes.is_some() {
+                Some("cgroup memory not available on this OS".into())
+            } else {
+                None
+            },
+        });
+
+        out.push(BudgetStatus {
+            name: "cpu".into(),
+            capability: if self.max_cpu_percent.is_some() {
+                if linux {
+                    BudgetCapability::ObservedOnly
+                } else {
+                    BudgetCapability::Unavailable
+                }
+            } else {
+                BudgetCapability::NotApplicable
+            },
+            limit: self.max_cpu_percent.map(|p| p as u64),
+            observed: None,
+            unit: Some("percent_of_cpu".into()),
+            note: if self.max_cpu_percent.is_some() && linux {
+                Some("prefers cgroup v2 cpu.max; RLIMIT_CPU is time backstop only".into())
+            } else {
+                None
+            },
         });
 
         out.push(BudgetStatus {

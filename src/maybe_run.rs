@@ -167,6 +167,8 @@ pub fn run_args_for_record(
         max_output: None,
         max_tool_calls: None,
         max_tokens: None,
+        max_memory: None,
+        max_cpu_percent: None,
         contained: false,
         command,
         resume_injection: None,

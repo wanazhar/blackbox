@@ -25,7 +25,15 @@ Each limit is classified independently:
 | `unavailable` | Requested but not available on this OS |
 | `not_applicable` | Not configured |
 
-On Linux, wall-time uses a SIGKILL watchdog; process count uses `RLIMIT_NPROC` plus a `/proc` descendant poller. Token budgets remain observed-only unless a harness enforces them. Unsupported limits **never** appear as `enforced`.
+On Linux:
+
+- **Wall time** — SIGKILL watchdog (`--max-wall`)
+- **Process count** — `RLIMIT_NPROC` + `/proc` descendant poller; cgroup v2 `pids.max` when writable
+- **Memory** — cgroup v2 `memory.max` when the leaf is writable; otherwise `RLIMIT_AS` address-space backstop (`--max-memory`)
+- **CPU bandwidth** — cgroup v2 `cpu.max` when writable (`--max-cpu-percent`); `RLIMIT_CPU` remains a CPU-time backstop only
+- **Tokens** — observed-only unless a harness enforces them
+
+Unsupported limits **never** appear as `enforced`. A `run.budget.capabilities` event records which backend applied (including cgroup path/notes).
 
 Budget termination emits `run.budget.breach` and is distinguishable from ordinary child failure.
 

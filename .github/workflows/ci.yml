@@ -55,6 +55,22 @@ jobs:
             --test pagination_scale --test replay_containment_linux \
             --test docs_commands -- --quiet
 
+      # 1.6 verified-runs gates (includes 100k endurance — not ignored)
+      - name: Verified-runs gates (1.6)
+        run: |
+          cargo test \
+            --test fsck_corruption --test ingest_spool_recovery \
+            --test verification_receipts --test experiment_reports \
+            --test regression_gate --test capsule_integrity \
+            --test workspace_symlink_safety --test portable_v2_references \
+            --test pagination_filtered_scale --test blob_reference_rewrite \
+            --test aggregate_semantics --test mcp_cassette \
+            --test mcp_proxy_smoke --test mcp_record_e2e \
+            --test budget_enforcement_linux --test budget_cgroup_linux \
+            --test run_experiment_flags --test multi_project_index \
+            --test adapter_conformance --test endurance_100k \
+            -- --quiet
+
   # 1.5 Q1: lightweight macOS runtime gate on every PR (not only tag-time build).
   macos:
     name: macOS runtime gate

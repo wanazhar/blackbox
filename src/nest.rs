@@ -39,21 +39,35 @@ impl ActiveSupervisorGuard {
     /// // `acquire` — see module docs for full workflow.
     /// ```
     pub fn acquire(run_id: &str) -> Self {
-        let dir = ensure_private_supervisor_dir();
-        let path = dir.join(std::process::id().to_string());
-        if let Ok(mut f) = fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(&path)
-        {
-            let _ = writeln!(f, "{run_id}");
-            #[cfg(unix)]
+        let marker_name = std::process::id().to_string();
+        let mut selected = None;
+        for dir in supervisor_dir_candidates() {
+            if !try_prepare_marker_dir(&dir) {
+                continue;
+            }
+            let path = dir.join(&marker_name);
+            if let Ok(mut f) = fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&path)
             {
-                use std::os::unix::fs::PermissionsExt;
-                let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+                if writeln!(f, "{run_id}").is_err() {
+                    let _ = fs::remove_file(&path);
+                    continue;
+                }
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+                }
+                selected = Some(path);
+                break;
             }
         }
+        // Preserve the best-effort API when all marker locations are
+        // unavailable. This path was never created, so Drop is a no-op.
+        let path = selected.unwrap_or_else(|| supervisor_dir().join(marker_name));
         Self { path }
     }
 
@@ -115,22 +129,6 @@ fn supervisor_dir_candidates() -> Vec<PathBuf> {
         candidates.push(home);
     }
     candidates
-}
-
-/// Create/verify a private marker directory (owner-only, self-owned on Unix).
-fn ensure_private_supervisor_dir() -> PathBuf {
-    let candidates = supervisor_dir_candidates();
-    for dir in &candidates {
-        if try_prepare_marker_dir(dir) {
-            return dir.clone();
-        }
-    }
-    // Keep the historical best-effort API: callers get a deterministic path
-    // even if every candidate is unavailable. `acquire` then leaves no marker.
-    candidates
-        .into_iter()
-        .next()
-        .unwrap_or_else(temporary_supervisor_dir)
 }
 
 fn try_prepare_marker_dir(dir: &Path) -> bool {

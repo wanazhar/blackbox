@@ -18,16 +18,16 @@ pub fn parse_junit_xml(xml: &str) -> anyhow::Result<JunitSummary> {
     // Attribute extraction without a full XML dependency.
     for tag in ["testsuites", "testsuite"] {
         if let Some(attrs) = open_tag_attrs(xml, tag) {
-            if let Some(n) = attr_u64(&attrs, "tests") {
+            if let Some(n) = attr_u64(attrs, "tests") {
                 summary.tests = summary.tests.max(n);
             }
-            if let Some(n) = attr_u64(&attrs, "failures") {
+            if let Some(n) = attr_u64(attrs, "failures") {
                 summary.failures = summary.failures.saturating_add(n);
             }
-            if let Some(n) = attr_u64(&attrs, "errors") {
+            if let Some(n) = attr_u64(attrs, "errors") {
                 summary.errors = summary.errors.saturating_add(n);
             }
-            if let Some(n) = attr_u64(&attrs, "skipped") {
+            if let Some(n) = attr_u64(attrs, "skipped") {
                 summary.skipped = summary.skipped.saturating_add(n);
             }
         }

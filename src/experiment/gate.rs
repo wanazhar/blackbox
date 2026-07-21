@@ -21,6 +21,14 @@ pub struct GateConfig {
     pub baseline_key: Option<String>,
     #[serde(default)]
     pub candidate_key: Option<String>,
+    /// When true, only domain-Confirmed verified successes count toward
+    /// `min_verified_rate` (weakly correlated passes do not satisfy the gate).
+    #[serde(default = "default_true")]
+    pub require_domain_confirmed: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for GateConfig {
@@ -34,6 +42,7 @@ impl Default for GateConfig {
             fail_on_insufficient_evidence: true,
             baseline_key: None,
             candidate_key: None,
+            require_domain_confirmed: true,
         }
     }
 }
@@ -87,14 +96,25 @@ pub fn evaluate_gate(report: &ExperimentReport, config: &GateConfig) -> GateResu
 
     if let Some(min_rate) = config.min_verified_rate {
         for v in &report.variants {
-            let rate = v.verified_rate.unwrap_or(0.0);
+            // Prefer domain-confirmed rate when the report provides it.
+            let rate = if config.require_domain_confirmed {
+                v.domain_confirmed_rate
+                    .or(v.verified_rate)
+                    .unwrap_or(0.0)
+            } else {
+                v.verified_rate.unwrap_or(0.0)
+            };
             // Never treat unverified execution success as verified.
             if rate < min_rate {
                 failures.push(GateRuleFailure {
-                    rule: "min_verified_rate".into(),
+                    rule: if config.require_domain_confirmed {
+                        "min_domain_confirmed_rate".into()
+                    } else {
+                        "min_verified_rate".into()
+                    },
                     message: format!(
-                        "variant {} verified_rate={rate:.3} < {min_rate:.3} (execution success is not verification)",
-                        v.key
+                        "variant {} verified_rate={rate:.3} < {min_rate:.3} (execution success is not verification; domain_confirmed={})",
+                        v.key, config.require_domain_confirmed
                     ),
                     contributing_runs: vec![],
                 });

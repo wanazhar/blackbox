@@ -5,7 +5,9 @@ use serde::{Deserialize, Serialize};
 use crate::core::run::{Run, RunStatus};
 use crate::experiment::model::{ExperimentRole, RunExperimentMeta};
 use crate::experiment::stats::{median_f64, percentile, StatisticalNote};
-use crate::verification::{VerificationReceipt, VerificationStatus};
+use crate::verification::{
+    VerificationConfidence, VerificationReceipt, VerificationStatus,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -24,6 +26,9 @@ pub struct VariantMetrics {
     pub run_count: usize,
     pub execution_success: usize,
     pub verified_success: usize,
+    /// Passed receipts with Confirmed confidence (domain-matched).
+    #[serde(default)]
+    pub domain_confirmed: usize,
     pub unverified: usize,
     pub capture_complete: usize,
     pub excluded_incomplete: usize,
@@ -33,6 +38,8 @@ pub struct VariantMetrics {
     pub duration_p95_ms: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verified_rate: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub domain_confirmed_rate: Option<f64>,
     pub denominator_note: String,
 }
 
@@ -78,6 +85,7 @@ pub fn build_experiment_report(
         let run_count = items.len();
         let mut execution_success = 0usize;
         let mut verified_success = 0usize;
+        let mut domain_confirmed = 0usize;
         let mut unverified = 0usize;
         let mut capture_complete = 0usize;
         let mut excluded = 0usize;
@@ -88,9 +96,17 @@ pub fn build_experiment_report(
                 execution_success += 1;
             }
             let latest = item.receipts.last();
-            match latest.map(|r| &r.status) {
-                Some(VerificationStatus::Passed) => verified_success += 1,
-                Some(VerificationStatus::Unverified) | None => unverified += 1,
+            match latest {
+                Some(r) if matches!(r.status, VerificationStatus::Passed) => {
+                    verified_success += 1;
+                    if matches!(r.confidence, VerificationConfidence::Confirmed) {
+                        domain_confirmed += 1;
+                    }
+                }
+                Some(r) if matches!(r.status, VerificationStatus::Unverified) => {
+                    unverified += 1;
+                }
+                None => unverified += 1,
                 _ => {}
             }
             if item.capture_complete {
@@ -105,6 +121,11 @@ pub fn build_experiment_report(
 
         let verified_rate = if run_count > 0 {
             Some(verified_success as f64 / run_count as f64)
+        } else {
+            None
+        };
+        let domain_confirmed_rate = if run_count > 0 {
+            Some(domain_confirmed as f64 / run_count as f64)
         } else {
             None
         };
@@ -123,14 +144,16 @@ pub fn build_experiment_report(
             run_count,
             execution_success,
             verified_success,
+            domain_confirmed,
             unverified,
             capture_complete,
             excluded_incomplete: excluded,
             duration_median_ms: med,
             duration_p95_ms: p95,
             verified_rate,
+            domain_confirmed_rate,
             denominator_note: format!(
-                "rates use run_count={run_count}; unverified not counted as verified success"
+                "rates use run_count={run_count}; domain_confirmed requires Passed+Confirmed confidence"
             ),
         });
     }

@@ -2,10 +2,13 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use clap::{Args, Subcommand};
 
-use crate::adapter_protocol::{validate_adapter_event, validate_adapter_manifest, AdapterManifest};
+use crate::adapter_protocol::{
+    run_live_conformance, validate_adapter_event, validate_adapter_manifest, AdapterManifest,
+};
 use crate::budget::{evaluate_budgets, BudgetPolicy, ObservedBudgets};
 use crate::capsule::{create_capsule, CapsuleCreateOpts};
 use crate::capsule::inspect_capsule;
@@ -154,6 +157,16 @@ pub enum CapsuleAction {
     Verify {
         path: PathBuf,
     },
+    /// Import capsule portable archive into the store (optional re-execute contained).
+    Execute {
+        path: PathBuf,
+        /// Prefer contained/sandbox backends when re-running the recorded command.
+        #[arg(long, default_value_t = true)]
+        contained: bool,
+        /// Also re-run the recorded command after import (experimental).
+        #[arg(long, default_value_t = false)]
+        rerun: bool,
+    },
 }
 
 #[derive(Args)]
@@ -265,6 +278,12 @@ pub enum ProjectsAction {
         query: Option<String>,
         #[arg(long, default_value_t = 50)]
         limit: usize,
+    },
+    /// Remove index entries whose store path no longer exists
+    Prune,
+    /// Remove a specific project root from the index (metadata only)
+    Remove {
+        project_root: PathBuf,
     },
 }
 
@@ -381,6 +400,31 @@ pub async fn cmd_verify(
     if let Some(ref p) = args.parent {
         receipt.parent_receipt_id = Some(p.clone());
     }
+    // Domain match: correlate receipt to latest failure event when present.
+    {
+        let errors = store.get_error_events(run_id, 8).await.unwrap_or_default();
+        let failure = errors.last();
+        let domain = crate::verification::match_receipt_to_failure(
+            &receipt,
+            failure,
+            &[],
+        );
+        receipt.confidence = crate::verification::confidence_from_domain(domain.class);
+        if receipt.failure_fingerprint.is_none() {
+            if let Some(ev) = failure {
+                receipt.failure_fingerprint =
+                    Some(crate::verification::domain::failure_fingerprint(ev));
+            }
+        }
+        if receipt.verified_scope.is_none() {
+            receipt.verified_scope = args.scope.clone();
+        }
+        receipt.limitations.push(format!(
+            "domain_match={:?} score={}",
+            domain.class, domain.score
+        ));
+    }
+
     store.insert_verification_receipt(&receipt).await?;
 
     let run = store
@@ -496,7 +540,7 @@ pub async fn cmd_experiment(
                 Some("treatment") => ExperimentRole::Treatment,
                 _ => ExperimentRole::Unknown,
             };
-            let meta = RunExperimentMeta {
+            let mut meta = RunExperimentMeta {
                 experiment_id: Some(experiment.clone()),
                 task_id: task.clone(),
                 variant: variant.clone(),
@@ -505,6 +549,21 @@ pub async fn cmd_experiment(
                 model: model.clone(),
                 ..Default::default()
             };
+            if meta.attempt.is_none() {
+                let run_ids = store.list_runs_for_experiment(experiment).await?;
+                let mut existing = Vec::new();
+                for rid in run_ids {
+                    if &rid == run_id {
+                        continue;
+                    }
+                    if let Ok(Some(m)) = store.get_run_experiment_meta(&rid).await {
+                        existing.push(m);
+                    }
+                }
+                meta.attempt =
+                    Some(crate::experiment::next_attempt_number(&existing, &meta));
+            }
+            meta = meta.with_fingerprint();
             store.put_run_experiment_meta(run_id, &meta).await?;
             if json {
                 return output::emit_ok("experiment_link", &meta);
@@ -628,9 +687,9 @@ pub async fn cmd_gate(
         output::emit_ok("gate", &result)?;
     } else {
         println!(
-            "gate {} — {}",
+            "gate {} — {:?}",
             if result.passed { "PASS" } else { "FAIL" },
-            format!("{:?}", result.verdict)
+            result.verdict
         );
         for f in &result.failures {
             println!("  FAIL {}: {}", f.rule, f.message);
@@ -716,6 +775,81 @@ pub async fn cmd_capsule(
                 }
                 std::process::exit(1);
             }
+        }
+        CapsuleAction::Execute {
+            path,
+            contained,
+            rerun,
+        } => {
+            let s = std::fs::read_to_string(path)?;
+            let report = inspect_capsule(&s)?;
+            if !report.integrity_ok {
+                anyhow::bail!("capsule integrity failed; refuse execute");
+            }
+            let root: serde_json::Value = serde_json::from_str(&s)?;
+            let portable = root
+                .get("portable")
+                .ok_or_else(|| anyhow::anyhow!("capsule missing portable section"))?;
+            let portable_json = serde_json::to_string(portable)?;
+            let imported =
+                crate::export::portable::import_portable(store.as_ref(), &portable_json, true)
+                    .await?;
+            // Re-attach receipts from capsule when present.
+            if let Some(arr) = root.get("receipts").and_then(|v| v.as_array()) {
+                for r in arr {
+                    if let Ok(mut receipt) =
+                        serde_json::from_value::<crate::verification::VerificationReceipt>(
+                            r.clone(),
+                        )
+                    {
+                        receipt.run_id = imported.run_id.clone();
+                        receipt.id = format!("verify-{}", uuid::Uuid::new_v4());
+                        let _ = store.insert_verification_receipt(&receipt).await;
+                    }
+                }
+            }
+            let mut view = serde_json::json!({
+                "imported_run_id": imported.run_id,
+                "events": imported.events,
+                "blobs": imported.blobs,
+                "contained": *contained,
+                "rerun": *rerun,
+                "completeness": report.completeness,
+                "model_replay_deterministic": false,
+                "note": "capsule execute imports portable archive; model output is not deterministic replay",
+            });
+            if *rerun {
+                let cmd = report.manifest.command.clone();
+                if cmd.is_empty() {
+                    anyhow::bail!("capsule has empty command; cannot rerun");
+                }
+                let budget = BudgetPolicy {
+                    contained: *contained,
+                    ..Default::default()
+                };
+                let args = crate::cli::RunArgs {
+                    command: cmd,
+                    contained: *contained,
+                    ..Default::default()
+                };
+                let supervisor =
+                    crate::run::RunSupervisor::new(Arc::clone(&store)).with_budget(budget);
+                let new_run = supervisor.execute(&args).await?;
+                view["rerun_run_id"] = serde_json::json!(new_run.id);
+                view["rerun_status"] = serde_json::json!(format!("{:?}", new_run.status));
+            }
+            if json {
+                return output::emit_ok("capsule_execute", &view);
+            }
+            println!(
+                "capsule imported run {} (events={} blobs={}) contained={} rerun={}",
+                crate::util::short_id(&imported.run_id),
+                imported.events,
+                imported.blobs,
+                contained,
+                rerun
+            );
+            println!("model_replay_deterministic=false");
         }
     }
     Ok(())
@@ -897,6 +1031,20 @@ pub async fn cmd_adapter(args: &AdapterArgs, json: bool) -> anyhow::Result<()> {
                     }
                 }
             }
+            // Live process conformance: run adapter command and validate NDJSON stdout.
+            if report.ok && !m.command.is_empty() {
+                let live = run_live_conformance(&m, Duration::from_secs(5));
+                report.warnings.extend(live.warnings);
+                if !live.ok {
+                    report.ok = false;
+                    report.errors.extend(live.errors);
+                } else if live.events_validated > 0 {
+                    report.warnings.push(format!(
+                        "live process emitted {} valid event(s)",
+                        live.events_validated
+                    ));
+                }
+            }
             if json {
                 return output::emit_ok("adapter_test", &report);
             }
@@ -907,6 +1055,9 @@ pub async fn cmd_adapter(args: &AdapterArgs, json: bool) -> anyhow::Result<()> {
             );
             for e in &report.errors {
                 println!("  {e}");
+            }
+            for w in &report.warnings {
+                println!("  warn: {w}");
             }
             if !report.ok {
                 std::process::exit(1);
@@ -952,6 +1103,46 @@ pub async fn cmd_projects(args: &ProjectsArgs, json: bool) -> anyhow::Result<()>
                     e.project_root.display(),
                     e.store_path.display()
                 );
+            }
+        }
+        ProjectsAction::Prune => {
+            let mut reg =
+                ProjectRegistry::load(&index_path).unwrap_or_else(|_| ProjectRegistry::empty());
+            let before = reg.entries.len();
+            let removed = reg.prune_missing();
+            reg.save(&index_path)?;
+            if json {
+                return output::emit_ok(
+                    "projects_prune",
+                    &serde_json::json!({
+                        "removed": removed,
+                        "remaining": reg.entries.len(),
+                        "before": before,
+                    }),
+                );
+            }
+            println!(
+                "pruned {removed} missing store(s); {} remain in {}",
+                reg.entries.len(),
+                index_path.display()
+            );
+        }
+        ProjectsAction::Remove { project_root } => {
+            let mut reg =
+                ProjectRegistry::load(&index_path).unwrap_or_else(|_| ProjectRegistry::empty());
+            let root = project_root.canonicalize().unwrap_or_else(|_| project_root.clone());
+            let removed = reg.remove_root(&root) || reg.remove_root(project_root);
+            reg.save(&index_path)?;
+            if json {
+                return output::emit_ok(
+                    "projects_remove",
+                    &serde_json::json!({ "removed": removed, "project_root": project_root }),
+                );
+            }
+            if removed {
+                println!("removed {} from index", project_root.display());
+            } else {
+                println!("no index entry for {}", project_root.display());
             }
         }
     }

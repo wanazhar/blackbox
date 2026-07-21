@@ -176,6 +176,29 @@ pub enum CassetteAction {
         #[arg(long, default_value = "tools/call")]
         tool: String,
     },
+    /// Stdio MCP proxy: record tool calls into a cassette (experimental)
+    ///
+    /// Usage: blackbox cassette proxy --record out.bbx.json -- <mcp-server> ...
+    Proxy {
+        /// Record mode (write cassette)
+        #[arg(long, conflicts_with = "replay")]
+        record: Option<PathBuf>,
+        /// Replay mode (read cassette)
+        #[arg(long, conflicts_with = "record")]
+        replay: Option<PathBuf>,
+        /// Matching mode for replay: strict | normalized | ordered | allow_extra
+        #[arg(long, default_value = "normalized")]
+        mode: String,
+        /// Unmatched request policy: fail | deny | live
+        #[arg(long, default_value = "fail")]
+        on_unknown: String,
+        /// Redact string secrets while recording
+        #[arg(long, default_value_t = true)]
+        redact: bool,
+        /// MCP server command after `--` (required for record and for live passthrough)
+        #[arg(last = true)]
+        server: Vec<String>,
+    },
 }
 
 #[derive(Args)]
@@ -735,6 +758,54 @@ pub async fn cmd_cassette(args: &CassetteArgs, json: bool) -> anyhow::Result<()>
             if let Some(d) = &result.diff {
                 println!("diff: {d}");
             }
+        }
+        CassetteAction::Proxy {
+            record,
+            replay,
+            mode,
+            on_unknown,
+            redact,
+            server,
+        } => {
+            use crate::cassette::{
+                run_mcp_proxy, ProxyConfig, ProxyMode, UnknownPolicy,
+            };
+            let match_mode = match mode.as_str() {
+                "strict" => MatchMode::Strict,
+                "ordered" => MatchMode::Ordered,
+                "allow_extra" => MatchMode::AllowExtra,
+                _ => MatchMode::Normalized,
+            };
+            let (proxy_mode, path) = match (record, replay) {
+                (Some(p), None) => (ProxyMode::Record, p.clone()),
+                (None, Some(p)) => (ProxyMode::Replay, p.clone()),
+                _ => anyhow::bail!("specify exactly one of --record PATH or --replay PATH"),
+            };
+            let cfg = ProxyConfig {
+                mode: proxy_mode,
+                cassette_path: path,
+                match_mode,
+                on_unknown: UnknownPolicy::parse(on_unknown)?,
+                server_argv: server.clone(),
+                redact: *redact,
+            };
+            // Proxy is blocking stdio; run on blocking pool.
+            let report = tokio::task::spawn_blocking(move || run_mcp_proxy(cfg))
+                .await
+                .map_err(|e| anyhow::anyhow!("proxy task: {e}"))??;
+            if json {
+                return output::emit_ok("cassette_proxy", &report);
+            }
+            eprintln!(
+                "cassette proxy mode={} entries={} matched={} unmatched={} live={} path={}",
+                report.mode,
+                report.entries,
+                report.matched,
+                report.unmatched,
+                report.live_passthrough,
+                report.cassette_path
+            );
+            eprintln!("experimental: MCP cassette only — unproxied harness tools unsupported");
         }
     }
     Ok(())

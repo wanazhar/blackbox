@@ -50,7 +50,7 @@ fn enforced_wall_breach_terminates() {
 }
 
 #[test]
-fn tool_calls_and_output_are_observed_only() {
+fn tool_calls_and_output_are_enforced() {
     let policy = BudgetPolicy {
         max_tool_calls: Some(10),
         max_output_bytes: Some(1024),
@@ -59,9 +59,9 @@ fn tool_calls_and_output_are_observed_only() {
     let caps = policy.capability_report();
     let tools = caps.iter().find(|c| c.name == "tool_calls").unwrap();
     let out = caps.iter().find(|c| c.name == "output_bytes").unwrap();
-    assert!(matches!(tools.capability, BudgetCapability::ObservedOnly));
-    assert!(matches!(out.capability, BudgetCapability::ObservedOnly));
-    // Observed-only breaches must not claim hard termination.
+    assert!(matches!(tools.capability, BudgetCapability::Enforced));
+    assert!(matches!(out.capability, BudgetCapability::Enforced));
+    // Enforced ceilings report terminated_by_budget when observed exceeds limit.
     let report = evaluate_budgets(
         &policy,
         &ObservedBudgets {
@@ -70,5 +70,5 @@ fn tool_calls_and_output_are_observed_only() {
             ..Default::default()
         },
     );
-    assert!(!report.terminated_by_budget);
+    assert!(report.terminated_by_budget);
 }

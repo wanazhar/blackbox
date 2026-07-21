@@ -716,6 +716,13 @@ impl RunSupervisor {
         let do_redact = self.policy.redact;
         let scanner_term = SecretScanner::new(redact_cfg);
         let ansi_normalizer = AnsiNormalizer::new();
+        let max_output_bytes = self.budget.max_output_bytes;
+        let max_tool_calls = self.budget.max_tool_calls;
+        let budget_child_pid = child_pid;
+        let (counter_budget_tx, counter_budget_rx) =
+            tokio::sync::oneshot::channel::<crate::budget::BudgetBreachKill>();
+        let counter_budget_tx = std::sync::Arc::new(std::sync::Mutex::new(Some(counter_budget_tx)));
+        let counter_budget_tx_reader = counter_budget_tx.clone();
         let output_handle = tokio::spawn(async move {
             let mut recorder = RawRecorder::new();
             if let Err(e) = recorder.start(&run_id_writer).await {
@@ -726,7 +733,24 @@ impl RunSupervisor {
             let mut event_count: u64 = 0;
             let mut line_buf = String::new();
             let mut total_redactions: u64 = 0;
+            let mut output_bytes_seen: u64 = 0;
+            let mut tool_calls_seen: u64 = 0;
+            let mut budget_breached = false;
             let mut coalescer = TerminalCoalescer::new(CoalescePolicy::default(), insecure_raw);
+
+            let fire_counter_budget =
+                |name: &str, detail: String, tx: &std::sync::Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<crate::budget::BudgetBreachKill>>>>| {
+                    let _ = crate::budget::kill_budget_pid(budget_child_pid);
+                    if let Ok(mut g) = tx.lock() {
+                        if let Some(sender) = g.take() {
+                            let _ = sender.send(crate::budget::BudgetBreachKill {
+                                name: name.into(),
+                                pid: budget_child_pid,
+                                detail,
+                            });
+                        }
+                    }
+                };
             // Overlap-window redactor catches secrets split across PTY chunks.
             let mut stream_redactor = if do_redact {
                 Some(StreamRedactor::new(scanner_term.clone()))
@@ -768,6 +792,22 @@ impl RunSupervisor {
 
             while let Some(data) = pty_out_rx.recv().await {
                 segment_count += 1;
+                if !budget_breached {
+                    output_bytes_seen =
+                        output_bytes_seen.saturating_add(data.len() as u64);
+                    if let Some(max) = max_output_bytes {
+                        if max > 0 && output_bytes_seen > max {
+                            budget_breached = true;
+                            fire_counter_budget(
+                                "output_bytes",
+                                format!(
+                                    "output {output_bytes_seen} bytes exceeded limit {max}"
+                                ),
+                                &counter_budget_tx_reader,
+                            );
+                        }
+                    }
+                }
 
                 if let Err(e) = recorder.record_output(&data).await {
                     tracing::warn!(error = %e, "RawRecorder.record_output failed");
@@ -850,6 +890,23 @@ impl RunSupervisor {
                         continue;
                     }
                     for mut parsed in adapter_writer.parse_output(&run_id_writer, line.as_bytes()) {
+                        if !budget_breached
+                            && (parsed.kind == "tool.call" || parsed.kind.starts_with("tool.call"))
+                        {
+                            tool_calls_seen = tool_calls_seen.saturating_add(1);
+                            if let Some(max) = max_tool_calls {
+                                if max > 0 && tool_calls_seen > max {
+                                    budget_breached = true;
+                                    fire_counter_budget(
+                                        "tool_calls",
+                                        format!(
+                                            "tool_calls {tool_calls_seen} exceeded limit {max}"
+                                        ),
+                                        &counter_budget_tx_reader,
+                                    );
+                                }
+                            }
+                        }
                         if do_redact {
                             let mut meta_val = serde_json::to_value(&parsed.metadata)
                                 .unwrap_or_else(|_| serde_json::json!({}));
@@ -970,8 +1027,10 @@ impl RunSupervisor {
                     }
                 }
             };
+            let counter_fut = async { counter_budget_rx.await.ok() };
             tokio::pin!(wall_fut);
             tokio::pin!(proc_fut);
+            tokio::pin!(counter_fut);
             tokio::select! {
                 result = wait_handle => {
                     result.context("wait task panicked")?
@@ -987,6 +1046,13 @@ impl RunSupervisor {
                     if let Some(k) = kill {
                         budget_kill = Some(k);
                     }
+                    crate::supervisor::timeout_kill_and_wait(child_pid).await?
+                }
+                kill = &mut counter_fut => {
+                    if let Some(k) = kill {
+                        budget_kill = Some(k);
+                    }
+                    // Child may already be SIGKILL'd by the capture path.
                     crate::supervisor::timeout_kill_and_wait(child_pid).await?
                 }
                 _ = tokio::time::sleep(Duration::from_secs(4 * 3600)) => {

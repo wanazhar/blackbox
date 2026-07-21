@@ -110,6 +110,11 @@ pub struct BudgetBreachKill {
     pub detail: String,
 }
 
+/// Public budget kill entrypoint (tool/output ceilings in the capture path).
+pub fn kill_budget_pid(pid: u32) -> std::io::Result<()> {
+    kill_supervised(pid)
+}
+
 /// Kill a supervised child. Prefer process-group kill when the child called
 /// `setsid()` (portable-pty), then fall back to the single PID.
 ///

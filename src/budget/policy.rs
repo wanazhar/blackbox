@@ -92,8 +92,8 @@ impl BudgetPolicy {
         out.push(BudgetStatus {
             name: "output_bytes".into(),
             capability: if self.max_output_bytes.is_some() {
-                // Not yet hard-terminated mid-run; observed and reported only.
-                BudgetCapability::ObservedOnly
+                // Hard-terminated mid-run via capture path counter + SIGKILL.
+                BudgetCapability::Enforced
             } else {
                 BudgetCapability::NotApplicable
             },
@@ -101,7 +101,7 @@ impl BudgetPolicy {
             observed: None,
             unit: Some("bytes".into()),
             note: if self.max_output_bytes.is_some() {
-                Some("output byte ceiling is observed-only in 1.6".into())
+                Some("output byte ceiling kills the supervised child when exceeded".into())
             } else {
                 None
             },
@@ -123,8 +123,7 @@ impl BudgetPolicy {
         out.push(BudgetStatus {
             name: "tool_calls".into(),
             capability: if self.max_tool_calls.is_some() {
-                // Counter-based kill is planned; do not over-claim.
-                BudgetCapability::ObservedOnly
+                BudgetCapability::Enforced
             } else {
                 BudgetCapability::NotApplicable
             },
@@ -132,7 +131,7 @@ impl BudgetPolicy {
             observed: None,
             unit: Some("calls".into()),
             note: if self.max_tool_calls.is_some() {
-                Some("tool-call ceiling is observed-only in 1.6".into())
+                Some("tool-call ceiling kills the supervised child when exceeded".into())
             } else {
                 None
             },

@@ -171,8 +171,28 @@ impl RunSupervisor {
         // PID marker in runtime dir — not child-visible BLACKBOX_ACTIVE_RUN.
         let _active_supervisor = crate::nest::ActiveSupervisorGuard::acquire(&run.id);
 
-        // 1.5 S1: live capture uses bounded batch ingest (not per-event SQLite).
-        let writer = Arc::new(EventWriter::new_batched(self.store.clone(), run.id.clone()));
+        // 1.5 S1 + 1.6 spool: live capture uses bounded batch ingest; durable
+        // spool under project `.blackbox/spool` when available.
+        let spool_dir = std::path::Path::new(&run.project_dir).join(".blackbox/spool");
+        // Replay any pending spool before starting a new run (idempotent).
+        if spool_dir.exists() {
+            match crate::ingest::recover_spool_on_open(self.store.clone(), &spool_dir).await {
+                Ok(stats) if stats.batches_seen > 0 => {
+                    tracing::info!(
+                        replayed = stats.batches_replayed,
+                        inserted = stats.events_inserted,
+                        "recovered durable spool batches before run"
+                    );
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!(error = %e, "spool recovery failed (continuing)"),
+            }
+        }
+        let writer = Arc::new(EventWriter::new_batched_with_spool(
+            self.store.clone(),
+            run.id.clone(),
+            Some(spool_dir.as_path()),
+        ));
 
         // ── Capture and redact environment variables (single map; value+name scan) ──
         let env_redactor = EnvironmentRedactor::new(redact_cfg.clone());

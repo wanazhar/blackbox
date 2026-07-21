@@ -7,6 +7,8 @@ use crate::core::blob::BlobReference;
 use crate::core::checkpoint::Checkpoint;
 use crate::core::event::TraceEvent;
 use crate::core::run::Run;
+use crate::experiment::{ExperimentManifest, RunExperimentMeta};
+use crate::verification::VerificationReceipt;
 
 pub use page::{
     decode_event_cursor, decode_run_cursor, encode_event_cursor, encode_run_cursor, EventPage,
@@ -353,5 +355,67 @@ pub trait TraceStore: Send + Sync + 'static {
             .filter(|e| matches!(e.status, crate::core::event::EventStatus::Error))
             .take(limit)
             .collect())
+    }
+
+    // ── Verification receipts (1.6 Phase C) ──
+
+    /// Insert an immutable verification receipt.
+    async fn insert_verification_receipt(
+        &self,
+        _receipt: &VerificationReceipt,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("verification receipts not supported by this store backend")
+    }
+
+    /// List receipts for a run (oldest first).
+    async fn list_verification_receipts(
+        &self,
+        _run_id: &str,
+    ) -> anyhow::Result<Vec<VerificationReceipt>> {
+        Ok(Vec::new())
+    }
+
+    /// Load one receipt by id.
+    async fn get_verification_receipt(
+        &self,
+        _id: &str,
+    ) -> anyhow::Result<Option<VerificationReceipt>> {
+        Ok(None)
+    }
+
+    // ── Experiments (1.6 Phase D) ──
+
+    async fn upsert_experiment(&self, _manifest: &ExperimentManifest) -> anyhow::Result<()> {
+        anyhow::bail!("experiments not supported by this store backend")
+    }
+
+    async fn get_experiment(&self, _id: &str) -> anyhow::Result<Option<ExperimentManifest>> {
+        Ok(None)
+    }
+
+    async fn list_experiments(&self) -> anyhow::Result<Vec<ExperimentManifest>> {
+        Ok(Vec::new())
+    }
+
+    async fn put_run_experiment_meta(
+        &self,
+        _run_id: &str,
+        _meta: &RunExperimentMeta,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("run experiment meta not supported by this store backend")
+    }
+
+    async fn get_run_experiment_meta(
+        &self,
+        _run_id: &str,
+    ) -> anyhow::Result<Option<RunExperimentMeta>> {
+        Ok(None)
+    }
+
+    async fn list_runs_for_experiment(
+        &self,
+        _experiment_id: &str,
+    ) -> anyhow::Result<Vec<String>> {
+        Ok(Vec::new())
     }
 }

@@ -22,7 +22,7 @@ use crate::storage::TraceStore;
 
 /// Current schema version. Bump when migrations change.
 /// Current on-disk schema version (also reported by `doctor --json`).
-pub const SCHEMA_VERSION: i32 = 7;
+pub const SCHEMA_VERSION: i32 = 8;
 
 /// Default scanner for redacting secrets in FTS index content.
 static FTS_SCANNER: LazyLock<SecretScanner> =
@@ -317,6 +317,15 @@ impl SqliteStore {
                 .context("failed to record v7 version")?;
             tx.commit().context("failed to commit v7 migration")?;
         }
+        if current < 8 {
+            let tx = conn
+                .unchecked_transaction()
+                .context("failed to start transaction for v8 migration")?;
+            Self::migrate_v8(&tx)?;
+            tx.execute("INSERT INTO schema_version (version) VALUES (8)", [])
+                .context("failed to record v8 version")?;
+            tx.commit().context("failed to commit v8 migration")?;
+        }
 
         // Ensure we never claim a higher version than we support
         let applied: i32 = conn
@@ -568,6 +577,46 @@ impl SqliteStore {
         )
         .context("failed to create v7 run_aggregates / indexes")?;
         tracing::info!("v7: run_aggregates table + event status/kind indexes");
+        Ok(())
+    }
+
+    /// V8: verification receipts, experiments, run experiment metadata (1.6).
+    fn migrate_v8(conn: &Connection) -> anyhow::Result<()> {
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS verification_receipts (
+                id              TEXT PRIMARY KEY,
+                run_id          TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+                created_at      TEXT NOT NULL,
+                status          TEXT NOT NULL,
+                verifier_type   TEXT NOT NULL,
+                parent_receipt_id TEXT,
+                payload         TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_receipts_run_id ON verification_receipts(run_id);
+            CREATE INDEX IF NOT EXISTS idx_receipts_created ON verification_receipts(run_id, created_at);
+
+            CREATE TABLE IF NOT EXISTS experiments (
+                id              TEXT PRIMARY KEY,
+                name            TEXT NOT NULL,
+                created_at      TEXT NOT NULL,
+                payload         TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS run_experiment_meta (
+                run_id          TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
+                experiment_id   TEXT,
+                task_id         TEXT,
+                variant         TEXT,
+                attempt         INTEGER,
+                role            TEXT,
+                payload         TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_run_exp_experiment ON run_experiment_meta(experiment_id);
+            ",
+        )
+        .context("failed to create v8 verification/experiment tables")?;
+        tracing::info!("v8: verification_receipts + experiments + run_experiment_meta");
         Ok(())
     }
 
@@ -1783,6 +1832,204 @@ impl TraceStore for SqliteStore {
                 .query_map(params![run_id, status_json, limit as i64], event_from_row)?
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(events)
+        };
+        tokio::task::yield_now().await;
+        result
+    }
+
+    async fn insert_verification_receipt(
+        &self,
+        receipt: &crate::verification::VerificationReceipt,
+    ) -> anyhow::Result<()> {
+        let payload = serde_json::to_string(receipt)?;
+        let status = serde_json::to_string(&receipt.status)?;
+        let vtype = serde_json::to_string(&receipt.verifier_type)?;
+        let created = receipt.created_at.to_rfc3339();
+        let parent = receipt.parent_receipt_id.clone();
+        let id = receipt.id.clone();
+        let run_id = receipt.run_id.clone();
+        {
+            let conn = self.lock();
+            conn.execute(
+                "INSERT INTO verification_receipts (id, run_id, created_at, status, verifier_type, parent_receipt_id, payload)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![id, run_id, created, status, vtype, parent, payload],
+            )?;
+        }
+        tokio::task::yield_now().await;
+        Ok(())
+    }
+
+    async fn list_verification_receipts(
+        &self,
+        run_id: &str,
+    ) -> anyhow::Result<Vec<crate::verification::VerificationReceipt>> {
+        let run_id = run_id.to_string();
+        let result = {
+            let conn = self.lock();
+            let mut stmt = conn.prepare(
+                "SELECT payload FROM verification_receipts WHERE run_id = ?1 ORDER BY created_at ASC",
+            )?;
+            let rows = stmt
+                .query_map(params![run_id], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut out = Vec::new();
+            for p in rows {
+                out.push(serde_json::from_str(&p)?);
+            }
+            Ok(out)
+        };
+        tokio::task::yield_now().await;
+        result
+    }
+
+    async fn get_verification_receipt(
+        &self,
+        id: &str,
+    ) -> anyhow::Result<Option<crate::verification::VerificationReceipt>> {
+        let id = id.to_string();
+        let result = {
+            let conn = self.lock();
+            let mut stmt =
+                conn.prepare("SELECT payload FROM verification_receipts WHERE id = ?1")?;
+            match stmt.query_row(params![id], |row| row.get::<_, String>(0)) {
+                Ok(p) => Ok(Some(serde_json::from_str(&p)?)),
+                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+                Err(e) => Err(e.into()),
+            }
+        };
+        tokio::task::yield_now().await;
+        result
+    }
+
+    async fn upsert_experiment(
+        &self,
+        manifest: &crate::experiment::ExperimentManifest,
+    ) -> anyhow::Result<()> {
+        let payload = serde_json::to_string(manifest)?;
+        let created = manifest.created_at.to_rfc3339();
+        let id = manifest.id.clone();
+        let name = manifest.name.clone();
+        {
+            let conn = self.lock();
+            conn.execute(
+                "INSERT INTO experiments (id, name, created_at, payload)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(id) DO UPDATE SET name = excluded.name, payload = excluded.payload",
+                params![id, name, created, payload],
+            )?;
+        }
+        tokio::task::yield_now().await;
+        Ok(())
+    }
+
+    async fn get_experiment(
+        &self,
+        id: &str,
+    ) -> anyhow::Result<Option<crate::experiment::ExperimentManifest>> {
+        let id = id.to_string();
+        let result = {
+            let conn = self.lock();
+            let mut stmt = conn.prepare("SELECT payload FROM experiments WHERE id = ?1")?;
+            match stmt.query_row(params![id], |row| row.get::<_, String>(0)) {
+                Ok(p) => Ok(Some(serde_json::from_str(&p)?)),
+                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+                Err(e) => Err(e.into()),
+            }
+        };
+        tokio::task::yield_now().await;
+        result
+    }
+
+    async fn list_experiments(
+        &self,
+    ) -> anyhow::Result<Vec<crate::experiment::ExperimentManifest>> {
+        let result = {
+            let conn = self.lock();
+            let mut stmt =
+                conn.prepare("SELECT payload FROM experiments ORDER BY created_at DESC")?;
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut out = Vec::new();
+            for p in rows {
+                out.push(serde_json::from_str(&p)?);
+            }
+            Ok(out)
+        };
+        tokio::task::yield_now().await;
+        result
+    }
+
+    async fn put_run_experiment_meta(
+        &self,
+        run_id: &str,
+        meta: &crate::experiment::RunExperimentMeta,
+    ) -> anyhow::Result<()> {
+        let payload = serde_json::to_string(meta)?;
+        let role = serde_json::to_string(&meta.role)?;
+        let run_id = run_id.to_string();
+        let experiment_id = meta.experiment_id.clone();
+        let task_id = meta.task_id.clone();
+        let variant = meta.variant.clone();
+        let attempt = meta.attempt.map(|a| a as i64);
+        {
+            let conn = self.lock();
+            conn.execute(
+                "INSERT INTO run_experiment_meta (run_id, experiment_id, task_id, variant, attempt, role, payload)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                 ON CONFLICT(run_id) DO UPDATE SET
+                   experiment_id = excluded.experiment_id,
+                   task_id = excluded.task_id,
+                   variant = excluded.variant,
+                   attempt = excluded.attempt,
+                   role = excluded.role,
+                   payload = excluded.payload",
+                params![
+                    run_id,
+                    experiment_id,
+                    task_id,
+                    variant,
+                    attempt,
+                    role,
+                    payload
+                ],
+            )?;
+        }
+        tokio::task::yield_now().await;
+        Ok(())
+    }
+
+    async fn get_run_experiment_meta(
+        &self,
+        run_id: &str,
+    ) -> anyhow::Result<Option<crate::experiment::RunExperimentMeta>> {
+        let run_id = run_id.to_string();
+        let result = {
+            let conn = self.lock();
+            let mut stmt =
+                conn.prepare("SELECT payload FROM run_experiment_meta WHERE run_id = ?1")?;
+            match stmt.query_row(params![run_id], |row| row.get::<_, String>(0)) {
+                Ok(p) => Ok(Some(serde_json::from_str(&p)?)),
+                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+                Err(e) => Err(e.into()),
+            }
+        };
+        tokio::task::yield_now().await;
+        result
+    }
+
+    async fn list_runs_for_experiment(&self, experiment_id: &str) -> anyhow::Result<Vec<String>> {
+        let experiment_id = experiment_id.to_string();
+        let result = {
+            let conn = self.lock();
+            let mut stmt = conn.prepare(
+                "SELECT run_id FROM run_experiment_meta WHERE experiment_id = ?1 ORDER BY run_id",
+            )?;
+            let ids = stmt
+                .query_map(params![experiment_id], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(ids)
         };
         tokio::task::yield_now().await;
         result

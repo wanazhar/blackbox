@@ -223,7 +223,18 @@ impl EventWriter {
         start: u64,
         config: BatchIngestConfig,
     ) -> Self {
-        let batch = BatchIngestor::spawn(store.clone(), config);
+        Self::with_start_batched_spool(store, run_id, start, config, None)
+    }
+
+    /// Batched writer with optional durable spool directory (1.6).
+    pub fn with_start_batched_spool(
+        store: Arc<dyn TraceStore>,
+        run_id: impl Into<String>,
+        start: u64,
+        config: BatchIngestConfig,
+        spool: Option<Arc<crate::ingest::EventSpool>>,
+    ) -> Self {
+        let batch = BatchIngestor::spawn_with_spool(store.clone(), config, spool);
         Self {
             store,
             seq: AtomicU64::new(start.max(1)),
@@ -233,6 +244,30 @@ impl EventWriter {
             batch: Some(batch),
             source_seqs: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Live-capture writer with durable spool when `spool_dir` is provided.
+    pub fn new_batched_with_spool(
+        store: Arc<dyn TraceStore>,
+        run_id: impl Into<String>,
+        spool_dir: Option<&std::path::Path>,
+    ) -> Self {
+        let spool = spool_dir.and_then(|d| {
+            crate::ingest::EventSpool::open(d)
+                .map(Arc::new)
+                .map_err(|e| {
+                    tracing::warn!(error = %e, "durable spool open failed; continuing without");
+                    e
+                })
+                .ok()
+        });
+        Self::with_start_batched_spool(
+            store,
+            run_id,
+            1,
+            BatchIngestConfig::default(),
+            spool,
+        )
     }
 
     fn allocate_source_sequence(&self, source: &EventSource) -> u64 {

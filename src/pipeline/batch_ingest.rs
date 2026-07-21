@@ -124,13 +124,23 @@ impl BatchIngestHealthShared {
 impl BatchIngestor {
     /// Spawn a dedicated batch writer task and return a handle.
     pub fn spawn(store: Arc<dyn TraceStore>, config: BatchIngestConfig) -> Self {
+        Self::spawn_with_spool(store, config, None)
+    }
+
+    /// Spawn with optional durable spool (1.6). When set, events are appended to
+    /// the spool before SQLite commit; producer acks mean recoverability.
+    pub fn spawn_with_spool(
+        store: Arc<dyn TraceStore>,
+        config: BatchIngestConfig,
+        spool: Option<Arc<crate::ingest::EventSpool>>,
+    ) -> Self {
         let (tx, rx) = mpsc::channel(config.queue_capacity.max(8));
         let health = Arc::new(BatchIngestHealthShared::new());
         let queue_depth = Arc::new(AtomicU64::new(0));
         let health_w = health.clone();
         let depth_w = queue_depth.clone();
         tokio::spawn(async move {
-            batch_writer_loop(store, rx, config, health_w, depth_w).await;
+            batch_writer_loop(store, rx, config, health_w, depth_w, spool).await;
         });
         Self {
             tx,
@@ -236,6 +246,7 @@ async fn batch_writer_loop(
     config: BatchIngestConfig,
     health: Arc<BatchIngestHealthShared>,
     queue_depth: Arc<AtomicU64>,
+    spool: Option<Arc<crate::ingest::EventSpool>>,
 ) {
     let mut pending: Vec<TraceEvent> = Vec::with_capacity(config.max_batch);
     // Acks waiting for the next successful flush of current pending buffer.
@@ -254,6 +265,7 @@ async fn batch_writer_loop(
                         // Channel closed — final flush.
                         let _ = flush_pending(
                             store.as_ref(),
+                            spool.as_deref(),
                             &mut pending,
                             &mut pending_acks,
                             &health,
@@ -271,6 +283,7 @@ async fn batch_writer_loop(
                         if force {
                             if let Err(e) = flush_pending(
                                 store.as_ref(),
+                                spool.as_deref(),
                                 &mut pending,
                                 &mut pending_acks,
                                 &health,
@@ -285,6 +298,7 @@ async fn batch_writer_loop(
                     Some(IngestMsg::Flush { ack }) => {
                         let result = flush_pending(
                             store.as_ref(),
+                            spool.as_deref(),
                             &mut pending,
                             &mut pending_acks,
                             &health,
@@ -296,6 +310,7 @@ async fn batch_writer_loop(
                     Some(IngestMsg::Shutdown { ack }) => {
                         let result = flush_pending(
                             store.as_ref(),
+                            spool.as_deref(),
                             &mut pending,
                             &mut pending_acks,
                             &health,
@@ -310,6 +325,7 @@ async fn batch_writer_loop(
                 if !pending.is_empty() && last_flush.elapsed() >= config.flush_interval {
                     if let Err(e) = flush_pending(
                         store.as_ref(),
+                        spool.as_deref(),
                         &mut pending,
                         &mut pending_acks,
                         &health,
@@ -327,6 +343,7 @@ async fn batch_writer_loop(
 
 async fn flush_pending(
     store: &dyn TraceStore,
+    spool: Option<&crate::ingest::EventSpool>,
     pending: &mut Vec<TraceEvent>,
     pending_acks: &mut Vec<oneshot::Sender<anyhow::Result<()>>>,
     health: &BatchIngestHealthShared,
@@ -340,6 +357,25 @@ async fn flush_pending(
     }
     let n = pending.len() as u64;
     let t0 = Instant::now();
+
+    // Durable path: append to spool first so producer-visible success can be
+    // recovered after crash even if SQLite commit has not finished.
+    let spool_batch_id = if let Some(sp) = spool {
+        match sp.append_batch(pending) {
+            Ok(r) => Some(r.batch_id),
+            Err(e) => {
+                health.write_failures.fetch_add(1, Ordering::Relaxed);
+                let msg = format!("spool append failed: {e}");
+                for ack in pending_acks.drain(..) {
+                    let _ = ack.send(Err(anyhow::anyhow!("{msg}")));
+                }
+                return Err(anyhow::anyhow!(msg));
+            }
+        }
+    } else {
+        None
+    };
+
     let result = store.insert_events_batch(pending).await;
     let ms = t0.elapsed().as_millis() as u64;
 
@@ -350,6 +386,11 @@ async fn flush_pending(
 
     match result {
         Ok(()) => {
+            if let (Some(sp), Some(id)) = (spool, spool_batch_id) {
+                if let Err(e) = sp.acknowledge(&id) {
+                    tracing::warn!(error = %e, batch = %id, "spool ack after commit failed");
+                }
+            }
             health.events_flushed.fetch_add(n, Ordering::Relaxed);
             pending.clear();
             for ack in pending_acks.drain(..) {
@@ -363,13 +404,12 @@ async fn flush_pending(
             for ack in pending_acks.drain(..) {
                 let _ = ack.send(Err(anyhow::anyhow!("{msg}")));
             }
-            // Keep pending for potential retry by caller after error — but
-            // subsequent flushes would duplicate. Clear to avoid double-insert
-            // storms; report loss boundary via error.
+            // Leave spool pending so recovery can replay. Clear memory buffer
+            // to avoid double-insert from subsequent flushes of the same events.
             let lost = pending.len();
             pending.clear();
             Err(anyhow::anyhow!(
-                "batch flush failed after {lost} pending event(s): {msg}"
+                "batch flush failed after {lost} pending event(s) (spool retained for recovery): {msg}"
             ))
         }
     }

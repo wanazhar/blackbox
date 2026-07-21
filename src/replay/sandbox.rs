@@ -273,7 +273,7 @@ fn scrub_replay_env(cmd: &mut Command, workspace: &Path) {
 }
 
 /// Status of the optional Linux contained replay backend.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ContainedBackendStatus {
     pub available: bool,
     pub tool: Option<String>,

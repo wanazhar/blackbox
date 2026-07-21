@@ -125,7 +125,10 @@ impl EventSpool {
             f.write_all(&bytes)?;
             f.sync_all()?;
         }
+        // Private file mode before rename (redacted events may still be sensitive).
+        crate::privacy::restrict_file(&tmp);
         fs::rename(&tmp, &path)?;
+        crate::privacy::restrict_file(&path);
         // fsync directory best-effort
         if let Ok(dir) = File::open(&self.pending_dir) {
             let _ = dir.sync_all();
@@ -354,7 +357,7 @@ mod tests {
 
     #[test]
     fn detects_torn_crc() {
-        let mut batch = SpoolBatch {
+        let batch = SpoolBatch {
             batch_id: "b1".into(),
             events: vec![TraceEvent::new("r", EventSource::System, "t")],
             created_at: "t".into(),

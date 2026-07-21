@@ -441,10 +441,11 @@ impl RunSupervisor {
         process_capture.set_pid(child_pid);
         process_capture.emit_spawned().await;
 
-        // 1.6 budgets: rlimits + cgroup v2 (when writable) + wall/process watchdogs.
-        let budget_notes = crate::budget::apply_process_rlimits(&self.budget);
+        // 1.6 budgets: prlimit on **child** (never setrlimit on supervisor) +
+        // cgroup v2 when writable + wall/process watchdogs.
+        let budget_notes = crate::budget::apply_child_rlimits(child_pid, &self.budget);
         if !budget_notes.is_empty() {
-            tracing::debug!(?budget_notes, "budget rlimit notes");
+            tracing::debug!(?budget_notes, "budget child prlimit notes");
         }
         // Hold cgroup leaf for the child lifetime (Drop cleans up).
         let cgroup_scope = crate::budget::CgroupScope::create_for_pid(child_pid, &self.budget);
@@ -497,6 +498,16 @@ impl RunSupervisor {
                         "pids_enforced": rep.pids_enforced,
                         "notes": rep.notes,
                     }),
+                );
+            }
+            if self.budget.contained {
+                let probe = crate::replay::sandbox::probe_contained_backend();
+                be.metadata.insert(
+                    "contained_preflight".into(),
+                    serde_json::to_value(&probe).unwrap_or_else(|_| serde_json::json!({
+                        "available": false,
+                        "reason": "probe serialize failed"
+                    })),
                 );
             }
             let _ = writer.write(be).await;

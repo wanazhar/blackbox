@@ -1,40 +1,49 @@
-//! Linux hard budget enforcement via rlimits + wall-time kill (1.6).
+//! Linux hard budget enforcement via prlimit + wall-time kill (1.6).
+//!
+//! **Important:** resource limits are applied to the **child** PID with
+//! `prlimit(2)`, never `setrlimit` on the blackbox supervisor itself.
 
 use std::time::Duration;
 
 use crate::budget::policy::{BudgetCapability, BudgetPolicy, BudgetStatus};
 
-/// Apply process-level rlimits in the **current** process (call after fork /
-/// in a pre-exec context when available). Best-effort; never claims success
-/// for unsupported resources.
+/// Apply process-level rlimits to `pid` (the supervised child).
 ///
-/// On non-Linux this is a no-op returning empty notes.
+/// Does **not** mutate the calling process. Uses `prlimit` on Linux.
 #[cfg(target_os = "linux")]
-pub fn apply_process_rlimits(policy: &BudgetPolicy) -> Vec<String> {
+pub fn apply_child_rlimits(pid: u32, policy: &BudgetPolicy) -> Vec<String> {
     let mut notes = Vec::new();
-    // CPU seconds (soft=hard for hard kill after CPU time).
+    if pid == 0 || pid == 1 {
+        notes.push(format!("refusing prlimit on unsafe pid {pid}"));
+        return notes;
+    }
+
+    // RLIMIT_CPU is CPU time, not wall clock — only set when max_cpu_percent is
+    // absent as a soft backstop proportional to wall if wall is set.
+    // Prefer not conflating wall with CPU: only apply RLIMIT_CPU from an
+    // explicit high wall as a multi-hour safety net (secs as CPU seconds).
     if let Some(secs) = policy.max_wall_secs {
-        // RLIMIT_CPU is CPU time not wall — still useful as a backstop.
-        if let Err(e) = set_rlimit(libc::RLIMIT_CPU, secs, secs) {
-            notes.push(format!("RLIMIT_CPU unavailable: {e}"));
+        // Cap CPU seconds at wall seconds as a last-resort runaway brake.
+        if let Err(e) = set_prlimit(pid, libc::RLIMIT_CPU, secs, secs) {
+            notes.push(format!("prlimit RLIMIT_CPU pid={pid}: {e}"));
         } else {
-            notes.push(format!("RLIMIT_CPU={secs}s applied"));
+            notes.push(format!("prlimit RLIMIT_CPU={secs}s on pid={pid} (CPU-time backstop)"));
         }
     }
     if let Some(n) = policy.max_processes {
-        if let Err(e) = set_rlimit(libc::RLIMIT_NPROC, n, n) {
-            notes.push(format!("RLIMIT_NPROC unavailable: {e}"));
+        if let Err(e) = set_prlimit(pid, libc::RLIMIT_NPROC, n, n) {
+            notes.push(format!("prlimit RLIMIT_NPROC pid={pid}: {e}"));
         } else {
-            notes.push(format!("RLIMIT_NPROC={n} applied"));
+            notes.push(format!("prlimit RLIMIT_NPROC={n} on pid={pid}"));
         }
     }
-    // Address-space ceiling as portable memory backstop when cgroup memory.max
-    // is not writable. Not exact RSS; still useful.
     if let Some(bytes) = policy.max_memory_bytes {
-        if let Err(e) = set_rlimit(libc::RLIMIT_AS, bytes, bytes) {
-            notes.push(format!("RLIMIT_AS unavailable: {e}"));
+        if let Err(e) = set_prlimit(pid, libc::RLIMIT_AS, bytes, bytes) {
+            notes.push(format!("prlimit RLIMIT_AS pid={pid}: {e}"));
         } else {
-            notes.push(format!("RLIMIT_AS={bytes} applied (address-space backstop)"));
+            notes.push(format!(
+                "prlimit RLIMIT_AS={bytes} on pid={pid} (address-space backstop)"
+            ));
         }
     }
     let _ = policy.max_output_bytes;
@@ -42,17 +51,30 @@ pub fn apply_process_rlimits(policy: &BudgetPolicy) -> Vec<String> {
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn apply_process_rlimits(_policy: &BudgetPolicy) -> Vec<String> {
-    vec!["process rlimits not available on this OS".into()]
+pub fn apply_child_rlimits(_pid: u32, _policy: &BudgetPolicy) -> Vec<String> {
+    vec!["child prlimit not available on this OS".into()]
+}
+
+/// Deprecated name kept for tests — redirects to child-targeted API with pid=self
+/// only for unit probing; production code must call [`apply_child_rlimits`].
+#[cfg(test)]
+pub fn apply_process_rlimits(policy: &BudgetPolicy) -> Vec<String> {
+    apply_child_rlimits(std::process::id(), policy)
 }
 
 #[cfg(target_os = "linux")]
-fn set_rlimit(resource: libc::__rlimit_resource_t, soft: u64, hard: u64) -> std::io::Result<()> {
+fn set_prlimit(
+    pid: u32,
+    resource: libc::__rlimit_resource_t,
+    soft: u64,
+    hard: u64,
+) -> std::io::Result<()> {
     let lim = libc::rlimit {
         rlim_cur: soft as libc::rlim_t,
         rlim_max: hard as libc::rlim_t,
     };
-    let rc = unsafe { libc::setrlimit(resource, &lim) };
+    // prlimit(pid, resource, new_limit, old_limit)
+    let rc = unsafe { libc::prlimit(pid as libc::pid_t, resource, &lim, std::ptr::null_mut()) };
     if rc == 0 {
         Ok(())
     } else {
@@ -61,14 +83,13 @@ fn set_rlimit(resource: libc::__rlimit_resource_t, soft: u64, hard: u64) -> std:
 }
 
 /// Wall-time watchdog: spawn a task that kills `pid` after `timeout`.
-/// Returns a join handle; abort it if the child exits first.
 pub fn spawn_wall_watchdog(
     pid: u32,
     timeout: Duration,
 ) -> tokio::task::JoinHandle<Option<BudgetBreachKill>> {
     tokio::spawn(async move {
         tokio::time::sleep(timeout).await;
-        match kill_process_group(pid) {
+        match kill_supervised(pid) {
             Ok(()) => Some(BudgetBreachKill {
                 name: "wall_time".into(),
                 pid,
@@ -89,17 +110,27 @@ pub struct BudgetBreachKill {
     pub detail: String,
 }
 
-fn kill_process_group(pid: u32) -> std::io::Result<()> {
+/// Kill a supervised child. Prefer process-group kill when the child called
+/// `setsid()` (portable-pty), then fall back to the single PID.
+///
+/// Refuses pid 0/1 and the caller's own PID.
+fn kill_supervised(pid: u32) -> std::io::Result<()> {
     #[cfg(unix)]
     {
-        // SIGKILL the process; best-effort process group if leader.
-        let rc = unsafe { libc::kill(pid as i32, libc::SIGKILL) };
-        if rc == 0 {
+        let self_pid = std::process::id();
+        if pid == 0 || pid == 1 || pid == self_pid {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("refusing to kill pid {pid}"),
+            ));
+        }
+        // Child is session leader via setsid → negative pgid kills the tree.
+        let rc_pg = unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
+        if rc_pg == 0 {
             return Ok(());
         }
-        // Try process group
-        let rc2 = unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
-        if rc2 == 0 {
+        let rc = unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+        if rc == 0 {
             Ok(())
         } else {
             Err(std::io::Error::last_os_error())
@@ -119,7 +150,6 @@ fn kill_process_group(pid: u32) -> std::io::Result<()> {
 #[cfg(target_os = "linux")]
 pub fn count_descendant_processes(root_pid: u32) -> u64 {
     let mut pids = std::collections::HashSet::from([root_pid]);
-    // Multi-pass BFS by ppid
     for _ in 0..8 {
         let Ok(rd) = std::fs::read_dir("/proc") else {
             return pids.len() as u64;
@@ -141,7 +171,6 @@ pub fn count_descendant_processes(root_pid: u32) -> u64 {
             }
             let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok();
             if let Some(s) = stat {
-                // ppid is field 4 after comm in parens — approximate parse.
                 if let Some(ppid) = parse_ppid(&s) {
                     if snapshot.contains(&ppid) {
                         pids.insert(pid);
@@ -164,7 +193,6 @@ pub fn count_descendant_processes(_root_pid: u32) -> u64 {
 
 #[cfg(target_os = "linux")]
 fn parse_ppid(stat: &str) -> Option<u32> {
-    // format: pid (comm) state ppid ...
     let close = stat.rfind(')')?;
     let rest = stat.get(close + 2..)?;
     let mut parts = rest.split_whitespace();
@@ -183,14 +211,13 @@ pub fn spawn_process_count_watchdog(
             tokio::time::sleep(interval).await;
             let n = count_descendant_processes(root_pid);
             if n > max_processes {
-                let _ = kill_process_group(root_pid);
+                let _ = kill_supervised(root_pid);
                 return Some(BudgetBreachKill {
                     name: "process_count".into(),
                     pid: root_pid,
                     detail: format!("processes {n} exceeded limit {max_processes}"),
                 });
             }
-            // If root is gone, stop.
             #[cfg(target_os = "linux")]
             {
                 if !std::path::Path::new(&format!("/proc/{root_pid}")).exists() {
@@ -217,7 +244,7 @@ pub fn linux_enforcement_status_with_cgroup(
             #[cfg(target_os = "linux")]
             {
                 c.capability = BudgetCapability::Enforced;
-                c.note = Some("RLIMIT_NPROC + /proc descendant watchdog".into());
+                c.note = Some("prlimit RLIMIT_NPROC + /proc descendant watchdog".into());
             }
             #[cfg(not(target_os = "linux"))]
             {
@@ -227,7 +254,7 @@ pub fn linux_enforcement_status_with_cgroup(
         }
         if c.name == "wall_time" && policy.max_wall_secs.is_some() {
             c.capability = BudgetCapability::Enforced;
-            c.note = Some("wall watchdog SIGKILL".into());
+            c.note = Some("wall watchdog SIGKILL on child".into());
         }
     }
     crate::budget::cgroup::enrich_capabilities_with_cgroup(policy, &mut caps, cgroup);
@@ -239,12 +266,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rlimits_do_not_panic() {
+    fn refuses_kill_self_and_init() {
+        assert!(kill_supervised(0).is_err());
+        assert!(kill_supervised(1).is_err());
+        assert!(kill_supervised(std::process::id()).is_err());
+    }
+
+    #[test]
+    fn prlimit_on_self_for_probe_does_not_panic() {
         let p = BudgetPolicy {
             max_wall_secs: Some(3600),
             max_processes: Some(4096),
+            max_memory_bytes: Some(512 * 1024 * 1024),
             ..Default::default()
         };
-        let _ = apply_process_rlimits(&p);
+        let notes = apply_child_rlimits(std::process::id(), &p);
+        assert!(!notes.is_empty());
     }
 }

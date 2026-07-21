@@ -108,6 +108,75 @@ async fn v1_missing_blobs_still_accepted() {
 }
 
 #[tokio::test]
+async fn v2_duplicate_event_ids_rejected() {
+    let store = Arc::new(SqliteStore::open_memory().unwrap());
+    let json = serde_json::json!({
+        "version": 2,
+        "run": {
+            "id": "run-dup-ev",
+            "name": null,
+            "command": ["echo"],
+            "cwd": "/tmp",
+            "project_dir": "/tmp",
+            "tags": [],
+            "notes": null,
+            "status": "Succeeded",
+            "started_at": "2026-01-01T00:00:00Z",
+            "ended_at": "2026-01-01T00:00:01Z",
+            "exit_code": 0,
+            "parent_run_id": null,
+            "next_sequence": 2
+        },
+        "events": [
+            {
+                "id": "same-id",
+                "run_id": "run-dup-ev",
+                "parent_event_id": null,
+                "sequence": 1,
+                "source": "Terminal",
+                "kind": "terminal.output",
+                "started_at": "2026-01-01T00:00:00Z",
+                "ended_at": null,
+                "duration_ms": null,
+                "status": "Success",
+                "side_effect": "None",
+                "input_blob": null,
+                "output_blob": null,
+                "error_blob": null,
+                "metadata": {}
+            },
+            {
+                "id": "same-id",
+                "run_id": "run-dup-ev",
+                "parent_event_id": null,
+                "sequence": 2,
+                "source": "Terminal",
+                "kind": "terminal.output",
+                "started_at": "2026-01-01T00:00:00Z",
+                "ended_at": null,
+                "duration_ms": null,
+                "status": "Success",
+                "side_effect": "None",
+                "input_blob": null,
+                "output_blob": null,
+                "error_blob": null,
+                "metadata": {}
+            }
+        ],
+        "blobs": {},
+        "exported_at": "2026-01-01T00:00:02Z"
+    });
+    let err = import_portable(store.as_ref(), &json.to_string(), true)
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("duplicate event id"),
+        "got: {err:#}"
+    );
+    assert!(store.list_runs().await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn v2_metadata_blob_ref_must_resolve() {
     let store = Arc::new(SqliteStore::open_memory().unwrap());
     let key = "d".repeat(64);

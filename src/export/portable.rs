@@ -400,6 +400,11 @@ pub async fn import_portable(
         );
     }
 
+    // ── Structural layout checks before any permanent writes ──
+    if version >= 2 {
+        validate_event_layout_v2(&events)?;
+    }
+
     // ── Decode + hash-verify blobs into memory (no permanent writes yet) ──
     let verified_blobs = decode_and_verify_blobs(root.get("blobs"))?;
 
@@ -619,6 +624,31 @@ fn decode_and_verify_blobs(
         out.push((key.clone(), data));
     }
     Ok(out)
+}
+
+/// v2 layout: unique event IDs, non-empty ids, sequences non-decreasing when sorted.
+fn validate_event_layout_v2(events: &[TraceEvent]) -> anyhow::Result<()> {
+    let mut seen = HashSet::new();
+    for ev in events {
+        if ev.id.trim().is_empty() {
+            anyhow::bail!("portable v2 event has empty id");
+        }
+        if !seen.insert(ev.id.as_str()) {
+            anyhow::bail!("portable v2 duplicate event id: {}", ev.id);
+        }
+    }
+    // Sequences must be unique within the archive (explicit policy for v2).
+    let mut seqs = HashSet::new();
+    for ev in events {
+        if !seqs.insert(ev.sequence) {
+            anyhow::bail!(
+                "portable v2 duplicate sequence {} (event {})",
+                ev.sequence,
+                ev.id
+            );
+        }
+    }
+    Ok(())
 }
 
 fn validate_event_blob_refs(

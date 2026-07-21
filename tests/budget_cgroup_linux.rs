@@ -59,12 +59,15 @@ fn cgroup_probe_and_capability_honesty() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn rlimit_as_applied_for_memory_policy() {
-    use blackbox::budget::apply_process_rlimits;
-    let notes = apply_process_rlimits(&BudgetPolicy {
-        max_memory_bytes: Some(512 * 1024 * 1024),
-        ..Default::default()
-    });
+fn prlimit_as_applied_for_memory_policy_on_child_api() {
+    use blackbox::budget::apply_child_rlimits;
+    let notes = apply_child_rlimits(
+        std::process::id(),
+        &BudgetPolicy {
+            max_memory_bytes: Some(512 * 1024 * 1024),
+            ..Default::default()
+        },
+    );
     // Either applied or explicitly unavailable — never silent.
     assert!(
         notes.iter().any(|n| n.contains("RLIMIT_AS")),

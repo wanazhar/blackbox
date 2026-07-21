@@ -83,6 +83,15 @@ pub struct SummaryView {
     /// Overall verification coverage for the primary failure (if any).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verification_coverage: Option<String>,
+    /// Newest immutable verification receipt id (1.6), if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_verification_receipt_id: Option<String>,
+    /// Newest verification status (1.6).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_verification_status: Option<String>,
+    /// Combined execution/verification/capture outcome (1.6).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<crate::verification::RunOutcomeView>,
     /// Explicit analysis load scope (1.5 L2) — facts vs evidence windows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub analysis_scope: Option<AnalysisScope>,
@@ -450,6 +459,20 @@ pub async fn build_summary(
         serde_json::from_value::<CaptureCoverageView>(cov.clone()).ok()
     });
 
+    // 1.6: surface immutable verification receipts without mutating Run.status.
+    let receipts = store
+        .list_verification_receipts(&run.id)
+        .await
+        .unwrap_or_default();
+    let latest_verification_receipt_id = receipts.last().map(|r| r.id.clone());
+    let latest_verification_status = receipts.last().map(|r| format!("{:?}", r.status));
+    let quality = capture_coverage.as_ref().map(|c| c.quality_score as u32);
+    let outcome = Some(crate::verification::build_outcome_view(
+        run,
+        &receipts,
+        quality,
+    ));
+
     // Tool facts from aggregates (independent of display window).
     let mut tool_names = Vec::new();
     for ev in &events {
@@ -599,6 +622,9 @@ pub async fn build_summary(
         goal_source,
         goal,
         verification_coverage,
+        latest_verification_receipt_id,
+        latest_verification_status,
+        outcome,
         analysis_scope: Some(analysis_scope),
         aggregates: Some(aggregates),
     })

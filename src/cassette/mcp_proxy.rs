@@ -220,9 +220,21 @@ fn run_replay(config: ProxyConfig) -> anyhow::Result<ProxyReport> {
             anyhow::bail!("live passthrough requires a server command after `--`");
         }
         let mut child = spawn_server(&config.server_argv)?;
-        let stdin = child.stdin.take().unwrap();
-        let stdout = BufReader::new(child.stdout.take().unwrap());
-        *live_io.lock().unwrap() = Some((stdin, stdout));
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("live server stdin missing"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("live server stdout missing"))?;
+        let stdout = BufReader::new(stdout);
+        {
+            let mut guard = live_io
+                .lock()
+                .map_err(|_| anyhow::anyhow!("live_io mutex poisoned"))?;
+            *guard = Some((stdin, stdout));
+        }
         live_child = Some(child);
     }
 
@@ -377,14 +389,19 @@ fn run_replay(config: ProxyConfig) -> anyhow::Result<ProxyReport> {
             }
             UnknownPolicy::Live => {
                 live_passthrough += 1;
-                let mut guard = live_io.lock().unwrap();
+                let mut guard = live_io
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("live_io mutex poisoned"))?;
                 let (ref mut c_in, ref mut c_out) = guard
                     .as_mut()
                     .ok_or_else(|| anyhow::anyhow!("live server not started"))?;
                 writeln!(c_in, "{line}")?;
                 c_in.flush()?;
                 let mut resp_line = String::new();
-                c_out.read_line(&mut resp_line)?;
+                let n = c_out.read_line(&mut resp_line)?;
+                if n == 0 {
+                    anyhow::bail!("live server closed stdout during passthrough");
+                }
                 let mut resp: Value = serde_json::from_str(resp_line.trim())?;
                 if let Some(obj) = resp.as_object_mut() {
                     obj.insert(
@@ -420,13 +437,30 @@ fn run_replay(config: ProxyConfig) -> anyhow::Result<ProxyReport> {
 }
 
 fn spawn_server(argv: &[String]) -> anyhow::Result<Child> {
-    let mut cmd = Command::new(&argv[0]);
+    if argv.is_empty() {
+        anyhow::bail!("empty MCP server command");
+    }
+    let bin = &argv[0];
+    if bin.is_empty() {
+        anyhow::bail!("MCP server argv[0] is empty");
+    }
+    // Refuse shell metacharacters in argv[0] — we never invoke via `sh -c`.
+    if bin.contains(['\0', '\n', '\r']) {
+        anyhow::bail!("MCP server path contains illegal characters");
+    }
+    let mut cmd = Command::new(bin);
     if argv.len() > 1 {
         cmd.args(&argv[1..]);
     }
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit());
+    // Clear blackbox control env from the proxied server (recorder neutrality).
+    for (k, _) in std::env::vars() {
+        if k.starts_with("BLACKBOX_") {
+            cmd.env_remove(k);
+        }
+    }
     Ok(cmd.spawn()?)
 }
 

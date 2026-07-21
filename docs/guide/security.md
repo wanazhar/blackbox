@@ -1,6 +1,6 @@
 # Security
 
-**Answers:** What is redacted before disk, which flags disable protection, multi-user file modes, serve auth, residual threats (same-UID, disk theft, novel secrets), historical scrub, and optional at-rest encryption / sealed backup.
+What is redacted before disk, which flags disable protection, multi-user file modes, serve auth, residual threats (same-UID, disk theft, novel secrets), historical scrub, and optional at-rest encryption / sealed backup.
 
 Related: [configuration.md](configuration.md) (keys and env), [export-and-sync.md](export-and-sync.md) (share path), [overhead.md](overhead.md) (cost of capture).
 

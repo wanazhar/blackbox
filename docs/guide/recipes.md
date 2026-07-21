@@ -1,6 +1,6 @@
 # Recipes
 
-**Answers:** Copy-paste workflows for common jobs. Each recipe states **when**, **commands**, **what success looks like**, and **where to go deeper**.
+Copy-paste workflows for common jobs. Each recipe states **when**, **commands**, **what success looks like**, and **where to go deeper**.
 
 Assumes [install](install.md) works (`blackbox --version`). Terms: [glossary](glossary.md). Dense command list: [cheatsheet](cheatsheet.md).
 

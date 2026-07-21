@@ -1,6 +1,6 @@
 # Leave it on (ambient capture)
 
-**Answers:** How shell wrappers and `maybe-run` work, when a harness is recorded vs passed through, and how to opt out without uninstalling.
+How shell wrappers and `maybe-run` work, when a harness is recorded vs passed through, and how to opt out without uninstalling.
 
 Normative decision table: [ambient-contract.md](../ambient-contract.md). This page is the operator-facing explanation.
 

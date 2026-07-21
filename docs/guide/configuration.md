@@ -1,6 +1,6 @@
 # Configuration
 
-**Answers:** Store path resolution, override precedence (CLI → env → config), product modes (recorder vs continuity), every important `config.toml` key, environment variables, and which CLI flags cross-cut commands.
+Store path resolution, override precedence (CLI → env → config), product modes (recorder vs continuity), every important `config.toml` key, environment variables, and which CLI flags cross-cut commands.
 
 Related: [getting-started.md](getting-started.md), [leave-it-on.md](leave-it-on.md), [security.md](security.md). Exhaustive per-command flags: [../reference/cli.md](../reference/cli.md).
 

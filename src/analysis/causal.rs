@@ -144,7 +144,7 @@ impl CommandFingerprint {
         )
     }
 
-    /// Loose family match: same tool_name or same argv[0] basename when keys differ.
+    /// Loose family match: same tool_name or same argv\[0\] basename when keys differ.
     pub fn same_family(&self, other: &Self) -> bool {
         if self.key == other.key {
             return true;

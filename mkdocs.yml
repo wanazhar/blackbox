@@ -78,6 +78,11 @@ nav:
       - Configuration: guide/configuration.md
       - Security: guide/security.md
       - Export & sync: guide/export-and-sync.md
+      - Store integrity (fsck): guide/fsck-and-integrity.md
+      - Verification: guide/verification.md
+      - Experiments & gates: guide/experiments.md
+      - Capsules & cassettes: guide/capsules-and-cassettes.md
+      - Budgets & adapters: guide/budgets-and-adapters.md
       - Overhead: guide/overhead.md
       - Troubleshooting: guide/troubleshooting.md
   - Reference:

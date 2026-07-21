@@ -1,6 +1,6 @@
 # Export and sync
 
-**Answers:** How to export a run (JSONL / HTML / portable), import archives, sync to dir/HTTP/S3, seal packs with a passphrase, and vault a whole store offline.
+How to export a run (JSONL / HTML / portable), import archives, sync to dir/HTTP/S3, seal packs with a passphrase, and vault a whole store offline.
 
 **Default:** export and sync are **redacted**. Use `--no-redact` only on a trusted machine for private analysis. Threat model: [security.md](security.md).
 

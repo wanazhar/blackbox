@@ -90,7 +90,7 @@ pub struct CommandMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub executable: Option<String>,
 
-    /// Full argv array (argv[0] is the program name). Authoritative when present
+    /// Full argv array (argv\[0\] is the program name). Authoritative when present
     /// and `fidelity` is Exact.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub argv: Vec<String>,

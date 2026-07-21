@@ -1,6 +1,6 @@
 # Debug a failure
 
-**Answers:** How to go from “the agent (or command) failed” to a concrete next action using postmortem, anomalies, evidence links, timeline, and handoff.
+How to go from “the agent (or command) failed” to a concrete next action using postmortem, anomalies, evidence links, timeline, and handoff.
 
 ---
 

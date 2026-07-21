@@ -2,7 +2,7 @@
 name = "blackbox-recorder"
 version = "1.5.0"
 edition = "2021"
-description = "Flight recorder and debugger for AI-agent runs — PTY capture, SQLite traces, safe export"
+description = "Local flight recorder and debugger for AI-agent runs: PTY capture, SQLite traces, redacted export"
 authors = ["Wan Azhar <17683456+wanazhar@users.noreply.github.com>"]
 license = "MIT OR Apache-2.0"
 readme = "README.md"

@@ -1,6 +1,6 @@
 # Glossary
 
-**Answers:** Precise meanings of blackbox terms used across guides and CLI. Prefer these words in docs and issue reports.
+Precise meanings of blackbox terms used across guides and CLI. Prefer these words in docs and issue reports.
 
 Writing rules: [../WRITING.md](../WRITING.md). Mental model: [what-is-blackbox.md](what-is-blackbox.md).
 
@@ -13,9 +13,16 @@ Writing rules: [../WRITING.md](../WRITING.md). Mental model: [what-is-blackbox.m
 | **attention** | Sticky level after outcomes: typically `none` / `continue` / `blocked`. Unrelated success does not clear an unresolved failure. |
 | **blob** | Content-addressed payload under `.blackbox/blobs/` (terminal chunks, tool I/O, diffs, …). Events hold keys + previews. |
 | **bookkeeping** | Low-signal observer lifecycle events (`pty.started`, `*.observer.stopped`, …). Semantic views hide these. |
+| **budget** | Optional execution ceilings (wall, processes, output bytes, tool calls, memory, …) with per-limit capability class. |
+| **capsule** | Reproducibility package (portable archive + completeness class). Not deterministic model replay. |
+| **cassette** | Experimental MCP stdio record/replay file (proxied tools only). |
 | **claim** | Coordination lock: whole-project exclusive or **path-scoped** non-overlapping trees. Held in sticky state under `state.lock`. |
+| **config fingerprint** | Stable hash of experiment knobs (variant/task/role/model/…) shared across attempts. |
 | **continuity** | Config-driven delivery of **project memory** on explicit `blackbox run` (`always` / `attention` / `off`). Not ambient. |
+| **domain match** | How tightly a verification receipt correlates to a prior failure/scope (`confirmed` … `unknown`). |
 | **envelope** | `--json` wrapper `blackbox.cli/v1` (`ok`, `command`, `data`, …). See [json-api](../reference/json-api.md). |
+| **experiment** | Typed cohort metadata linking runs (task/variant/attempt/role) for reports and gates. |
+| **fsck** | Store integrity check (fast/deep) with optional auto-safe repair. |
 | **evidence** | Postmortem anchor: detail plus optional `event_id` / `sequence` pointing into the timeline. |
 | **EventWriter** | Single sequencer that assigns monotonic `sequence` numbers as events persist. |
 | **gate / require_ack** | Explicit-run control: warn or require `blackbox ack` / `BLACKBOX_ACK=1` before recording. |
@@ -35,9 +42,11 @@ Writing rules: [../WRITING.md](../WRITING.md). Mental model: [what-is-blackbox.m
 | **semantic timeline** | Event list with bookkeeping filtered out. |
 | **sequence / seq** | Monotonic index of an event within a run (`seq=42` in TUI/CLI). |
 | **sticky state** | `state.json`: attention, claims, intent, unresolved failure, … May be sealed at rest. |
+| **spool** | Durable ingest journal under `.blackbox/spool/` for crash recovery of batches. |
 | **store** | Project `.blackbox/` tree: SQLite + blobs + config + sticky/memory files. |
 | **TraceEvent** | Ordered event record: kind, source, status, metadata, optional blob refs. |
 | **trajectory / LCP** | Compare two runs: shared semantic prefix, first divergence, exclusive steps, file hints. |
+| **verification receipt** | Immutable evidence that a check ran (`verify`); separate from `Run.status`. |
 | **wrap list** | `capture.wrap` basenames eligible for ambient recording. |
 
 ---

@@ -1,6 +1,6 @@
 # Overhead & storage cost
 
-**Answers:** How expensive ambient/explicit capture is in practice, which soft tests exist, how `stats`/`doctor` surface disk cost, and which config knobs reduce volume.
+How expensive ambient/explicit capture is in practice, which soft tests exist, how `stats`/`doctor` surface disk cost, and which config knobs reduce volume.
 
 Blackbox is meant to stay enabled. Numbers below are **local soft checks**, not hard release gates—use them to sanity-check a machine, not as flaky CI.
 

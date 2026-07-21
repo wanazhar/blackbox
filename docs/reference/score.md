@@ -1,6 +1,6 @@
 # Eval score reference (`blackbox.score/v1`)
 
-**Answers:** Shape of `score.json` written under `--artifact-dir` for CI and harness benchmarks.
+Shape of `score.json` written under `--artifact-dir` for CI and harness benchmarks.
 
 Related: [CLI `run --eval`](cli.md) · [recipes CI/eval](../guide/recipes.md) · GitHub Action `.github/actions/blackbox-eval/`.
 

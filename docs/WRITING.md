@@ -145,6 +145,18 @@ When documenting guarantees, classify as: `code-backed` · `test-backed` · `pla
 
 ---
 
+## Platform rendering
+
+| Surface | Source | Notes |
+|---|---|---|
+| **GitHub** | Full repo markdown | Relative links under `docs/` |
+| **crates.io** | `README.md` only | Deep links must be **absolute** GitHub URLs (or stay in-README) |
+| **docs.rs** | `src/lib.rs` crate/module rustdoc | Operator guides are **not** rustdoc; link to GitHub |
+
+Do not invent a GitHub Pages site. Optional MkDocs is local-only (`mkdocs serve`).
+
+Avoid banned “Answers:” lead-ins and marketing slogans (see 1.5 rewrite standard).
+
 ## Checklist before merging doc changes
 
 - [ ] Can a skilled stranger answer “what do I run?” from the page alone?
@@ -154,6 +166,8 @@ When documenting guarantees, classify as: `code-backed` · `test-backed` · `pla
 - [ ] Did we avoid inventing behavior that only exists in a plan doc?
 - [ ] Spelling of product terms matches this glossary?
 - [ ] Prose avoids slogan loops and “Answers:” framing (1.5 rewrite standard)
+- [ ] README deep links work from crates.io (absolute GitHub URLs)
+- [ ] Crate rustdoc on docs.rs states package vs binary naming
 - [ ] Inventory status still accurate for new/moved pages (`docs/inventory.json`)
 - [ ] `python3 scripts/check_doc_links.py` passes (files + heading anchors)
 - [ ] Getting-started contract still green: `cargo test --test docs_first_run`

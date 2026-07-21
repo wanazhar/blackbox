@@ -213,6 +213,11 @@ Operator-facing notes for shipped harnesses: [docs/guide/adapters.md](docs/guide
 | `docs/guide/configuration.md` | Operators | Flags, env, config.toml |
 | `docs/guide/security.md` | Operators | Redaction + at-rest |
 | `docs/guide/export-and-sync.md` | Operators | Export/sync/backup |
+| `docs/guide/fsck-and-integrity.md` | Operators | `fsck`, spool, repair |
+| `docs/guide/verification.md` | Operators | Receipts vs execution |
+| `docs/guide/experiments.md` | Operators | Experiments, report, gate |
+| `docs/guide/capsules-and-cassettes.md` | Operators | Capsules; experimental MCP cassette |
+| `docs/guide/budgets-and-adapters.md` | Operators | Budgets, adapter protocol, project index |
 | `docs/guide/troubleshooting.md` | Operators | Diagnostics + recovery |
 | `docs/guide/overhead.md` | Operators | Cost / soft budgets |
 | `docs/skills/blackbox.md` | Agents | Session playbook |

@@ -19,9 +19,11 @@ Every command accepts global `--json` for machine-readable output (`blackbox.cli
 | **Dashboard / agents** | [`serve`](#21-serve) · [`mcp`](#34-mcp) |
 | **Replay** | [`replay`](#22-replay) · [`fork`](#23-fork) |
 | **Hygiene** | [`scrub`](#24-scrub) · [`doctor`](#25-doctor) · [`stats`](#29-stats) · [`gc`](#30-gc) · [`rm`](#26-rm) · [`purge`](#27-purge) · [`tags`](#28-tags-tag) |
+| **Integrity / verification** | [`fsck`](#36-fsck) · [`verify`](#37-verify) · [`experiment`](#38-experiment) · [`report`](#39-report) · [`gate`](#40-gate) |
+| **Capsules / budgets / index** | [`capsule`](#41-capsule) · [`cassette`](#42-cassette-experimental) · [`budget`](#43-budget) · [`adapter`](#44-adapter) · [`projects`](#45-projects) |
 | **Shell** | [`completions`](#35-completions) |
 
-Guide shortcuts: [getting-started](../guide/getting-started.md) · [debug](../guide/debug-a-failure.md) · [config](../guide/configuration.md) · [security](../guide/security.md).
+Guide shortcuts: [getting-started](../guide/getting-started.md) · [debug](../guide/debug-a-failure.md) · [config](../guide/configuration.md) · [security](../guide/security.md) · [fsck](../guide/fsck-and-integrity.md) · [verification](../guide/verification.md).
 
 ---
 
@@ -145,6 +147,12 @@ blackbox run [--name <label>] [--ci] [--eval] [--artifact-dir <dir>] [--tag <tag
 | `--no-auto-resume` | Skip auto-resume injection |
 | `--continuity <mode>` | Override continuity mode |
 | `--gate-mode <mode>` | Gate mode (warn/require_ack) |
+| `--experiment <id>` | Link run to experiment (creates meta; auto-creates experiment row) |
+| `--task` / `--variant` / `--attempt` / `--role` | Experiment cohort fields |
+| `--model` / `--provider` / `--harness` / `--harness-version` | Experiment model fields |
+| `--seed` / `--dataset-case` | Experiment reproducibility fields |
+| `--max-wall` / `--max-processes` / `--max-output` / `--max-tool-calls` | Execution budgets (see [budgets guide](../guide/budgets-and-adapters.md)) |
+| `--max-memory` / `--max-cpu-percent` / `--contained` | Memory/CPU cgroup prefs; contained preflight |
 | `--insecure-raw` | Store raw PTY bytes as blobs (dangerous) |
 | `--project <dir>` | Project directory (default: cwd) |
 | `--store <path>` | Override store path |
@@ -860,9 +868,143 @@ blackbox completions bash > ~/.local/share/bash-completion/completions/blackbox
 
 ---
 
+## 36. `fsck`
+
+**When to use:** Store integrity after crashes, import issues, or suspected blob loss.
+
+```bash
+blackbox fsck [--deep] [--repair] [--json]
+```
+
+| Flag | Description |
+|---|---|
+| `--deep` | Load and re-hash referenced blobs; offer FTS rebuild |
+| `--repair` | Apply auto-safe repairs (aggregates, stale Running, FTS rebuild, orphan GC) |
+
+Guide: [fsck-and-integrity](../guide/fsck-and-integrity.md).
+
+---
+
+## 37. `verify`
+
+**When to use:** Attach an immutable verification receipt (separate from `Run.status`).
+
+```bash
+blackbox verify <run-id|latest> [--scope <label>] [--parent <receipt-id>] \
+  [--junit <path>] [--tap <path>] [--assert-file <path>] [--assert-git-clean] \
+  [-- <command>…]
+```
+
+Exactly one verifier path: trailing `-- command…`, or `--junit` / `--tap` /
+`--assert-file` / `--assert-git-clean`.
+
+Guide: [verification](../guide/verification.md).
+
+---
+
+## 38. `experiment`
+
+```bash
+blackbox experiment init <name> [--id <id>]
+blackbox experiment show <id>
+blackbox experiment list
+blackbox experiment validate <id>
+blackbox experiment link <experiment> <run-id> [--task …] [--variant …] [--attempt N] [--role …] [--model …]
+```
+
+Guide: [experiments](../guide/experiments.md).
+
+---
+
+## 39. `report`
+
+```bash
+blackbox report --experiment <id> [--group-by variant] [--min-samples N] [--json]
+```
+
+---
+
+## 40. `gate`
+
+```bash
+blackbox gate --experiment <id> \
+  [--baseline <key>] [--candidate <key>] \
+  [--min-attempts N] [--min-verified-rate R] \
+  [--max-p95-duration-regression PCT] \
+  [--require-capture-complete] [--group-by variant]
+```
+
+Non-zero exit when any rule fails. Verified-rate rules prefer domain-confirmed
+receipts (execution success alone never passes).
+
+---
+
+## 41. `capsule`
+
+```bash
+blackbox capsule create <run-id> [-o path]
+blackbox capsule inspect <path>
+blackbox capsule verify <path>
+blackbox capsule execute <path> [--contained] [--rerun]
+```
+
+Guide: [capsules-and-cassettes](../guide/capsules-and-cassettes.md).
+
+---
+
+## 42. `cassette` (experimental)
+
+```bash
+blackbox cassette inspect <path>
+blackbox cassette match <path> <request.json> [--mode normalized] [--tool tools/call]
+blackbox cassette proxy --record <path> [--redact] -- <mcp-server>…
+blackbox cassette proxy --replay <path> [--mode …] [--on-unknown fail|deny|live] -- <mcp-server>…
+```
+
+MCP stdio only; does not intercept harness-internal tools.
+
+---
+
+## 43. `budget`
+
+```bash
+blackbox budget [--max-wall N] [--max-processes N] [--max-output N] \
+  [--max-tool-calls N] [--max-tokens N] [--max-memory N] [--max-cpu-percent N] \
+  [--contained] [--observed-wall N] [--observed-processes N] [--json]
+```
+
+Prints capability classification for configured limits (no process supervision).
+
+---
+
+## 44. `adapter`
+
+```bash
+blackbox adapter validate <manifest.toml|json>
+blackbox adapter test <manifest> [--fixtures events.ndjson]
+```
+
+Live process conformance runs the manifest `command` and validates NDJSON stdout
+when fixtures alone are not enough.
+
+---
+
+## 45. `projects`
+
+```bash
+blackbox projects scan [roots…]
+blackbox projects list [--query substr] [--limit N]
+blackbox projects prune
+blackbox projects remove <project-root>
+```
+
+Metadata-only index at `~/.blackbox/projects-index.json`.
+
+---
+
 ## Exit codes
 
 | Code | Meaning |
 |---|---|
 | 0 | Success |
-| 1 | General error / run failed (`--ci` / `--eval` / `--fail-on-failure`) |
+| 1 | General error / run failed (`--ci` / `--eval` / `--fail-on-failure` / gate fail) |

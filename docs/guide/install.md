@@ -1,6 +1,6 @@
 # Install
 
-**Answers:** How to get a `blackbox` binary on PATH, verify it, and what to check when install fails.
+How to get a `blackbox` binary on PATH, verify it, and what to check when install fails.
 
 ---
 

@@ -26,6 +26,32 @@ Related: [debug-a-failure.md](debug-a-failure.md) (agent logic failed), [install
 | **Fix** | Re-run the agent; inspect last events; do not treat as success |
 | **May be missing** | Final events, end checkpoint, complete coverage |
 
+After a hard kill, also run `blackbox fsck --repair` so pending spool batches
+replay and abandoned `Running` rows are marked `Failed`. Details:
+[fsck-and-integrity.md](fsck-and-integrity.md).
+
+---
+
+## `fsck` reports errors / orphan blobs
+
+| | |
+|---|---|
+| **Likely cause** | Crash mid-write, manual blob delete, incomplete import |
+| **Diagnostic** | `blackbox fsck --deep --json` |
+| **Fix** | `blackbox fsck --repair` for auto-safe items; re-import portable if needed |
+| **May be missing** | Events/blobs that never reached durable storage |
+
+---
+
+## Gate fails though the run succeeded
+
+| | |
+|---|---|
+| **Likely cause** | Execution success ≠ verification; domain match not confirmed |
+| **Diagnostic** | `blackbox report --experiment <id> --json` · `blackbox show latest --json` |
+| **Fix** | `blackbox verify latest --scope … -- <tests>`; re-run gate |
+| **May be missing** | Confirmed receipts (see [verification.md](verification.md)) |
+
 ---
 
 ## Native tool calls are missing

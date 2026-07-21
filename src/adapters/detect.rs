@@ -32,7 +32,7 @@ pub fn detect_adapter(command: &[String]) -> Arc<dyn HarnessAdapter> {
     Arc::new(GenericAdapter::new())
 }
 
-/// Basename of argv[0] for detection helpers.
+/// Basename of argv\[0\] for detection helpers.
 pub fn command_basename(command: &[String]) -> Option<&str> {
     command
         .first()

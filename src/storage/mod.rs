@@ -34,7 +34,7 @@ pub trait TraceStore: Send + Sync + 'static {
 
     /// List all runs, most recent first.
     ///
-    /// Prefer [`list_runs_page`] for large stores — this may load everything.
+    /// Prefer [`Self::list_runs_page`] for large stores — this may load everything.
     async fn list_runs(&self) -> anyhow::Result<Vec<Run>>;
 
     /// Cursor-based run listing (most recent first). Does not load the full table.

@@ -65,9 +65,15 @@ MCP equivalents: `blackbox_handoff`, `blackbox_memory`, `blackbox_status` — ca
 | Eval / no launch mutation | `blackbox run --eval --artifact-dir ./out -- <cmd>` |
 | One-shot failure story | `blackbox fail` / MCP `blackbox_fail` |
 | Timeline / anomalies | MCP `blackbox_timeline` · `blackbox_anomalies` |
+| Verify task (not exit code) | `blackbox verify latest -- <test cmd>` |
+| Experiment gate (CI) | `blackbox gate --experiment … --min-verified-rate …` |
+| Store integrity | `blackbox fsck --deep` |
 | First-time project setup | `blackbox setup` / `setup --memory-bus --install-shell` / `setup --harden` |
 | Ack gate | `blackbox ack` or `BLACKBOX_ACK=1` |
 | Enable project | `blackbox enable --memory-bus --install-shell` |
+
+**Do not** treat `Run.status == Succeeded` as task verification. Use receipts
+([verification](../guide/verification.md)) when reporting “fixed” to a human or gate.
 
 ---
 

@@ -1,6 +1,6 @@
 # Annotated examples (status & handoff)
 
-**Answers:** What a real `status --json` / `handoff --json` payload looks like and which fields agents should branch on.
+What a real `status --json` / `handoff --json` payload looks like and which fields agents should branch on.
 
 These are **illustrative** (field names match the binary; values are sample). Always prefer live:
 

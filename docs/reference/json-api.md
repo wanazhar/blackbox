@@ -1,6 +1,6 @@
 # JSON API reference
 
-**Answers:** Shape of `--json` output (`blackbox.cli/v1`), which command produces which view, and the fields automation should parse.
+Shape of `--json` output (`blackbox.cli/v1`), which command produces which view, and the fields automation should parse.
 
 | You want… | Prefer |
 |---|---|

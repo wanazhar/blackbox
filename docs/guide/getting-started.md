@@ -1,6 +1,6 @@
 # Getting started
 
-**Answers:** How to enable a project, record the first run, inspect it, and optionally turn on project memory and ambient wrappers—without requiring prior knowledge of blackbox internals.
+How to enable a project, record the first run, inspect it, and optionally turn on project memory and ambient wrappers—without requiring prior knowledge of blackbox internals.
 
 **Prerequisites:** [Install](install.md) (`blackbox --version` works). **Background:** [What is blackbox?](what-is-blackbox.md).
 

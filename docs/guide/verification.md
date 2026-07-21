@@ -1,6 +1,7 @@
 # Verification outcomes and receipts
 
-Process exit code is **not** task verification. Blackbox stores three independent outcomes:
+Process **exit code is not task verification**. Blackbox stores three independent
+outcomes on a run:
 
 ```json
 {
@@ -10,37 +11,58 @@ Process exit code is **not** task verification. Blackbox stores three independen
 }
 ```
 
+`Run.status` is **execution only**. Verification never rewrites it.
+
 ## Commands
 
 ```bash
-# Command-exit verifier (workspace-only; does not claim containment)
+# Command-exit verifier (workspace cwd; does not claim OS containment)
 blackbox verify latest -- cargo test invalid_session
 
-# JUnit XML
+# JUnit XML / TAP
 blackbox verify latest --junit target/test-results.xml
-
-# TAP
 blackbox verify latest --tap results.tap
 
 # File / git assertions
 blackbox verify latest --assert-file src/auth.rs
 blackbox verify latest --assert-git-clean
 
-# JSON envelope
+# Scope label (used for domain matching)
+blackbox verify latest --scope invalid_session -- cargo test invalid_session
+
+# Lineage on re-verify
+blackbox verify latest --parent verify-… -- cargo test
+
+# JSON envelope: receipt + outcome
 blackbox verify latest --json -- cargo test
 ```
 
 ## Immutability
 
-Each `verify` creates a **new** receipt. Re-running verification never rewrites prior evidence; use `--parent <receipt-id>` for lineage.
+Each `verify` inserts a **new** receipt. Prior receipts stay on disk. Use
+`--parent <receipt-id>` when re-running a related check.
 
-`Run.status` is unchanged by verification. A run may succeed while verification fails, and a failed run may later receive a passing receipt.
+A run may succeed while verification fails; a failed run may later get a
+passing receipt.
 
-## Confidence
+## Confidence and domain match
 
-Receipts carry an explicit confidence class (`confirmed`, `strongly_correlated`, `weakly_correlated`, `unknown`). Regression gates that require verified success only accept **confirmed** (or configured) verification — never bare execution success.
+Receipts carry a confidence class:
+
+| Class | Meaning |
+|---|---|
+| `confirmed` | Domain match ties the receipt to the failure/scope |
+| `strongly_correlated` | Partial match |
+| `weakly_correlated` | Loose match |
+| `unknown` | No useful domain signal |
+
+`verify` scores the new receipt against recent error events (scope text,
+failure fingerprint). Regression **gates** that require verified success count
+**domain-confirmed** passes by default — not bare execution success, and not a
+passing receipt for an unrelated suite.
 
 ## Related
 
-- [experiments.md](experiments.md) — multi-run verified rates
+- [experiments.md](experiments.md) — multi-run verified / confirmed rates
 - [claims.md](../claims.md)
+- [CLI `verify`](../reference/cli.md#37-verify)

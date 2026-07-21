@@ -1,34 +1,46 @@
 # blackbox
 
-Local **flight recorder, debugger, and project memory** for AI-agent runs and other commands you need an honest timeline for.
+Local flight recorder, debugger, and project memory for AI-agent runs and other
+commands that need an ordered, redacted timeline on disk.
 
-Supervise a process under a PTY, merge git/filesystem/process signal, **redact secrets before write**, store an ordered event stream in SQLite + content-addressed blobs, then inspect with CLI, TUI, dashboard, MCP, or `--json`.
+Supervises a process under a PTY, merges git / filesystem / process signals,
+**redacts secrets before write**, stores events in SQLite plus content-addressed
+blobs, then inspects them with CLI, TUI, a local dashboard, MCP, or `--json`.
 
 | | |
 |---|---|
-| **Binary / lib** | `blackbox` |
-| **crates.io** | [`blackbox-recorder`](https://crates.io/crates/blackbox-recorder) |
+| **CLI binary** | `blackbox` |
+| **Library path** | `blackbox` (`use blackbox::…`) |
+| **crates.io package** | [`blackbox-recorder`](https://crates.io/crates/blackbox-recorder) |
+| **API docs** | [docs.rs/blackbox-recorder](https://docs.rs/blackbox-recorder) |
+| **Operator docs** | [docs/README.md](https://github.com/wanazhar/blackbox/blob/master/docs/README.md) |
 | **License** | MIT OR Apache-2.0 |
-| **Docs** | **[docs/README.md](docs/README.md)** — index by question |
+
+> **crates.io / docs.rs note:** package name is `blackbox-recorder`; the binary
+> and Rust crate path stay `blackbox`. Deep guides live on GitHub (linked
+> above). Relative `docs/` links below work on GitHub; on crates.io use the
+> absolute links in the table.
 
 ---
 
-## Who this is for
+## Scope
 
-You already use a terminal and probably an agent harness (Claude, Codex, aider, …). You want:
+You already use a terminal and likely an agent harness (Claude, Codex, aider, …).
+Blackbox is for:
 
-1. **Record** what actually ran (not a partial scrollback)
-2. **Inspect** failures with structure (postmortem, anomalies, timeline)
-3. **Continue** work with project memory and handoff—without treating the store as a cloud brain
+1. **Record** — what actually ran (PTY + layers), not a partial scrollback
+2. **Inspect** — failures with structure (postmortem, anomalies, timeline)
+3. **Continue** — project memory and handoff for the next launch
 
-It is not a SaaS, not a secret vault by default, and not deterministic LLM replay. Boundaries: [What is blackbox?](docs/guide/what-is-blackbox.md).
+Not a SaaS, not a secret vault by default, not deterministic LLM replay.
+Boundaries: [What is blackbox?](https://github.com/wanazhar/blackbox/blob/master/docs/guide/what-is-blackbox.md).
 
 ---
 
 ## Install
 
 ```bash
-# Binary (no Rust required)
+# Binary (no Rust toolchain required)
 curl -fsSL https://raw.githubusercontent.com/wanazhar/blackbox/master/install.sh | sh
 
 # Or crates.io (package name ≠ binary name)
@@ -38,7 +50,7 @@ blackbox --version
 blackbox doctor
 ```
 
-Details: [Install](docs/guide/install.md).
+Details: [Install](https://github.com/wanazhar/blackbox/blob/master/docs/guide/install.md).
 
 ---
 
@@ -58,83 +70,99 @@ blackbox timeline latest --semantic
 Failed run?
 
 ```bash
-blackbox fail                 # one-shot focus + postmortem + anomalies + next
+blackbox fail                 # focus + postmortem + anomalies + next
 blackbox show latest --tui    # e = failure story, Enter/g = jump to seq
 ```
 
-Full walkthrough: [Getting started](docs/guide/getting-started.md).
+Walkthrough: [Getting started](https://github.com/wanazhar/blackbox/blob/master/docs/guide/getting-started.md).
 
 ---
 
 ## Documentation by question
 
+Links point at the GitHub tree so they resolve from crates.io as well as GitHub.
+
 | Question | Doc |
 |---|---|
-| What is this, technically? | [What is blackbox?](docs/guide/what-is-blackbox.md) |
-| How do capture / memory / inspect fit? | [Concepts](docs/guide/concepts.md) |
-| What do these terms mean? | [Glossary](docs/guide/glossary.md) |
-| Copy-paste workflows | [Recipes](docs/guide/recipes.md) |
-| One-screen commands | [Cheatsheet](docs/guide/cheatsheet.md) |
-| Harness adapters | [Adapters](docs/guide/adapters.md) |
-| Doctor / capture quality | [Doctor & capture](docs/guide/doctor-and-capture.md) |
-| Sample handoff/status JSON | [Examples](docs/guide/examples.md) |
-| Day-to-day CLI / TUI / dashboard | [Everyday use](docs/guide/everyday-use.md) |
-| Debug a failed agent run | [Debug a failure](docs/guide/debug-a-failure.md) |
-| Ambient shell wrappers | [Leave it on](docs/guide/leave-it-on.md) |
-| Config, env, store paths | [Configuration](docs/guide/configuration.md) |
-| Redaction & threat model | [Security](docs/guide/security.md) |
-| Export / sync / backup | [Export and sync](docs/guide/export-and-sync.md) |
-| Something broken | [Troubleshooting](docs/guide/troubleshooting.md) |
-| **Full docs map** | **[docs/README.md](docs/README.md)** (in-repo; no GitHub Pages) |
-| Local browse (optional) | `pip install -r requirements-docs.txt && bash scripts/prepare_docs_site.sh && mkdocs serve` |
+| What is this, technically? | [What is blackbox?](https://github.com/wanazhar/blackbox/blob/master/docs/guide/what-is-blackbox.md) |
+| Capture / memory / inspect planes | [Concepts](https://github.com/wanazhar/blackbox/blob/master/docs/guide/concepts.md) |
+| Terms | [Glossary](https://github.com/wanazhar/blackbox/blob/master/docs/guide/glossary.md) |
+| Copy-paste workflows | [Recipes](https://github.com/wanazhar/blackbox/blob/master/docs/guide/recipes.md) |
+| One-screen commands | [Cheatsheet](https://github.com/wanazhar/blackbox/blob/master/docs/guide/cheatsheet.md) |
+| Harness adapters | [Adapters](https://github.com/wanazhar/blackbox/blob/master/docs/guide/adapters.md) |
+| Doctor / capture quality | [Doctor & capture](https://github.com/wanazhar/blackbox/blob/master/docs/guide/doctor-and-capture.md) |
+| Store integrity (`fsck`) | [Fsck & integrity](https://github.com/wanazhar/blackbox/blob/master/docs/guide/fsck-and-integrity.md) |
+| Verification receipts | [Verification](https://github.com/wanazhar/blackbox/blob/master/docs/guide/verification.md) |
+| Experiments & CI gates | [Experiments](https://github.com/wanazhar/blackbox/blob/master/docs/guide/experiments.md) |
+| Capsules & MCP cassettes | [Capsules](https://github.com/wanazhar/blackbox/blob/master/docs/guide/capsules-and-cassettes.md) |
+| Budgets & external adapters | [Budgets](https://github.com/wanazhar/blackbox/blob/master/docs/guide/budgets-and-adapters.md) |
+| Day-to-day CLI / TUI / serve | [Everyday use](https://github.com/wanazhar/blackbox/blob/master/docs/guide/everyday-use.md) |
+| Debug a failed run | [Debug a failure](https://github.com/wanazhar/blackbox/blob/master/docs/guide/debug-a-failure.md) |
+| Ambient shell wrappers | [Leave it on](https://github.com/wanazhar/blackbox/blob/master/docs/guide/leave-it-on.md) |
+| Config / env / store paths | [Configuration](https://github.com/wanazhar/blackbox/blob/master/docs/guide/configuration.md) |
+| Redaction & threat model | [Security](https://github.com/wanazhar/blackbox/blob/master/docs/guide/security.md) |
+| Export / sync / backup | [Export and sync](https://github.com/wanazhar/blackbox/blob/master/docs/guide/export-and-sync.md) |
+| Something broken | [Troubleshooting](https://github.com/wanazhar/blackbox/blob/master/docs/guide/troubleshooting.md) |
+| **Full map** | [docs/README.md](https://github.com/wanazhar/blackbox/blob/master/docs/README.md) |
 
 ### Reference & agents
 
 | | |
 |---|---|
-| Every subcommand | [CLI reference](docs/reference/cli.md) |
-| `--json` views | [JSON API](docs/reference/json-api.md) |
-| MCP tools | [MCP reference](docs/reference/mcp.md) |
-| Memory pack schema | [Memory pack](docs/reference/memory-pack.md) |
-| Coding-agent playbook | [skills/blackbox.md](docs/skills/blackbox.md) |
+| Every subcommand | [CLI reference](https://github.com/wanazhar/blackbox/blob/master/docs/reference/cli.md) |
+| `--json` views | [JSON API](https://github.com/wanazhar/blackbox/blob/master/docs/reference/json-api.md) |
+| MCP tools | [MCP](https://github.com/wanazhar/blackbox/blob/master/docs/reference/mcp.md) |
+| Memory pack schema | [Memory pack](https://github.com/wanazhar/blackbox/blob/master/docs/reference/memory-pack.md) |
+| Agent session playbook | [skills/blackbox.md](https://github.com/wanazhar/blackbox/blob/master/docs/skills/blackbox.md) |
 
 ### Contributors
 
 | | |
 |---|---|
-| Repo map & conventions | [AGENTS.md](AGENTS.md) |
-| Architecture | [docs/internals/architecture.md](docs/internals/architecture.md) |
-| How we write docs | [docs/WRITING.md](docs/WRITING.md) |
-| Roadmap / quality bar | [docs/ROADMAP.md](docs/ROADMAP.md) |
-| Changelog | [CHANGELOG.md](CHANGELOG.md) |
+| Repo map | [AGENTS.md](https://github.com/wanazhar/blackbox/blob/master/AGENTS.md) |
+| Architecture | [internals/architecture.md](https://github.com/wanazhar/blackbox/blob/master/docs/internals/architecture.md) |
+| Writing standard | [WRITING.md](https://github.com/wanazhar/blackbox/blob/master/docs/WRITING.md) |
+| Roadmap | [ROADMAP.md](https://github.com/wanazhar/blackbox/blob/master/docs/ROADMAP.md) |
+| Changelog | [CHANGELOG.md](https://github.com/wanazhar/blackbox/blob/master/CHANGELOG.md) |
+
+Optional local MkDocs preview (not deployed):
+
+```bash
+pip install -r requirements-docs.txt
+bash scripts/prepare_docs_site.sh
+mkdocs serve
+```
 
 ---
 
-## Commands (orientation, not a full reference)
+## Commands (orientation)
 
 | Job | Command |
 |---|---|
 | Enable project | `blackbox enable` / `--memory-bus` / `--install-shell` |
 | Record | `blackbox run -- <cmd>` · `--ci` · `--eval` · `--observe-only` |
 | Ambient policy | `blackbox maybe-run` (shell wrappers) |
-| Inspect | `runs` · `show` · `timeline` · `inspect` · `tui` · `serve` |
+| Inspect | `runs` · `show` · `timeline` · `inspect` · `tui` · `serve` · `search` |
 | Explain failure | `fail` · `postmortem` · `analyze` · `diff` |
 | Continuity | `status` · `handoff` · `memory` · `claim` · `resolve` · `context` |
-| Share | `export` · `import` · `sync` · `backup` / `restore` |
+| Integrity | `fsck` · `fsck --deep` · `fsck --repair` |
+| Verification | `verify` · `report` · `gate` · `experiment` |
+| Share | `export` · `import` · `sync` · `backup` / `restore` · `capsule` |
 | Hygiene | `doctor` · `stats` · `scrub` · `gc` · `purge` / `rm` |
 | Agents | `mcp` · global `--json` |
 
-Exhaustive flags: [docs/reference/cli.md](docs/reference/cli.md).
+Flags: [CLI reference](https://github.com/wanazhar/blackbox/blob/master/docs/reference/cli.md).
 
 ---
 
 ## Defaults worth knowing
 
-- **Redact-before-write** on argv, env, terminal, tool payloads. Raw capture requires `--insecure-raw` / `--no-redact` (dangerous).
-- **Store is project-local:** `.blackbox/blackbox.db` + `.blackbox/blobs/` (override: `--store`, `BLACKBOX_DB`).
+- **Redact-before-write** on argv, env, terminal, tool payloads. Raw capture needs `--insecure-raw` / `--no-redact` (dangerous).
+- **Store is project-local:** `.blackbox/blackbox.db` + `.blackbox/blobs/` (`--store` / `BLACKBOX_DB`).
 - **Export/sync redact** unless `--no-redact`.
 - **Ambient capture is observe-only** (no continuity inject). Explicit `run` is the inject path.
-- **At-rest:** optional `encrypt_blobs` + sealed sticky files; offline vault via `blackbox backup`/`restore`. Live SQLCipher is not used—see [security](docs/guide/security.md).
+- **Execution success is not verification** — use `blackbox verify` receipts for gates.
+- **At-rest:** optional `encrypt_blobs` + sealed sticky files; offline vault via `backup`/`restore`. Live SQLCipher is not used — [security](https://github.com/wanazhar/blackbox/blob/master/docs/guide/security.md).
 
 ---
 
@@ -146,12 +174,14 @@ cargo test
 cargo clippy --all-targets -- -D warnings
 cargo fmt
 cargo build --release
+python3 scripts/check_doc_links.py
 ```
 
-Stable Rust, edition 2021. CI: [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+Stable Rust, edition 2021. CI: [`.github/workflows/ci.yml`](https://github.com/wanazhar/blackbox/blob/master/.github/workflows/ci.yml).
 
 ---
 
 ## License
 
-Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT), at your option.
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
+[MIT license](LICENSE-MIT), at your option.

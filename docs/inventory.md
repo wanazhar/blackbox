@@ -1,4 +1,4 @@
-# Documentation inventory (1.5)
+# Documentation inventory
 
 
 Machine-readable: [`inventory.json`](inventory.json).

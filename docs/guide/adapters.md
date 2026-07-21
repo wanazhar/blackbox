@@ -1,6 +1,6 @@
 # Harness adapters
 
-**Answers:** Which agent CLIs blackbox detects, what structured signal you get, where native logs are scanned, and how to add a custom binary to the wrap list.
+Which agent CLIs blackbox detects, what structured signal you get, where native logs are scanned, and how to add a custom binary to the wrap list.
 
 Related: [leave-it-on](leave-it-on.md) (ambient wrap), [stream-protocol](../reference/stream-protocol.md) (custom NDJSON), [concepts](concepts.md) (semantic vs raw terminal).
 

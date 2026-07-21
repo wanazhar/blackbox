@@ -24,6 +24,11 @@ Blackbox docs are split by **who is reading** and **what question they have**. T
 | Config knobs | [guide/configuration.md](guide/configuration.md) |
 | Secrets and threat model | [guide/security.md](guide/security.md) |
 | Export, sync, backup | [guide/export-and-sync.md](guide/export-and-sync.md) |
+| Store integrity (`fsck`) | [guide/fsck-and-integrity.md](guide/fsck-and-integrity.md) |
+| Verification receipts | [guide/verification.md](guide/verification.md) |
+| Experiments & CI gates | [guide/experiments.md](guide/experiments.md) |
+| Capsules & MCP cassettes | [guide/capsules-and-cassettes.md](guide/capsules-and-cassettes.md) |
+| Budgets & external adapters | [guide/budgets-and-adapters.md](guide/budgets-and-adapters.md) |
 | Performance / disk | [guide/overhead.md](guide/overhead.md) |
 | Broken install or store | [guide/troubleshooting.md](guide/troubleshooting.md) |
 
@@ -31,7 +36,14 @@ Guide map: [guide/README.md](guide/README.md).
 
 ### How docs are published
 
-**Source of truth is this repository** — read guides under [`docs/guide/`](guide/), reference under [`docs/reference/`](reference/), and the map in this file. There is **no GitHub Pages site** for blackbox (Pages is reserved for other uses).
+| Surface | What you get |
+|---|---|
+| **GitHub** | Full tree under `docs/` (this file is the index) |
+| **crates.io** | Package README (`README.md`) with absolute links into this repo |
+| **docs.rs** | Rust API docs for crate `blackbox-recorder` (`src/lib.rs`) |
+
+There is **no GitHub Pages site** for blackbox. Operator guides are **in-repo
+markdown**, not rustdoc pages.
 
 Link check (also run in CI): `python3 scripts/check_doc_links.py`.
 
@@ -90,10 +102,10 @@ mkdocs serve                           # http://127.0.0.1:8000 only on your mach
 
 | Document | Contents |
 |---|---|
-| [ROADMAP.md](ROADMAP.md) | Quality bar and version story |
-| [plan/trace-integrity-1.5.md](plan/trace-integrity-1.5.md) | **Active 1.5 plan** (trace integrity & scale) |
+| [ROADMAP.md](ROADMAP.md) | Quality bar and version story (incl. 1.6 bar) |
+| [plan/trace-integrity-1.5.md](plan/trace-integrity-1.5.md) | 1.5 plan (trace integrity & scale) |
 | [CHANGELOG.md](https://github.com/wanazhar/blackbox/blob/master/CHANGELOG.md) | Released changes |
-| [plan/](plan/) | Design plans (shipped 1.1–1.4 + active 1.5) — not operator how-to |
+| [plan/](plan/) | Design plans (historical + active) — not operator how-to |
 | [history/](history/) | Archived plans |
 | [claims.md](claims.md) | High-risk guarantee claim matrix |
 

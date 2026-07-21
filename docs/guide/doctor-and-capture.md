@@ -1,6 +1,6 @@
 # Doctor and capture quality
 
-**Answers:** How to read `blackbox doctor`, what daily-driver score means, how per-run capture coverage is scored, and what to do when quality is low.
+How to read `blackbox doctor`, what daily-driver score means, how per-run capture coverage is scored, and what to do when quality is low.
 
 Related: [troubleshooting](troubleshooting.md) · [overhead](overhead.md) · [configuration](configuration.md) · TUI `c` panel (capture quality).
 

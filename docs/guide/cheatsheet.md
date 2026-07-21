@@ -156,21 +156,35 @@ Session start: `blackbox handoff --json` · skill: [../skills/blackbox.md](../sk
 
 ---
 
+## Integrity / verification / experiments
+
+```bash
+blackbox fsck
+blackbox fsck --deep
+blackbox fsck --repair --json
+
+blackbox verify latest -- cargo test
+blackbox verify latest --junit out.xml --scope suite-name
+
+blackbox experiment init my-exp
+blackbox run --eval --experiment my-exp --task t1 --variant v1 -- cargo test
+blackbox report --experiment my-exp --json
+blackbox gate --experiment my-exp --min-attempts 3 --min-verified-rate 0.8
+
+blackbox capsule create latest -o fail.bbx.json
+blackbox capsule execute fail.bbx.json
+blackbox cassette proxy --record c.bbx.json -- my-mcp-server
+
+blackbox run --max-wall 1800 --max-output 104857600 --max-tool-calls 500 -- agent
+blackbox budget --max-wall 30 --max-processes 64 --json
+blackbox projects scan .
+blackbox projects prune
+```
+
+Guides: [fsck](fsck-and-integrity.md) · [verification](verification.md) · [experiments](experiments.md) · [capsules](capsules-and-cassettes.md) · [budgets](budgets-and-adapters.md).
+
+---
+
 ## See also
 
 [getting-started](getting-started.md) · [recipes](recipes.md) · [adapters](adapters.md) · [doctor-and-capture](doctor-and-capture.md) · [examples](examples.md) · [glossary](glossary.md) · [troubleshooting](troubleshooting.md)
-
-## 1.6 integrity & verification
-
-```bash
-blackbox fsck --deep --json
-blackbox verify latest -- cargo test
-blackbox experiment init my-exp
-blackbox run --eval --experiment my-exp --task t1 --variant v1 --attempt 1 -- cargo test
-blackbox report --experiment my-exp --json
-blackbox gate --experiment my-exp --min-attempts 3 --min-verified-rate 0.8
-blackbox capsule create latest -o fail.bbx.json
-blackbox cassette proxy --record c.bbx.json -- my-mcp-server
-blackbox budget --max-wall 30 --max-processes 64 --json
-blackbox projects scan .
-```

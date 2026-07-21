@@ -2,7 +2,7 @@
 
 > **Contributor / deep-dive.** Operator concepts: [../guide/concepts.md](../guide/concepts.md). Schema: [../reference/memory-pack.md](../reference/memory-pack.md). Recipes: [../guide/recipes.md](../guide/recipes.md#6-agent-session-start-human-or-llm).
 
-**Answers:** Sticky state, attention, claims, memory pack build/inject, and gates — and how they intentionally **do not** apply to ambient capture.
+Sticky state, attention, claims, memory pack build/inject, and gates — and how they intentionally **do not** apply to ambient capture.
 
 The **continuity plane** turns blackbox from a passive flight recorder into an active project memory path. With continuity on, supervised **explicit** launches can **materialize and inject** a bounded project memory pack (files, env, optional preamble) so cooperative agents need not start cold.
 

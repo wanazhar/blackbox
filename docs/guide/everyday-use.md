@@ -1,6 +1,6 @@
 # Everyday use
 
-**Answers:** How to list and inspect runs, navigate timelines, use the TUI and dashboard, search, and produce machine-readable output.
+How to list and inspect runs, navigate timelines, use the TUI and dashboard, search, and produce machine-readable output.
 
 Assumes you already [installed](install.md) and [recorded at least one run](getting-started.md).
 

@@ -1,20 +1,20 @@
 # Store integrity and `fsck`
 
-**Commands first.** Use these when you suspect missing events, orphan blobs, or crash residue.
+Check the store when you suspect missing events, orphan blobs, or crash residue.
 
 ```bash
-# Fast metadata/reference validation
+# Fast metadata / reference validation
 blackbox fsck
 
 # Load, decompress/decrypt, and re-hash every referenced blob
 blackbox fsck --deep
 
-# Show repair plan, write a recovery artifact, apply auto-safe repairs
+# Plan + apply auto-safe repairs; write a recovery artifact under .blackbox/
 blackbox fsck --repair
 
-# Machine-readable report (blackbox.cli/v1 envelope when combined with --json)
+# Machine-readable report
 blackbox fsck --json
-blackbox fsck --deep --json
+blackbox fsck --deep --repair --json
 ```
 
 ## What is checked
@@ -27,29 +27,39 @@ blackbox fsck --deep --json
 | Aggregates vs event counts | yes | yes |
 | Checkpoint blob keys | yes | yes |
 | Blob load + content hash | no | yes |
-| Orphan blob files on disk | no | info |
+| Orphan blob files on disk | no | info (repairable) |
+| FTS probe / rebuild offer | yes | deep offers rebuild |
 | Recovery spool pending/torn | yes | yes |
 
 ## Durable ingest spool
 
-Live capture appends micro-batches to `.blackbox/spool/pending/` **before** SQLite commit. A producer-visible success after a barrier flush means the batch is recoverability-safe even if the process dies mid-commit.
+Live capture can append micro-batches to `.blackbox/spool/` **before** SQLite
+commit. A producer-visible success after a barrier flush means the batch is
+recoverable even if the process dies mid-commit.
 
-On the next `blackbox run` (and during `fsck --repair`), pending spool batches are replayed idempotently by event id.
+On the next open (and during `fsck --repair`), pending spool batches are
+replayed **idempotently by event id**. Torn records are detected and reported;
+they are not invented into success.
 
 ```bash
-# After a crash, either start a new run or:
+# After a hard crash, either start a new supervised run or:
 blackbox fsck --repair
 ```
 
 ## Repair safety
 
-Auto-safe repairs only:
+Auto-safe under `--repair`:
 
-- Recompute missing/mismatched aggregates
-- Mark abandoned `Running` runs as `Failed`
-- Count spool replay as planned
+| Action | Effect |
+|---|---|
+| `recompute_aggregates` | Rebuild per-run aggregate payloads from events |
+| `mark_run_failed` | Abandoned `Running` → `Failed` with a note |
+| `replay_spool` | Planned; CLI also recovers spool on open |
+| `rebuild_fts` | Rebuild `events_fts` from the events table |
+| `gc_orphan_blob` | Delete blob files not referenced by events/checkpoints |
 
-**Not** auto-repaired: inventing missing events, replacing corrupted blob bytes, deleting orphans without grace policy (`scrub --gc`).
+**Not** auto-repaired: inventing missing events, replacing corrupted blob bytes
+with guessed content.
 
 ## Related
 

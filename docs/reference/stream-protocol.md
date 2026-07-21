@@ -1,6 +1,6 @@
 # Stream protocol (NDJSON)
 
-**Answers:** How a custom harness can emit structured tool/session/usage events on stdout so blackbox adapters produce `TraceEvent`s instead of opaque terminal-only history.
+How a custom harness can emit structured tool/session/usage events on stdout so blackbox adapters produce `TraceEvent`s instead of opaque terminal-only history.
 
 | Not this doc | See instead |
 |---|---|

@@ -1,6 +1,6 @@
 # Memory pack reference (blackbox.memory/v1)
 
-**Answers:** What is in the project memory pack, which fields survive budget shrink, how attention levels work, and where files are written.
+What is in the project memory pack, which fields survive budget shrink, how attention levels work, and where files are written.
 
 | Role | Doc |
 |---|---|

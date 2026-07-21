@@ -1,18 +1,26 @@
 # Concepts
 
-**Answers:** How the moving parts fit together once you know the one-paragraph product pitch. For definitions only, see [glossary](glossary.md). For “what is blackbox?”, see [what-is-blackbox](what-is-blackbox.md).
+How the moving parts fit together once you know the one-paragraph product pitch. For definitions only, see [glossary](glossary.md). For “what is blackbox?”, see [what-is-blackbox](what-is-blackbox.md).
 
 This page is for a technical reader who wants the **system model**, not a flag list.
 
 ---
 
-## 1. Three planes
+## 1. Three planes (plus integrity)
 
 | Plane | Job | Primary surfaces |
 |---|---|---|
-| **Capture** | Supervise a process; emit ordered events; redact; persist | `run`, `maybe-run`, layers, adapters, store |
+| **Capture** | Supervise a process; emit ordered events; redact; persist | `run`, `maybe-run`, layers, adapters, store, spool |
 | **Inspect** | Explain and navigate what was captured | `show`, `timeline`, TUI, `serve`, `postmortem`, `diff`, `search` |
 | **Continuity** | Sticky project intent + bounded memory for the *next* launch | `state.json`, MEMORY, `handoff`, claims, inject |
+
+Related but not a fourth plane:
+
+| Concern | Job | Surfaces |
+|---|---|---|
+| **Integrity** | Store health and recoverability | `fsck`, spool recovery |
+| **Verification** | Task evidence separate from exit code | `verify`, receipts, `report` / `gate` |
+| **Budgets** | Cap supervised work | `--max-wall`, tool/output ceilings, cgroup |
 
 Ambient capture uses **capture only** (observe-only). Explicit `blackbox run` can use **capture + continuity** when configured.
 

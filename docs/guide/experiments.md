@@ -1,12 +1,13 @@
 # Experiments, reports, and regression gates
 
-Typed experiment metadata replaces tag-only conventions for eval cohorts.
+Typed experiment metadata links runs into eval cohorts. Prefer this over
+tag-only conventions when you need rates and gates.
 
 ## Init and link
 
 ```bash
 blackbox experiment init login-fix
-# or auto-create on first run:
+# or create on first linked run:
 blackbox run --eval \
   --experiment login-fix \
   --task invalid-session \
@@ -24,8 +25,19 @@ blackbox experiment list
 Link an existing run:
 
 ```bash
-blackbox experiment link login-fix <run-id> --task invalid-session --variant baseline --role baseline
+blackbox experiment link login-fix <run-id> \
+  --task invalid-session --variant baseline --role baseline
 ```
+
+### Attempt numbering and config fingerprint
+
+- If `--attempt` is omitted, blackbox assigns the next attempt for the same
+  experiment + task + variant cohort (1-based).
+- Each link stamps a **config fingerprint** over variant/task/role/model/
+  provider/harness/seed/dataset (stable across attempts of the same setup).
+
+Metadata survives **portable export/import** (`experiment_meta`, `experiment`,
+`verification_receipts` on v2 archives).
 
 ## Reports
 
@@ -38,7 +50,8 @@ Reports always disclose:
 
 - sample size per group
 - verified vs unverified counts
-- excluded/incomplete capture
+- **domain_confirmed** counts (Passed + Confirmed confidence)
+- excluded / incomplete capture when known
 - median / p95 duration when present
 - `insufficient_evidence` when samples are too small
 
@@ -56,7 +69,9 @@ blackbox gate --experiment login-fix \
   --require-capture-complete
 ```
 
-Exit code is non-zero when any declared rule fails. Missing verification fails closed when rates are required.
+Exit code is non-zero when any declared rule fails. When a verified rate is
+required, the gate prefers **domain-confirmed** rate (fail closed on missing
+evidence).
 
 ## Related
 

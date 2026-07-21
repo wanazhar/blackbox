@@ -2,7 +2,7 @@
 
 > **Contributor / deep-dive documentation.** Operators: [../guide/README.md](../guide/README.md). System model without module names: [../guide/concepts.md](../guide/concepts.md).
 
-**Answers:** How modules connect, where events are sequenced, how the store is shaped, and where continuity sits relative to capture.
+How modules connect, where events are sequenced, how the store is shaped, and where continuity sits relative to capture.
 
 **Blackbox** is a Rust flight recorder and debugger for AI-agent runs. It launches agent commands (Claude, Codex, or generic), captures terminal output and structured events via PTY supervision, stores traces in SQLite + content-addressed blobs, and provides CLI, TUI, and a local web dashboard for inspection.
 

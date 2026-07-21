@@ -191,7 +191,7 @@ pub enum CassetteAction {
     },
     /// Stdio MCP proxy: record tool calls into a cassette (experimental)
     ///
-    /// Usage: blackbox cassette proxy --record out.bbx.json -- <mcp-server> ...
+    /// Usage: `blackbox cassette proxy --record out.bbx.json -- <server> ...`
     Proxy {
         /// Record mode (write cassette)
         #[arg(long, conflicts_with = "replay")]

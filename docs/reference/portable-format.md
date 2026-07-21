@@ -1,6 +1,6 @@
 # Portable format reference
 
-**Answers:** Schema for import/export archives (`blackbox.portable/v1|v2`), blob embedding rules, redaction defaults, and how sealed envelopes wrap portable JSON.
+Schema for import/export archives (`blackbox.portable/v1|v2`), blob embedding rules, redaction defaults, and how sealed envelopes wrap portable JSON.
 
 Operator workflow: [../guide/export-and-sync.md](../guide/export-and-sync.md). Threat model: [../guide/security.md](../guide/security.md).
 
@@ -27,28 +27,41 @@ blackbox export <run-id> --format portable -o trace.json --no-redact   # dangero
 blackbox export <run-id> --format portable --passphrase '…' -o sealed.bbx.json
 ```
 
-### Logical archive shape (v2)
+### Logical archive shape (v2 JSON)
+
+The on-wire document uses a numeric `version` field (not a string schema id):
 
 ```json
 {
-  "schema": "blackbox.portable/v2",
+  "version": 2,
   "exported_at": "2026-07-12T12:00:00Z",
-  "source": "blackbox-recorder/1.2.0",
-  "runs": [ ],
+  "run": { "id": "…", "command": ["…"], "…": "…" },
+  "events": [ { "id": "…", "sequence": 1, "kind": "…", "…": "…" } ],
   "blobs": {
-    "<sha256-key>": { "size": 1234, "compressed": false, "data": "<base64-or-null>" }
-  }
+    "<sha256_hex>": {
+      "encoding": "base64",
+      "size": 1234,
+      "data": "<base64>"
+    }
+  },
+  "experiment_meta": { "experiment_id": "…", "variant": "…", "attempt": 2 },
+  "experiment": { "schema": "blackbox.experiment/v1", "id": "…", "name": "…" },
+  "verification_receipts": [ { "schema": "blackbox.verification.receipt/v1", "…": "…" } ]
 }
 ```
+
+`experiment_meta`, `experiment`, and `verification_receipts` are optional and
+may be null/empty when the run was not linked or verified. Import restores them
+when present (new receipt ids if run ids are remapped).
 
 ### v1 vs v2
 
 | Feature | v1 | v2 |
 |---|---|---|
-| Schema string | `blackbox.portable/v1` | `blackbox.portable/v2` |
-| Blobs | Often inline base64 | Optional inline; key-referenced |
-| Dedup | Weak | Shared blob keys |
-| Metadata | Minimal | Richer (adapter, …) |
+| `version` field | `1` | `2` |
+| Blobs | May omit referenced keys | Every referenced blob key must resolve (empty map does **not** waive) |
+| Event layout | Looser | Rejects duplicate event ids / sequences |
+| Experiment / receipts | Absent | Optional embedded objects |
 | Redaction | Default on | Default on |
 
 Import accepts both generations where possible.
@@ -85,10 +98,12 @@ blackbox import trace.json --keep-ids
 
 Import reconstructs:
 
-1. Runs, events, checkpoints  
-2. Blobs via store APIs  
-3. Key fixups when archive key ≠ content hash (migration paths)  
+1. Run + events (batch insert; rollback journal on failure)  
+2. Blobs under content keys only (declared key must equal SHA-256 of payload)  
+3. Optional experiment manifest/meta and verification receipts  
 4. Sequence numbers preserved for timeline fidelity  
+
+v2 never renames blob bytes to an unverified caller-supplied key.
 
 ---
 

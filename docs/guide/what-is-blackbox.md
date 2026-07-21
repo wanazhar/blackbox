@@ -1,6 +1,6 @@
 # What is blackbox?
 
-**Answers:** What problem blackbox solves, how a run is captured, what is stored where, and what it deliberately does *not* do.
+What problem blackbox solves, how a run is captured, what is stored where, and what it deliberately does *not* do.
 
 ---
 
@@ -92,7 +92,8 @@ Details: [continuity plane](../internals/continuity-plane.md), [memory pack sche
 |---|---|
 | A cloud SaaS | Local process + local store (sync is opt-in) |
 | A secret vault by default | Redaction + optional blob encryption + sealed backup; SQLite is not SQLCipher-live |
-| Deterministic LLM replay | Replay modes are timeline/mock/sandbox/fork—not bit-identical model re-execution |
+| Deterministic LLM replay | Replay / capsules are not bit-identical model re-execution |
+| Proof the task is fixed | Exit code is execution; use `verify` receipts for task checks |
 | A replacement for your agent | It records and explains; it does not choose the next tool call for you |
 | Guaranteed perfect redaction | Novel secret formats can slip; residual risk is documented in [security](security.md) |
 
@@ -116,5 +117,6 @@ Normative ambient rules: [ambient-contract.md](../ambient-contract.md). Operator
 - Install: [install.md](install.md)
 - First project: [getting-started.md](getting-started.md)
 - Workflows: [recipes.md](recipes.md)
+- Integrity / verification: [fsck-and-integrity.md](fsck-and-integrity.md), [verification.md](verification.md)
 - Architecture: [../internals/architecture.md](../internals/architecture.md)
 - Quality bar / versions: [../ROADMAP.md](../ROADMAP.md)

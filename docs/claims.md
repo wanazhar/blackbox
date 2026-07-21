@@ -38,7 +38,10 @@ High-risk product claims classified by evidence. Update when tests or platforms 
 | Experiment gates do not treat unverified success as verified | test-backed | `tests/regression_gate.rs`, `tests/experiment_reports.rs` |
 | Capsules state completeness; model replay is not deterministic | test-backed | `tests/capsule_integrity.rs` |
 | MCP cassette is experimental and scoped to proxied protocol | test-backed / experimental | `tests/mcp_cassette.rs`; proxy marks mock vs live |
-| Budget capabilities never over-claim enforcement | test-backed / platform-dependent | `tests/budget_enforcement_linux.rs`, `tests/budget_cgroup_linux.rs`; wall watchdog + **child** `prlimit` (never supervisor `setrlimit`) + cgroup v2 when delegated; tool/output ceilings observed-only until hard-kill wired |
+| Budget capabilities never over-claim enforcement | test-backed / platform-dependent | `tests/budget_enforcement_linux.rs`, `tests/budget_cgroup_linux.rs`; wall watchdog + **child** `prlimit` (never supervisor `setrlimit`) + cgroup v2 when delegated; tool/output ceilings **enforced** mid-run via capture-path counters + SIGKILL |
+| Domain-confirmed verification required for strict gates | test-backed / code-backed | `verification/domain.rs`; gate prefers `domain_confirmed_rate` |
+| Portable import restores experiment meta and receipts | test-backed | portable round-trip unit test in `export/portable.rs` |
+| Release publishes only when full matrix builds | code-backed | `.github/workflows/release.yml` fail-closed (`if: success()`, 4 artifacts) |
 | Portable v2 rejects duplicate event IDs / sequences | test-backed | `tests/portable_v2_references.rs` |
 | Postmortem/summary surfaces latest verification receipt + outcome | test-backed / code-backed | `SummaryView.latest_verification_*` + `outcome` via `list_verification_receipts` |
 | MCP cassette live record/replay against a real stdio server | test-backed / experimental | `tests/mcp_record_e2e.rs` + `tests/fixtures/mcp_echo_server.py` |

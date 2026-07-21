@@ -39,7 +39,7 @@ impl Default for BatchIngestConfig {
 }
 
 /// Observable batch-ingest counters.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct BatchIngestHealth {
     pub events_enqueued: u64,
     pub events_flushed: u64,
@@ -52,6 +52,15 @@ pub struct BatchIngestHealth {
     pub write_failures: u64,
     /// Events accepted into the queue but not yet flushed (best-effort gauge).
     pub pending: u64,
+    /// Lost events after a failed flush (cleared buffer; spool may still hold them).
+    #[serde(default)]
+    pub lost_events: u64,
+    /// Spool append failures (disk full / permission).
+    #[serde(default)]
+    pub spool_failures: u64,
+    /// Writer boundary: dedicated OS thread (1.6).
+    #[serde(default)]
+    pub dedicated_thread: bool,
 }
 
 /// Messages to the dedicated writer task.
@@ -88,6 +97,8 @@ struct BatchIngestHealthShared {
     total_flush_ms: AtomicU64,
     queue_high_water: AtomicU64,
     write_failures: AtomicU64,
+    lost_events: AtomicU64,
+    spool_failures: AtomicU64,
 }
 
 impl BatchIngestHealthShared {
@@ -102,6 +113,8 @@ impl BatchIngestHealthShared {
             total_flush_ms: AtomicU64::new(0),
             queue_high_water: AtomicU64::new(0),
             write_failures: AtomicU64::new(0),
+            lost_events: AtomicU64::new(0),
+            spool_failures: AtomicU64::new(0),
         }
     }
 
@@ -117,6 +130,9 @@ impl BatchIngestHealthShared {
             queue_high_water: self.queue_high_water.load(Ordering::Relaxed),
             write_failures: self.write_failures.load(Ordering::Relaxed),
             pending,
+            lost_events: self.lost_events.load(Ordering::Relaxed),
+            spool_failures: self.spool_failures.load(Ordering::Relaxed),
+            dedicated_thread: true,
         }
     }
 }
@@ -139,9 +155,26 @@ impl BatchIngestor {
         let queue_depth = Arc::new(AtomicU64::new(0));
         let health_w = health.clone();
         let depth_w = queue_depth.clone();
-        tokio::spawn(async move {
-            batch_writer_loop(store, rx, config, health_w, depth_w, spool).await;
-        });
+        // Dedicated OS thread + current-thread runtime so SQLite/spool I/O never
+        // occupies a Tokio multi-thread worker (1.6 durable-ingest acceptance).
+        std::thread::Builder::new()
+            .name("blackbox-ingest".into())
+            .spawn(move || {
+                let rt = match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    Ok(rt) => rt,
+                    Err(e) => {
+                        tracing::error!(error = %e, "failed to build ingest runtime");
+                        return;
+                    }
+                };
+                rt.block_on(batch_writer_loop(
+                    store, rx, config, health_w, depth_w, spool,
+                ));
+            })
+            .expect("failed to spawn blackbox-ingest thread");
         Self {
             tx,
             health,
@@ -365,10 +398,12 @@ async fn flush_pending(
             Ok(r) => Some(r.batch_id),
             Err(e) => {
                 health.write_failures.fetch_add(1, Ordering::Relaxed);
-                let msg = format!("spool append failed: {e}");
+                health.spool_failures.fetch_add(1, Ordering::Relaxed);
+                let msg = format!("spool append failed (disk full or I/O): {e}");
                 for ack in pending_acks.drain(..) {
                     let _ = ack.send(Err(anyhow::anyhow!("{msg}")));
                 }
+                // Do not clear pending here — caller may retry; disk-full is backpressure.
                 return Err(anyhow::anyhow!(msg));
             }
         }
@@ -406,10 +441,14 @@ async fn flush_pending(
             }
             // Leave spool pending so recovery can replay. Clear memory buffer
             // to avoid double-insert from subsequent flushes of the same events.
-            let lost = pending.len();
+            let lost = pending.len() as u64;
+            if spool.is_none() {
+                // Without spool, cleared buffer is a real loss boundary.
+                health.lost_events.fetch_add(lost, Ordering::Relaxed);
+            }
             pending.clear();
             Err(anyhow::anyhow!(
-                "batch flush failed after {lost} pending event(s) (spool retained for recovery): {msg}"
+                "batch flush failed after {lost} pending event(s) (spool retained for recovery when enabled): {msg}"
             ))
         }
     }

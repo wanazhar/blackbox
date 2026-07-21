@@ -69,6 +69,7 @@ async fn holdback_run_leaves_no_secret_in_store_bytes() {
         claim_id_note: None,
         ambient: false,
         command: vec![probe.display().to_string()],
+        ..Default::default()
     };
 
     let run = supervisor.execute(&args).await.expect("run succeeds");

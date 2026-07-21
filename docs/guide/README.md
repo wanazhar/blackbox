@@ -33,6 +33,11 @@ For the full map (agents, reference, internals), see the [docs index](../README.
 | [Configuration](configuration.md) | Precedence, product modes, full knobs + env |
 | [Security](security.md) | Threat model, redaction, crypto, serve auth |
 | [Export and sync](export-and-sync.md) | Formats, sealed packs, sync, store vault |
+| [Store integrity (`fsck`)](fsck-and-integrity.md) | Spool recovery, deep blob checks, safe repair |
+| [Verification receipts](verification.md) | Execution vs verification vs capture |
+| [Experiments & gates](experiments.md) | Typed metadata, reports, CI gates |
+| [Capsules & MCP cassettes](capsules-and-cassettes.md) | Reproduction packages; experimental protocol replay |
+| [Budgets & adapters](budgets-and-adapters.md) | Enforcement honesty; NDJSON adapters; project index |
 | [Overhead](overhead.md) | Soft benches, stats, cost knobs |
 | [Troubleshooting](troubleshooting.md) | Q→fix diagnostics and recovery |
 

@@ -39,6 +39,7 @@ async fn a6_run_true_overhead_bounded() {
         claim_id_note: None,
         ambient: false,
         command: vec!["true".into()],
+        ..Default::default()
     };
 
     let t0 = Instant::now();

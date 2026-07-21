@@ -37,6 +37,7 @@ const MAX_LINE_BUF_BYTES: usize = 64 * 1024;
 pub struct RunSupervisor {
     store: Arc<dyn TraceStore>,
     policy: CapturePolicy,
+    budget: crate::budget::BudgetPolicy,
 }
 
 impl RunSupervisor {
@@ -44,11 +45,18 @@ impl RunSupervisor {
         Self {
             store,
             policy: CapturePolicy::default(),
+            budget: crate::budget::BudgetPolicy::default(),
         }
     }
 
     pub fn with_policy(mut self, policy: CapturePolicy) -> Self {
         self.policy = policy;
+        self
+    }
+
+    /// Attach execution budgets (1.6). Wall/process limits are enforced when set.
+    pub fn with_budget(mut self, budget: crate::budget::BudgetPolicy) -> Self {
+        self.budget = budget;
         self
     }
 
@@ -432,6 +440,46 @@ impl RunSupervisor {
 
         process_capture.set_pid(child_pid);
         process_capture.emit_spawned().await;
+
+        // 1.6 budgets: apply rlimits (Linux) + wall/process watchdogs.
+        let budget_notes = crate::budget::apply_process_rlimits(&self.budget);
+        if !budget_notes.is_empty() {
+            tracing::debug!(?budget_notes, "budget rlimit notes");
+        }
+        let mut wall_watch = None;
+        let mut proc_watch = None;
+        if let Some(secs) = self.budget.max_wall_secs {
+            if secs > 0 {
+                wall_watch = Some(crate::budget::spawn_wall_watchdog(
+                    child_pid,
+                    std::time::Duration::from_secs(secs),
+                ));
+            }
+        }
+        if let Some(max_p) = self.budget.max_processes {
+            if max_p > 0 {
+                proc_watch = Some(crate::budget::spawn_process_count_watchdog(
+                    child_pid,
+                    max_p,
+                    std::time::Duration::from_millis(200),
+                ));
+            }
+        }
+        // Capability report event (never claims unavailable as enforced).
+        {
+            let mut be = TraceEvent::new(&run.id, EventSource::System, "run.budget.capabilities");
+            be.status = EventStatus::Success;
+            let caps = crate::budget::linux_enforcement_status(&self.budget);
+            be.metadata.insert(
+                "capabilities".into(),
+                serde_json::to_value(&caps).unwrap_or_default(),
+            );
+            be.metadata.insert(
+                "policy".into(),
+                serde_json::to_value(&self.budget).unwrap_or_default(),
+            );
+            let _ = writer.write(be).await;
+        }
 
         // Share master so we can resize on SIGWINCH while I/O runs.
         let master = std::sync::Arc::new(std::sync::Mutex::new(pair.master));
@@ -869,15 +917,71 @@ impl RunSupervisor {
 
         let wait_handle = tokio::task::spawn_blocking(move || child.wait());
 
-        let exit_status = tokio::select! {
-            result = wait_handle => {
-                result.context("wait task panicked")?
-                    .context("failed to wait for child process")?
-            }
-            _ = tokio::time::sleep(Duration::from_secs(4 * 3600)) => {
-                crate::supervisor::timeout_kill_and_wait(child_pid).await?
+        let mut budget_kill: Option<crate::budget::BudgetBreachKill> = None;
+        let exit_status = {
+            // Flatten optional watchdogs into the select.
+            let wall_fut = async {
+                match wall_watch {
+                    Some(h) => h.await.ok().flatten(),
+                    None => {
+                        std::future::pending::<Option<crate::budget::BudgetBreachKill>>().await
+                    }
+                }
+            };
+            let proc_fut = async {
+                match proc_watch {
+                    Some(h) => h.await.ok().flatten(),
+                    None => {
+                        std::future::pending::<Option<crate::budget::BudgetBreachKill>>().await
+                    }
+                }
+            };
+            tokio::pin!(wall_fut);
+            tokio::pin!(proc_fut);
+            tokio::select! {
+                result = wait_handle => {
+                    result.context("wait task panicked")?
+                        .context("failed to wait for child process")?
+                }
+                kill = &mut wall_fut => {
+                    if let Some(k) = kill {
+                        budget_kill = Some(k);
+                    }
+                    crate::supervisor::timeout_kill_and_wait(child_pid).await?
+                }
+                kill = &mut proc_fut => {
+                    if let Some(k) = kill {
+                        budget_kill = Some(k);
+                    }
+                    crate::supervisor::timeout_kill_and_wait(child_pid).await?
+                }
+                _ = tokio::time::sleep(Duration::from_secs(4 * 3600)) => {
+                    crate::supervisor::timeout_kill_and_wait(child_pid).await?
+                }
             }
         };
+
+        if let Some(ref k) = budget_kill {
+            let mut be = TraceEvent::new(&run.id, EventSource::System, "run.budget.breach");
+            be.status = EventStatus::Error;
+            be.metadata.insert(
+                "budget".into(),
+                serde_json::to_value(k).unwrap_or_default(),
+            );
+            be.metadata.insert(
+                "reason".into(),
+                serde_json::json!(k.detail),
+            );
+            be.metadata.insert(
+                "terminated_by_budget".into(),
+                serde_json::json!(true),
+            );
+            let _ = writer.write(be).await;
+            run.notes = Some(crate::util::merge_run_notes(
+                run.notes.take(),
+                &[&format!("budget_breach:{}", k.name)],
+            ));
+        }
 
         signal_handle.abort();
         resize_handle.abort();
@@ -1139,7 +1243,8 @@ mod tests {
             resume_injection: None,
             claim_id_note: None,
             ambient: false,
-        };
+        ..Default::default()
+    };
         assert!(args.observe_only);
     }
 }

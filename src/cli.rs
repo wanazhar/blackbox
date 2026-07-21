@@ -466,7 +466,7 @@ pub struct WatchArgs {
     pub idle_exit: u64,
 }
 
-#[derive(Args, Clone)]
+#[derive(Args, Clone, Default)]
 pub struct RunArgs {
     /// Label for this run
     #[arg(long)]
@@ -513,6 +513,61 @@ pub struct RunArgs {
     /// Directory for CI artifacts (run.json, postmortem.json, anomalies.json, optional portable)
     #[arg(long)]
     pub artifact_dir: Option<PathBuf>,
+
+    // ── Experiment metadata (1.6) ──────────────────────────────────
+    /// Experiment id to link this run to (creates typed metadata)
+    #[arg(long)]
+    pub experiment: Option<String>,
+    /// Experiment task id
+    #[arg(long)]
+    pub task: Option<String>,
+    /// Experiment variant label
+    #[arg(long)]
+    pub variant: Option<String>,
+    /// Attempt number within task/variant
+    #[arg(long)]
+    pub attempt: Option<u32>,
+    /// Role: baseline | candidate | control | treatment
+    #[arg(long)]
+    pub role: Option<String>,
+    /// Seed string for reproducibility metadata
+    #[arg(long)]
+    pub seed: Option<String>,
+    /// Dataset case id
+    #[arg(long)]
+    pub dataset_case: Option<String>,
+    /// Model name metadata
+    #[arg(long)]
+    pub model: Option<String>,
+    /// Provider name metadata
+    #[arg(long)]
+    pub provider: Option<String>,
+    /// Harness name metadata
+    #[arg(long)]
+    pub harness: Option<String>,
+    /// Harness version metadata
+    #[arg(long)]
+    pub harness_version: Option<String>,
+
+    // ── Execution budgets (1.6) ────────────────────────────────────
+    /// Max wall-clock seconds (enforced via watchdog kill)
+    #[arg(long)]
+    pub max_wall: Option<u64>,
+    /// Max descendant processes (Linux: RLIMIT_NPROC + watchdog)
+    #[arg(long)]
+    pub max_processes: Option<u64>,
+    /// Max captured output bytes (observed; may terminate when exceeded)
+    #[arg(long)]
+    pub max_output: Option<u64>,
+    /// Max tool.call events before termination
+    #[arg(long)]
+    pub max_tool_calls: Option<u64>,
+    /// Max observed tokens (observed-only unless harness enforces)
+    #[arg(long)]
+    pub max_tokens: Option<u64>,
+    /// Prefer contained launch backends where available (budget capability report)
+    #[arg(long)]
+    pub contained: bool,
 
     /// The command to observe (everything after `--`)
     #[arg(last = true, required = true)]
@@ -1305,8 +1360,67 @@ async fn cmd_run(cli: &Cli, args: &RunArgs) -> anyhow::Result<()> {
         }
     }
 
-    let supervisor = RunSupervisor::new(Arc::clone(&store)).with_policy(policy);
+    let budget = crate::budget::BudgetPolicy {
+        max_wall_secs: args.max_wall,
+        max_processes: args.max_processes,
+        max_output_bytes: args.max_output,
+        max_tool_calls: args.max_tool_calls,
+        max_tokens: args.max_tokens,
+        contained: args.contained,
+        ..Default::default()
+    };
+    let supervisor = RunSupervisor::new(Arc::clone(&store))
+        .with_policy(policy)
+        .with_budget(budget);
     let run = supervisor.execute(&args).await?;
+
+    // 1.6: persist typed experiment metadata when --experiment (or related) set.
+    if args.experiment.is_some()
+        || args.task.is_some()
+        || args.variant.is_some()
+        || args.model.is_some()
+    {
+        use crate::experiment::{ExperimentRole, RunExperimentMeta};
+        let role = match args.role.as_deref() {
+            Some("baseline") => ExperimentRole::Baseline,
+            Some("candidate") => ExperimentRole::Candidate,
+            Some("control") => ExperimentRole::Control,
+            Some("treatment") => ExperimentRole::Treatment,
+            _ => ExperimentRole::Unknown,
+        };
+        // Ensure experiment row exists when id provided.
+        if let Some(ref exp_id) = args.experiment {
+            if store.get_experiment(exp_id).await?.is_none() {
+                let m = crate::experiment::ExperimentManifest::new(
+                    exp_id,
+                    exp_id,
+                );
+                let _ = store.upsert_experiment(&m).await;
+            }
+        }
+        let meta = RunExperimentMeta {
+            experiment_id: args.experiment.clone(),
+            task_id: args.task.clone(),
+            variant: args.variant.clone(),
+            attempt: args.attempt,
+            role,
+            seed: args.seed.clone(),
+            dataset_case: args.dataset_case.clone(),
+            model: args.model.clone(),
+            provider: args.provider.clone(),
+            harness: args.harness.clone(),
+            harness_version: args.harness_version.clone(),
+            git_commit: None,
+            config_fingerprint: None,
+        };
+        if let Err(e) = store.put_run_experiment_meta(&run.id, &meta).await {
+            tracing::warn!(error = %e, "failed to store experiment metadata");
+        } else if !cli.json {
+            if let Some(ref e) = args.experiment {
+                eprintln!("experiment: linked run {} → {e}", crate::util::short_id(&run.id));
+            }
+        }
+    }
 
     // Sticky project state under state.lock + MEMORY refresh (1.2).
     if let Some(ref disc) = discovery {
@@ -2980,7 +3094,8 @@ async fn cmd_fork(cli: &Cli, args: &ForkArgs) -> anyhow::Result<()> {
             claim_id_note: None,
             ambient: false,
             command: cmd,
-        };
+        ..Default::default()
+    };
         return cmd_run(cli, &run_args).await;
     }
 
@@ -3874,7 +3989,8 @@ async fn cmd_setup(cli: &Cli, args: &SetupArgs) -> anyhow::Result<()> {
             claim_id_note: None,
             ambient: false,
             command: vec!["true".into()],
-        };
+        ..Default::default()
+    };
         match supervisor.execute(&run_args).await {
             Ok(run) => sample_run_id = Some(run.id),
             Err(e) => tracing::warn!(error = %e, "setup sample run failed"),

@@ -47,6 +47,7 @@ async fn ci_artifact_dir_writes_run_and_postmortem() {
         claim_id_note: None,
         ambient: false,
         command: vec!["true".into()],
+        ..Default::default()
     };
 
     // write_ci_artifacts is CLI-side; exercise store path used by artifacts:
@@ -147,6 +148,7 @@ async fn score_json_from_failed_eval_run() {
         claim_id_note: None,
         ambient: false,
         command: vec!["false".into()],
+        ..Default::default()
     };
     let run = supervisor.execute(&args).await.unwrap();
     assert_eq!(run.exit_code, Some(1));

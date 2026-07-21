@@ -1,7 +1,8 @@
 # Technical claim matrix
 
-High-risk product claims classified by evidence (1.5 docs truth). Update when
-tests or platforms change.
+High-risk product claims classified by evidence. Update when tests or platforms change.
+
+## Core (1.4–1.5)
 
 | Claim | Class | Evidence / limitation |
 |---|---|---|
@@ -12,12 +13,34 @@ tests or platforms change.
 | Capture coverage is complete for all surfaces | platform-dependent | Process polling loss; native logs optional; `not_applicable` scoring |
 | Process observation sees every short-lived child | best-effort | Spawn-storm measures loss; not eBPF |
 | Replay is OS process isolation | best-effort / platform-dependent | **Workspace** = temp directory only; **`--contained`** = bubblewrap namespaces when `bwrap` present (fail closed otherwise); not multi-tenant hardened |
-| Workspace restore is complete for all files | best-effort | Manifest limits (files/bytes/depth); report lists gaps |
+| Workspace restore is complete for all files | best-effort | Manifest limits (files/bytes/depth); report lists gaps; fidelity classes in restore report |
 | Portable import preserves content-addressed integrity | test-backed | Hash must match; no rename-to-unverified-key; `tests/portable_import_atomicity.rs` |
 | Crash recovery never invents success | test-backed | Abandoned `Running` → `Failed`; `tests/fault_recovery.rs` |
 | Dashboard auth for browsers without tokens in URLs | test-backed | Session cookie + Bearer; `tests/dashboard_auth.rs` |
 | Large-run totals independent of display windows | test-backed | Aggregates + `analysis_scope`; `tests/long_run_integrity.rs` |
 | macOS full parity with Linux process backends | platform-dependent | PR runtime gate; full process matrix deferred |
-| Windows support | planned / out of scope | Explicit non-goal for 1.5 |
+| Windows support | planned / out of scope | Explicit non-goal for Unix-scoped releases |
 
-**Classes:** `code-backed` · `test-backed` · `platform-dependent` · `best-effort` · `planned` · `historical`.
+## 1.6 verified runs & integrity
+
+| Claim | Class | Evidence / limitation |
+|---|---|---|
+| Workspace capture never follows outside-root symlinks | test-backed | `tests/workspace_symlink_safety.rs`; lstat + O_NOFOLLOW |
+| Sanitized restore is never reported as byte-exact | test-backed | `tests/restore_fidelity.rs`; completeness classes |
+| Portable v2 rejects unresolved blob refs (empty map does not waive) | test-backed | `tests/portable_v2_references.rs` |
+| Filtered run/event pagination applies filters before LIMIT | test-backed | `tests/pagination_filtered_scale.rs` |
+| `file_ops` counts filesystem create/modify/rename/remove | test-backed | `tests/aggregate_semantics.rs` |
+| Unique process count collapses resource samples | test-backed | `tests/aggregate_semantics.rs` |
+| Nested blob refs remapped after scrub redaction | test-backed | `tests/blob_reference_rewrite.rs` |
+| `fsck --deep` detects missing/corrupt referenced blobs | test-backed | `tests/fsck_corruption.rs` |
+| Acknowledged spool batches survive crash and replay idempotently | test-backed | `tests/ingest_spool_recovery.rs`; CRC torn-write detection |
+| Execution success ≠ task verification | test-backed | `tests/verification_receipts.rs`; immutable receipts |
+| Experiment gates do not treat unverified success as verified | test-backed | `tests/regression_gate.rs`, `tests/experiment_reports.rs` |
+| Capsules state completeness; model replay is not deterministic | test-backed | `tests/capsule_integrity.rs` |
+| MCP cassette is experimental and scoped to proxied protocol | test-backed / experimental | `tests/mcp_cassette.rs`; proxy marks mock vs live |
+| Budget capabilities never over-claim enforcement | test-backed / platform-dependent | `tests/budget_enforcement_linux.rs`; wall watchdog + Linux rlimits |
+| Multi-project index is metadata-only | test-backed | `tests/multi_project_index.rs` |
+| 100k+ event endurance qualification | test-backed (release gate) | `tests/endurance_100k.rs` (`--ignored`); `scripts/release-qualify-unix.sh` |
+| Crates.io publication proves runtime qualification | historical / false | Publish is packaging; runtime qualify is the script above |
+
+**Classes:** `code-backed` · `test-backed` · `platform-dependent` · `best-effort` · `planned` · `historical` · `experimental`.

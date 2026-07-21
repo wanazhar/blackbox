@@ -1,9 +1,10 @@
 # Roadmap and quality bar
 
-What “good” means for blackbox, what each major version promised, what **1.4** shipped, and what **1.5** targets.
+What “good” means for blackbox, what each major version promised, what **1.4–1.5** shipped, and what **1.6** targets.
 
 This is **product direction**, not a how-to. Operators: [guide/README.md](guide/README.md).
-**1.5 plan (in progress):** [plan/trace-integrity-1.5.md](plan/trace-integrity-1.5.md). Epic: [issue #3](https://github.com/wanazhar/blackbox/issues/3).
+**1.6 epic (active):** [issue #4](https://github.com/wanazhar/blackbox/issues/4) — verified runs, experiments, reproducibility, durable evidence.
+**1.5 plan:** [plan/trace-integrity-1.5.md](plan/trace-integrity-1.5.md). Epic: [issue #3](https://github.com/wanazhar/blackbox/issues/3).
 **1.4 plan (shipped):** [plan/trust-proof-1.4.md](plan/trust-proof-1.4.md).
 **1.3 plan (shipped):** [plan/trust-explain-1.3.md](plan/trust-explain-1.3.md).
 
@@ -39,7 +40,8 @@ If a change weakens a bar, it needs an explicit docs + test story.
 | **1.2** | Continuity / project memory | Shipped **1.2.0** |
 | **1.3** | Trust, explain, agent-native depth | Shipped **1.3.0** |
 | **1.4** | **Trust Proof (Unix 10/10)** | Shipped **1.4.0** |
-| **1.5** | **Trace integrity & scale** | In progress — [issue #3](https://github.com/wanazhar/blackbox/issues/3) |
+| **1.5** | **Trace integrity & scale** | Shipped core — [issue #3](https://github.com/wanazhar/blackbox/issues/3) |
+| **1.6** | **Verified runs & reproducibility** | In progress — [issue #4](https://github.com/wanazhar/blackbox/issues/4) |
 
 ### 1.1 adoption bar (permanent)
 
@@ -168,3 +170,22 @@ Full plan: [plan/trace-integrity-1.5.md](plan/trace-integrity-1.5.md). Epic: [is
 - [guide/concepts.md](guide/concepts.md)
 - [WRITING.md](WRITING.md)
 - Historical: [plan/adoption-1.1.md](plan/adoption-1.1.md), [plan/agent-memory-bus-1.2.md](plan/agent-memory-bus-1.2.md)
+
+---
+
+## 1.6 bar (must pass before tag)
+
+Epic: [issue #4](https://github.com/wanazhar/blackbox/issues/4).
+
+| Area | Requirement | Tests / gate |
+|---|---|---|
+| Integrity A | Symlink-safe manifests, restore fidelity, portable v2 refs, SQL filters, aggregates | `workspace_symlink_safety`, `restore_fidelity`, `portable_v2_references`, `pagination_filtered_scale`, `aggregate_semantics`, `blob_reference_rewrite` |
+| Store B | `fsck` fast/deep/repair; durable spool recovery | `fsck_corruption`, `ingest_spool_recovery` |
+| Verify C | Execution ≠ verification ≠ capture; immutable receipts | `verification_receipts` |
+| Experiments D | Typed metadata; honest reports; fail-closed gates | `experiment_reports`, `regression_gate` |
+| Capsules E | Completeness classes; no deterministic model claim | `capsule_integrity` |
+| Cassette E | Experimental MCP proxy; mock/live marking | `mcp_cassette` |
+| Ops F | Budget capability honesty; adapter protocol; project index | `budget_enforcement_linux`, `adapter_conformance`, `multi_project_index` |
+| Endurance L | ≥100k events; aggregates; pagination; fsck deep | `endurance_100k` (`--ignored`) via `scripts/release-qualify-unix.sh` |
+
+Operator guides: [fsck](guide/fsck-and-integrity.md), [verification](guide/verification.md), [experiments](guide/experiments.md), [capsules](guide/capsules-and-cassettes.md), [budgets](guide/budgets-and-adapters.md). Claims: [claims.md](claims.md).

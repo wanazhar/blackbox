@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Blackbox Unix release qualification gate (1.4 Q1 + 1.5 integrity).
+# Blackbox Unix release qualification gate (1.4 Q1 + 1.5 integrity + 1.6 verified runs).
 #
 # One reproducible command for maintainers before tagging.
 # Outputs a checksummed report under release-artifacts/.
@@ -125,10 +125,24 @@ if [ "$QUICK" -eq 1 ]; then
   run_gate "1.5: pagination_scale" cargo test --test pagination_scale -- --quiet || true
   run_gate "1.5: replay_containment" cargo test --test replay_containment_linux -- --quiet || true
   run_gate "1.5: docs_commands" cargo test --test docs_commands -- --quiet || true
+  # 1.6 verified runs subset
+  run_gate "1.6: fsck_corruption" cargo test --test fsck_corruption -- --quiet || true
+  run_gate "1.6: ingest_spool_recovery" cargo test --test ingest_spool_recovery -- --quiet || true
+  run_gate "1.6: verification_receipts" cargo test --test verification_receipts -- --quiet || true
+  run_gate "1.6: experiment_reports" cargo test --test experiment_reports -- --quiet || true
+  run_gate "1.6: regression_gate" cargo test --test regression_gate -- --quiet || true
+  run_gate "1.6: capsule_integrity" cargo test --test capsule_integrity -- --quiet || true
+  run_gate "1.6: workspace_symlink_safety" cargo test --test workspace_symlink_safety -- --quiet || true
+  run_gate "1.6: portable_v2_references" cargo test --test portable_v2_references -- --quiet || true
+  run_gate "1.6: pagination_filtered_scale" cargo test --test pagination_filtered_scale -- --quiet || true
 else
   run_gate "cargo test --all-targets" cargo test --all-targets -- --quiet || true
   run_gate "docs first-run + envelope + commands" \
     cargo test --test docs_first_run --test docs_cli_envelope --test docs_commands -- --quiet || true
+  # 1.6 integrity + verification suite (non-endurance)
+  run_gate "1.6: integrity suite" cargo test --test fsck_corruption --test ingest_spool_recovery --test verification_receipts --test experiment_reports --test regression_gate --test capsule_integrity --test workspace_symlink_safety --test portable_v2_references --test pagination_filtered_scale --test blob_reference_rewrite --test aggregate_semantics -- --quiet || true
+  # Real 100k-event endurance (ignored by default unit filter; force with --ignored)
+  run_gate "1.6: endurance_100k" cargo test --test endurance_100k -- --ignored --quiet || true
 fi
 
 if [ "$DO_RELEASE_BUILD" -eq 1 ]; then
@@ -198,6 +212,18 @@ fi
   echo "| H1 | Dashboard session auth |"
   echo "| P1 | Cursor pagination + blob compression |"
   echo "| Q1 | Linux full + macOS PR runtime gate |"
+  echo
+  echo "## 1.6 Verified runs bars"
+  echo
+  echo "| Id | Bar |"
+  echo "|---|---|"
+  echo "| A | Integrity: symlink/manifest, portable v2, pagination, aggregates |"
+  echo "| B | fsck + durable spool recovery |"
+  echo "| C | Verification receipts / outcome separation |"
+  echo "| D | Experiments, reports, gates (statistical honesty) |"
+  echo "| E | Capsules + MCP cassette (experimental limits explicit) |"
+  echo "| F | Budgets (capability honesty) + adapter protocol + multi-project index |"
+  echo "| L | 100k-event endurance qualification |"
   echo
   echo "## Host"
   echo

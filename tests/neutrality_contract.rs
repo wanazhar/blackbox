@@ -108,6 +108,7 @@ async fn recorder_mode_strips_blackbox_env_from_child() {
         resume_injection: None,
         claim_id_note: None,
         ambient: false,
+        ..Default::default()
     };
 
     let supervisor = RunSupervisor::new(store.clone());

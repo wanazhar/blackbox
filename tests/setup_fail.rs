@@ -155,6 +155,7 @@ async fn fail_focuses_failed_run_and_json_shape() {
         claim_id_note: None,
         ambient: false,
         command: vec!["true".into()],
+        ..Default::default()
     };
     let _ = sup.execute(&ok).await.unwrap();
 
@@ -174,6 +175,7 @@ async fn fail_focuses_failed_run_and_json_shape() {
         claim_id_note: None,
         ambient: false,
         command: vec!["false".into()],
+        ..Default::default()
     };
     let failed = sup.execute(&bad).await.unwrap();
     assert_eq!(failed.exit_code, Some(1));
@@ -276,6 +278,7 @@ async fn fail_summary_matches_postmortem_builder() {
         claim_id_note: None,
         ambient: false,
         command: vec!["false".into()],
+        ..Default::default()
     };
     let run = sup.execute(&args).await.unwrap();
     let s = build_summary(store.as_ref(), &run, SummaryOptions::default())

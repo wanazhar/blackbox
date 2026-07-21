@@ -63,6 +63,7 @@ async fn supervised_ms(command: Vec<String>, label: &str) -> (u128, u64, usize) 
         claim_id_note: None,
         ambient: false,
         command,
+        ..Default::default()
     };
 
     let t0 = Instant::now();

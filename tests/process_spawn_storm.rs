@@ -50,6 +50,7 @@ async fn spawn_storm_reports_lifecycle_and_measures_loss() {
         claim_id_note: None,
         ambient: false,
         command: vec![p.display().to_string(), "storm".into(), storm_n.to_string()],
+        ..Default::default()
     };
 
     let run = supervisor.execute(&args).await.expect("run");

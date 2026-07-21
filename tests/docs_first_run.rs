@@ -42,6 +42,7 @@ async fn first_run_happy_path_matches_getting_started_contract() {
         claim_id_note: None,
         ambient: false,
         command: vec!["true".into()],
+        ..Default::default()
     };
 
     let run = supervisor.execute(&args).await.expect("first run succeeds");
@@ -303,6 +304,7 @@ async fn postmortem_text_has_docs_oriented_sections() {
         claim_id_note: None,
         ambient: false,
         command: vec!["true".into()],
+        ..Default::default()
     };
     let run = supervisor.execute(&args).await.unwrap();
     let summary = build_summary(store.as_ref(), &run, SummaryOptions::default())

@@ -70,6 +70,7 @@ async fn records_tool_events_from_fake_claude() {
         claim_id_note: None,
         ambient: false,
         command: vec![claude.to_string_lossy().into(), "-p".into(), "hi".into()],
+        ..Default::default()
     };
 
     let run = supervisor.execute(&args).await.expect("run succeeds");
@@ -163,6 +164,7 @@ async fn redacts_secret_in_command_argv() {
             "-c".into(),
             "echo sk-abcdefghijklmnopqrstuvwxyz0123456789".into(),
         ],
+        ..Default::default()
     };
 
     let run = supervisor.execute(&args).await.unwrap();
@@ -209,6 +211,7 @@ async fn tags_persist_on_run() {
         claim_id_note: None,
         ambient: false,
         command: vec!["true".into()],
+        ..Default::default()
     };
     let run = supervisor.execute(&args).await.unwrap();
     let loaded = store.get_run(&run.id).await.unwrap().unwrap();
@@ -255,6 +258,7 @@ async fn portable_export_import_round_trip() {
         claim_id_note: None,
         ambient: false,
         command: vec!["sh".into(), "-c".into(), "echo portable-payload".into()],
+        ..Default::default()
     };
     let run = supervisor.execute(&args).await.unwrap();
     let events = store.get_events(&run.id).await.unwrap();
@@ -304,6 +308,7 @@ async fn export_jsonl_transcript_and_delete_run() {
         claim_id_note: None,
         ambient: false,
         command: vec!["sh".into(), "-c".into(), "echo export-ok".into()],
+        ..Default::default()
     };
     let run = supervisor.execute(&args).await.unwrap();
     let events = store.get_events(&run.id).await.unwrap();
@@ -357,6 +362,7 @@ async fn observe_only_does_not_mutate_command() {
         resume_injection: None,
         claim_id_note: None,
         ambient: false,
+        ..Default::default()
     };
 
     let run = supervisor
@@ -416,6 +422,7 @@ async fn observe_only_notes_no_parent_run() {
         resume_injection: None,
         claim_id_note: None,
         ambient: false,
+        ..Default::default()
     };
 
     let run = supervisor.execute(&args).await.expect("run succeeds");

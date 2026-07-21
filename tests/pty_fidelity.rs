@@ -59,6 +59,7 @@ async fn run_probe(
         claim_id_note: None,
         ambient: false,
         command: vec![p.display().to_string(), mode.into()],
+        ..Default::default()
     };
     let run = supervisor.execute(&args).await.expect("run");
     let events = store.get_events(&run.id).await.unwrap();

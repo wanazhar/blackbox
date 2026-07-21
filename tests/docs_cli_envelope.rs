@@ -140,6 +140,7 @@ async fn live_postmortem_text_uses_doc_labels() {
         claim_id_note: None,
         ambient: false,
         command: vec!["true".into()],
+        ..Default::default()
     };
     let run = supervisor.execute(&args).await.unwrap();
     let summary = build_summary(store.as_ref(), &run, SummaryOptions::default())

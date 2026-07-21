@@ -404,8 +404,10 @@ pub async fn import_portable(
     let verified_blobs = decode_and_verify_blobs(root.get("blobs"))?;
 
     // ── Validate event blob references against verified keys ──
+    // v2+: every referenced blob must be present (empty blobs map does not waive).
+    // v1: missing blobs remain allowed under the documented compatibility rule.
     let blob_key_set: HashSet<&str> = verified_blobs.iter().map(|(k, _)| k.as_str()).collect();
-    validate_event_blob_refs(&events, &blob_key_set)?;
+    validate_event_blob_refs(&events, &blob_key_set, version)?;
 
     // ── ID remapping (in memory) ──
     let remapped;
@@ -619,7 +621,11 @@ fn decode_and_verify_blobs(
     Ok(out)
 }
 
-fn validate_event_blob_refs(events: &[TraceEvent], known: &HashSet<&str>) -> anyhow::Result<()> {
+fn validate_event_blob_refs(
+    events: &[TraceEvent],
+    known: &HashSet<&str>,
+    version: u64,
+) -> anyhow::Result<()> {
     for ev in events {
         for (field, key) in [
             ("input_blob", ev.input_blob.as_deref()),
@@ -630,14 +636,42 @@ fn validate_event_blob_refs(events: &[TraceEvent], known: &HashSet<&str>) -> any
                 if !is_valid_blob_key(k) {
                     anyhow::bail!("event {} has invalid {field} key: {k}", ev.id);
                 }
-                // v1 archives may omit blobs map; v2 with refs must include them.
-                // Allow missing only when no blobs were declared at all (v1).
-                if !known.is_empty() && !known.contains(k) {
+                if !known.contains(k) {
+                    if version >= 2 {
+                        // Empty blobs does not waive reference validation for v2+.
+                        anyhow::bail!(
+                            "event {} references {field}={k} not present in archive blobs",
+                            ev.id
+                        );
+                    }
+                    // v1: unresolved refs accepted under reduced compatibility guarantees.
+                }
+            }
+        }
+        // Metadata keys that look like blob references (same policy as export).
+        for (mk, v) in &ev.metadata {
+            if !mk.contains("blob") {
+                continue;
+            }
+            let Some(s) = v.as_str() else { continue };
+            if !looks_like_blob_key(s) {
+                continue;
+            }
+            if !is_valid_blob_key(s) {
+                // looks_like allows uppercase; content keys are lowercase hex.
+                if version >= 2 {
                     anyhow::bail!(
-                        "event {} references {field}={k} not present in archive blobs",
+                        "event {} metadata.{mk} has invalid blob key: {s}",
                         ev.id
                     );
                 }
+                continue;
+            }
+            if !known.contains(s) && version >= 2 {
+                anyhow::bail!(
+                    "event {} metadata.{mk}={s} not present in archive blobs",
+                    ev.id
+                );
             }
         }
     }

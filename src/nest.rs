@@ -90,23 +90,47 @@ pub fn supervisor_dir() -> PathBuf {
             return PathBuf::from(runtime).join("blackbox").join("supervisors");
         }
     }
+    temporary_supervisor_dir()
+}
+
+fn temporary_supervisor_dir() -> PathBuf {
     let uid = current_uid();
     std::env::temp_dir().join(format!("blackbox-supervisors-{uid}"))
 }
 
-/// Create/verify a private marker directory (owner-only, self-owned on Unix).
-fn ensure_private_supervisor_dir() -> PathBuf {
+fn supervisor_dir_candidates() -> Vec<PathBuf> {
     let preferred = supervisor_dir();
-    if try_prepare_marker_dir(&preferred) {
-        return preferred;
-    }
-    // Fallback: private path under home so we never write into an attacker-owned /tmp dir.
+    let temporary = temporary_supervisor_dir();
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
-    let fallback = home.join(".blackbox").join("supervisors");
-    let _ = try_prepare_marker_dir(&fallback);
-    fallback
+        .unwrap_or_else(std::env::temp_dir)
+        .join(".blackbox")
+        .join("supervisors");
+
+    let mut candidates = vec![preferred];
+    if !candidates.contains(&temporary) {
+        candidates.push(temporary);
+    }
+    if !candidates.contains(&home) {
+        candidates.push(home);
+    }
+    candidates
+}
+
+/// Create/verify a private marker directory (owner-only, self-owned on Unix).
+fn ensure_private_supervisor_dir() -> PathBuf {
+    let candidates = supervisor_dir_candidates();
+    for dir in &candidates {
+        if try_prepare_marker_dir(dir) {
+            return dir.clone();
+        }
+    }
+    // Keep the historical best-effort API: callers get a deterministic path
+    // even if every candidate is unavailable. `acquire` then leaves no marker.
+    candidates
+        .into_iter()
+        .next()
+        .unwrap_or_else(temporary_supervisor_dir)
 }
 
 fn try_prepare_marker_dir(dir: &Path) -> bool {
@@ -116,28 +140,32 @@ fn try_prepare_marker_dir(dir: &Path) -> bool {
     }
     #[cfg(unix)]
     {
-        use std::os::unix::fs::{MetadataExt, PermissionsExt};
-        let meta = match fs::metadata(dir) {
-            Ok(m) => m,
-            Err(_) => return false,
-        };
-        if meta.uid() != current_uid() {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(dir, fs::Permissions::from_mode(0o700));
+        if !is_private_marker_dir(dir) {
             tracing::warn!(
                 path = %dir.display(),
-                "supervisor marker dir not owned by current uid; refusing"
+                "supervisor marker dir is not private and self-owned; refusing"
             );
             return false;
         }
-        let _ = fs::set_permissions(dir, fs::Permissions::from_mode(0o700));
-        let mode = fs::metadata(dir)
-            .map(|m| m.permissions().mode() & 0o777)
-            .unwrap_or(0);
-        if mode & 0o077 != 0 {
-            // Still group/other accessible after chmod attempt.
-            let _ = fs::set_permissions(dir, fs::Permissions::from_mode(0o700));
-        }
     }
     true
+}
+
+fn is_private_marker_dir(dir: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let Ok(meta) = fs::metadata(dir) else {
+            return false;
+        };
+        meta.is_dir() && meta.uid() == current_uid() && (meta.permissions().mode() & 0o077 == 0)
+    }
+    #[cfg(not(unix))]
+    {
+        dir.is_dir()
+    }
 }
 
 fn current_uid() -> u32 {
@@ -178,18 +206,16 @@ pub fn is_nested_supervisor() -> bool {
 pub fn nested_under_marker() -> bool {
     #[cfg(unix)]
     {
-        let dir = supervisor_dir();
-        if !dir.is_dir() {
-            return false;
-        }
         let mut pid = parent_pid(std::process::id());
         // Bound walks so a corrupt /proc chain cannot hang.
         for _ in 0..64 {
             if pid == 0 || pid == 1 {
                 break;
             }
-            if dir.join(pid.to_string()).is_file() {
-                return true;
+            for dir in supervisor_dir_candidates() {
+                if is_private_marker_dir(&dir) && dir.join(pid.to_string()).is_file() {
+                    return true;
+                }
             }
             let next = parent_pid(pid);
             if next == pid {

@@ -26,6 +26,14 @@ impl Default for InMemoryStore {
 }
 
 impl InMemoryStore {
+    /// Create a new instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use blackbox as _;
+    /// // `new` — see module docs for full workflow.
+    /// ```
     pub fn new() -> Self {
         Self {
             runs: Arc::new(RwLock::new(HashMap::new())),

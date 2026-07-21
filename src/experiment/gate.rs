@@ -5,21 +5,30 @@ use serde::{Deserialize, Serialize};
 use crate::experiment::report::{ExperimentReport, ReportVerdict};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// `GateConfig` value.
 pub struct GateConfig {
+    /// Schema identifier string.
     pub schema: String,
     #[serde(default)]
+    /// Min attempts.
     pub min_attempts: Option<usize>,
     #[serde(default)]
+    /// Min verified rate.
     pub min_verified_rate: Option<f64>,
     #[serde(default)]
+    /// Max p95 duration regression.
     pub max_p95_duration_regression: Option<f64>, // fraction e.g. 0.20
     #[serde(default)]
+    /// Require capture complete.
     pub require_capture_complete: bool,
     #[serde(default)]
+    /// Fail on insufficient evidence.
     pub fail_on_insufficient_evidence: bool,
     #[serde(default)]
+    /// Baseline key.
     pub baseline_key: Option<String>,
     #[serde(default)]
+    /// Candidate key.
     pub candidate_key: Option<String>,
     /// When true, only domain-Confirmed verified successes count toward
     /// `min_verified_rate` (weakly correlated passes do not satisfy the gate).
@@ -48,22 +57,40 @@ impl Default for GateConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// `GateRuleFailure` value.
 pub struct GateRuleFailure {
+    /// Rule.
     pub rule: String,
+    /// Message.
     pub message: String,
     #[serde(default)]
+    /// Contributing runs.
     pub contributing_runs: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// `GateResult` value.
 pub struct GateResult {
+    /// Schema identifier string.
     pub schema: String,
+    /// Passed.
     pub passed: bool,
+    /// Process exit code, if known.
     pub exit_code: i32,
+    /// Failures.
     pub failures: Vec<GateRuleFailure>,
+    /// Verdict.
     pub verdict: ReportVerdict,
 }
 
+/// Evaluate gate.
+///
+/// # Examples
+///
+/// ```
+/// # use blackbox as _;
+/// // `evaluate_gate` — see module docs for full workflow.
+/// ```
 pub fn evaluate_gate(report: &ExperimentReport, config: &GateConfig) -> GateResult {
     let mut failures = Vec::new();
 

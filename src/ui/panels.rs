@@ -8,26 +8,45 @@ use crate::core::run::Run;
 /// One display line for a content panel (with optional event id for Enter).
 #[derive(Debug, Clone)]
 pub struct PanelLine {
+    /// Text.
     pub text: String,
+    /// Event id.
     pub event_id: Option<String>,
 }
 
 /// Header summary always visible at the top of the TUI.
 #[derive(Debug, Clone, Default)]
 pub struct RunHeader {
+    /// Display name.
     pub name: String,
+    /// Short id.
     pub short_id: String,
+    /// Status value.
     pub status: String,
+    /// Adapter.
     pub adapter: String,
+    /// Duration.
     pub duration: String,
+    /// Capture quality.
     pub capture_quality: String,
+    /// Files changed.
     pub files_changed: usize,
+    /// Failure count.
     pub failure_count: usize,
+    /// Side effect risk.
     pub side_effect_risk: String,
+    /// Mode.
     pub mode: String,
 }
 
 /// Build header fields from a run and its events.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `build_header` — see module docs for full workflow.
+/// ```
 pub fn build_header(run: &Run, events: &[TraceEvent]) -> RunHeader {
     let duration = run
         .duration_ms
@@ -97,6 +116,13 @@ pub fn build_header(run: &Run, events: &[TraceEvent]) -> RunHeader {
 }
 
 /// Timeline lines (all events, bookkeeping optionally filtered).
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `timeline_lines` — see module docs for full workflow.
+/// ```
 pub fn timeline_lines(events: &[TraceEvent], hide_bookkeeping: bool) -> Vec<PanelLine> {
     events
         .iter()
@@ -132,6 +158,13 @@ pub fn timeline_lines(events: &[TraceEvent], hide_bookkeeping: bool) -> Vec<Pane
 }
 
 /// Process / process-tree related events, preferring an ASCII tree when possible.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `process_lines` — see module docs for full workflow.
+/// ```
 pub fn process_lines(events: &[TraceEvent]) -> Vec<PanelLine> {
     let mut lines = Vec::new();
 
@@ -209,6 +242,13 @@ pub fn process_lines(events: &[TraceEvent]) -> Vec<PanelLine> {
 }
 
 /// Trajectory diff lines for comparing two runs in the TUI.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `trajectory_diff_lines` — see module docs for full workflow.
+/// ```
 pub fn trajectory_diff_lines(diff: &crate::trajectory::TrajectoryDiffView) -> Vec<PanelLine> {
     let mut lines = Vec::new();
     lines.push(PanelLine {
@@ -340,6 +380,13 @@ pub fn trajectory_diff_lines(diff: &crate::trajectory::TrajectoryDiffView) -> Ve
 }
 
 /// Filesystem change events.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `file_change_lines` — see module docs for full workflow.
+/// ```
 pub fn file_change_lines(events: &[TraceEvent]) -> Vec<PanelLine> {
     let mut lines = Vec::new();
     for ev in events {
@@ -363,6 +410,13 @@ pub fn file_change_lines(events: &[TraceEvent]) -> Vec<PanelLine> {
 }
 
 /// Failures and warnings.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `failure_lines` — see module docs for full workflow.
+/// ```
 pub fn failure_lines(events: &[TraceEvent]) -> Vec<PanelLine> {
     let mut lines = Vec::new();
     for ev in events {
@@ -412,6 +466,13 @@ pub fn failure_lines(events: &[TraceEvent]) -> Vec<PanelLine> {
 /// Rich failure panel: story headline, next action, anomalies, then error events.
 ///
 /// Used by TUI Failures mode as the primary debugger surface.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `failure_story_lines` — see module docs for full workflow.
+/// ```
 pub fn failure_story_lines(
     run: &Run,
     events: &[TraceEvent],
@@ -557,6 +618,13 @@ pub fn failure_story_lines(
 }
 
 /// Anomaly-only panel lines (also folded into Failures).
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `anomaly_lines` — see module docs for full workflow.
+/// ```
 pub fn anomaly_lines(events: &[TraceEvent]) -> Vec<PanelLine> {
     let anoms = crate::analysis::detect_anomalies(events);
     if anoms.is_empty() {
@@ -585,6 +653,13 @@ pub fn anomaly_lines(events: &[TraceEvent]) -> Vec<PanelLine> {
 }
 
 /// External / destructive / local-write side effects.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `side_effect_lines` — see module docs for full workflow.
+/// ```
 pub fn side_effect_lines(events: &[TraceEvent]) -> Vec<PanelLine> {
     let mut lines = Vec::new();
     for ev in events {
@@ -627,6 +702,13 @@ pub fn side_effect_lines(events: &[TraceEvent]) -> Vec<PanelLine> {
 }
 
 /// Capture quality / coverage surfaces.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `coverage_lines` — see module docs for full workflow.
+/// ```
 pub fn coverage_lines(events: &[TraceEvent]) -> Vec<PanelLine> {
     let mut lines = Vec::new();
     if let Some(ev) = events.iter().find(|e| e.kind == "capture.coverage") {
@@ -687,6 +769,13 @@ pub fn coverage_lines(events: &[TraceEvent]) -> Vec<PanelLine> {
 }
 
 /// Replay preflight summary lines (honest guarantees).
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `replay_preflight_lines` — see module docs for full workflow.
+/// ```
 pub fn replay_preflight_lines(events: &[TraceEvent]) -> Vec<PanelLine> {
     use crate::core::command::CommandMetadata;
 
@@ -751,6 +840,13 @@ pub fn replay_preflight_lines(events: &[TraceEvent]) -> Vec<PanelLine> {
 }
 
 /// Help / keymap.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `help_lines` — see module docs for full workflow.
+/// ```
 pub fn help_lines() -> Vec<PanelLine> {
     [
         "j/k or ↓/↑   move selection",

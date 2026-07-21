@@ -31,9 +31,34 @@ use crate::terminal::ansi::AnsiNormalizer;
 use crate::terminal::coalesce::{CoalescePolicy, TerminalCoalescer};
 use crate::terminal::recorder::RawRecorder;
 use crate::terminal::TerminalRecorder;
+
 const MAX_LINE_BUF_BYTES: usize = 64 * 1024;
 
 /// Supervises a child process in a PTY and captures trace events.
+///
+/// This is the primary library entry point for embedding blackbox capture.
+///
+/// # Examples
+///
+/// ```no_run
+/// use std::sync::Arc;
+/// use blackbox::cli::RunArgs;
+/// use blackbox::run::RunSupervisor;
+/// use blackbox::storage::sqlite::SqliteStore;
+/// use blackbox::storage::TraceStore;
+///
+/// # async fn demo() -> anyhow::Result<()> {
+/// let store = Arc::new(SqliteStore::open_memory()?) as Arc<dyn TraceStore>;
+/// let run = RunSupervisor::new(store)
+///     .execute(&RunArgs {
+///         command: vec!["echo".into(), "hi".into()],
+///         ..Default::default()
+///     })
+///     .await?;
+/// assert!(!run.id.is_empty());
+/// # Ok(())
+/// # }
+/// ```
 pub struct RunSupervisor {
     store: Arc<dyn TraceStore>,
     policy: CapturePolicy,
@@ -41,6 +66,7 @@ pub struct RunSupervisor {
 }
 
 impl RunSupervisor {
+    /// Create a supervisor that writes into `store`.
     pub fn new(store: Arc<dyn TraceStore>) -> Self {
         Self {
             store,
@@ -49,18 +75,33 @@ impl RunSupervisor {
         }
     }
 
+    /// Override capture policy (redaction, layers, observe-only, …).
     pub fn with_policy(mut self, policy: CapturePolicy) -> Self {
         self.policy = policy;
         self
     }
 
     /// Attach execution budgets (1.6). Wall/process limits are enforced when set.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `with_budget` — see module docs for full workflow.
+    /// ```
     pub fn with_budget(mut self, budget: crate::budget::BudgetPolicy) -> Self {
         self.budget = budget;
         self
     }
 
     /// Run a command under observation.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `execute` — see module docs for full workflow.
+    /// ```
     pub async fn execute(&self, args: &RunArgs) -> anyhow::Result<Run> {
         let cwd = args
             .project

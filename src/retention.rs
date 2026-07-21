@@ -8,7 +8,9 @@ use crate::core::run::Run;
 /// Candidate for deletion under a retention policy.
 #[derive(Debug, Clone)]
 pub struct RetentionCandidate {
+    /// Unique identifier.
     pub id: String,
+    /// Reason.
     pub reason: String,
 }
 
@@ -18,6 +20,13 @@ pub struct RetentionCandidate {
 /// 2. Newest `keep_runs` unpinned runs are the keep window.
 /// 3. Age-expired if `coalesce(ended_at, started_at)` older than `max_age_days`.
 /// 4. Delete = unpinned AND (outside keep window OR age-expired).
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `plan_deletions` — see module docs for full workflow.
+/// ```
 pub fn plan_deletions(runs: &[Run], cfg: &RetentionConfig) -> Vec<RetentionCandidate> {
     // runs assumed most-recent-first (list_runs order)
     let keep = cfg.keep_runs as usize;
@@ -62,6 +71,13 @@ pub fn plan_deletions(runs: &[Run], cfg: &RetentionConfig) -> Vec<RetentionCandi
 
 /// Soft progressive-degradation advice when store is large.
 /// Prefer GC order: oldest success runs → blob GC → keep failures longer.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `progressive_gc_advice` — see module docs for full workflow.
+/// ```
 pub fn progressive_gc_advice(run_count: usize, total_bytes: u64, keep_runs: u32) -> Vec<String> {
     let mut tips = Vec::new();
     if total_bytes > 512 * 1024 * 1024 {

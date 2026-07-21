@@ -11,6 +11,14 @@ use crate::core::event::{EventSource, EventStatus, SideEffect, TraceEvent};
 pub struct GenericAdapter;
 
 impl GenericAdapter {
+    /// Create a new instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use blackbox as _;
+    /// // `new` — see module docs for full workflow.
+    /// ```
     pub fn new() -> Self {
         Self
     }

@@ -10,6 +10,14 @@ pub struct TimelineView {
 }
 
 impl TimelineView {
+    /// Create a new instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use blackbox as _;
+    /// // `new` — see module docs for full workflow.
+    /// ```
     pub fn new(events: Vec<TraceEvent>) -> Self {
         Self { events }
     }

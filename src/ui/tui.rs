@@ -764,6 +764,13 @@ fn parse_seq_from_line(text: &str) -> Option<u64> {
 }
 
 /// Run the TUI event loop, opening the default store path.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `run_tui` — see module docs for full workflow.
+/// ```
 pub async fn run_tui(run_id: Option<&str>) -> anyhow::Result<()> {
     let paths = crate::config::BlackboxPaths::resolve(None, None)?;
     paths.ensure_dirs()?;
@@ -773,6 +780,13 @@ pub async fn run_tui(run_id: Option<&str>) -> anyhow::Result<()> {
 }
 
 /// Run the TUI with an already-opened store.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `run_tui_with_store` — see module docs for full workflow.
+/// ```
 pub async fn run_tui_with_store(store: SqliteStore, run_id: Option<&str>) -> anyhow::Result<()> {
     enable_raw_mode().context("failed to enable raw mode")?;
     let mut stdout = io::stdout();

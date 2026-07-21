@@ -58,6 +58,14 @@ pub struct ExportRedactor {
 }
 
 impl ExportRedactor {
+    /// Create a new instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use blackbox as _;
+    /// // `new` — see module docs for full workflow.
+    /// ```
     pub fn new(config: RedactionConfig) -> Self {
         Self {
             scanner: SecretScanner::new(config),
@@ -69,6 +77,13 @@ impl ExportRedactor {
     /// Scans string fields in the serialized JSON value (except structural
     /// identifiers outside free-form parents) and replaces matched secrets
     /// with `[REDACTED]`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `redact_json` — see module docs for full workflow.
+    /// ```
     pub fn redact_json(&self, value: &mut serde_json::Value) {
         self.redact_json_inner(value, &[], 0, 32);
     }

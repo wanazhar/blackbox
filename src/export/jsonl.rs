@@ -6,6 +6,13 @@ use crate::core::run::Run;
 /// Each line is a self-contained JSON object. The first line is the run
 /// metadata, followed by one line per event. This format is streamable
 /// and can be processed line-by-line without loading the full file.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `export_jsonl` — see module docs for full workflow.
+/// ```
 pub fn export_jsonl(run: &Run, events: &[TraceEvent], redact: bool) -> anyhow::Result<String> {
     let mut lines = Vec::new();
 

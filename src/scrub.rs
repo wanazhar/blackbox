@@ -18,16 +18,30 @@ use crate::workspace_manifest::WorkspaceManifest;
 /// Result of a scrub pass.
 #[derive(Debug, Default, Clone)]
 pub struct ScrubReport {
+    /// Runs scanned.
     pub runs_scanned: usize,
+    /// Runs updated.
     pub runs_updated: usize,
+    /// Events scanned.
     pub events_scanned: usize,
+    /// Events updated.
     pub events_updated: usize,
+    /// Checkpoints scanned.
     pub checkpoints_scanned: usize,
+    /// Blobs rewritten.
     pub blobs_rewritten: usize,
+    /// Dry run.
     pub dry_run: bool,
 }
 
 /// Scrub secrets from all runs/events/blobs in the store.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `scrub_store` — see module docs for full workflow.
+/// ```
 pub async fn scrub_store(
     store: Arc<dyn TraceStore>,
     dry_run: bool,
@@ -372,6 +386,13 @@ async fn scrub_event(
 }
 
 /// Human-readable summary line.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `format_report` — see module docs for full workflow.
+/// ```
 pub fn format_report(report: &ScrubReport) -> String {
     format!(
         "{}runs={}/{} events={}/{} checkpoints={} blobs_rewritten={}{}",
@@ -395,6 +416,13 @@ pub fn format_report(report: &ScrubReport) -> String {
 /// Only live references count. Keys that merely exist in the `blobs`
 /// metadata table (e.g. after `delete_run`, or after scrub rewrote a secret
 /// blob to a new key) are *not* treated as live — callers must GC those.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `collect_referenced_blobs` — see module docs for full workflow.
+/// ```
 pub async fn collect_referenced_blobs(
     store: &dyn TraceStore,
 ) -> anyhow::Result<std::collections::HashSet<String>> {
@@ -440,6 +468,13 @@ pub async fn collect_referenced_blobs(
 }
 
 /// Delete blob files on disk that are not referenced. Returns count deleted.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `gc_orphan_blobs` — see module docs for full workflow.
+/// ```
 pub async fn gc_orphan_blobs(
     blob_dir: &std::path::Path,
     referenced: &std::collections::HashSet<String>,
@@ -482,6 +517,13 @@ pub async fn gc_orphan_blobs(
 ///
 /// Note: do not run while an active recording may be writing blobs that are
 /// not yet linked from events — the race window can reclaim in-flight content.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `gc_unreferenced_blobs` — see module docs for full workflow.
+/// ```
 pub async fn gc_unreferenced_blobs(
     store: &dyn TraceStore,
     blob_dir: &std::path::Path,

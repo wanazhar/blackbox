@@ -5,13 +5,26 @@ use crate::verification::receipt::{
 };
 
 #[derive(Debug, Clone, Default)]
+/// `TapSummary` value.
 pub struct TapSummary {
+    /// Planned.
     pub planned: Option<u64>,
+    /// Whether the operation succeeded.
     pub ok: u64,
+    /// Not ok.
     pub not_ok: u64,
+    /// Skipped.
     pub skipped: u64,
 }
 
+/// Parse tap.
+///
+/// # Examples
+///
+/// ```
+/// # use blackbox as _;
+/// // `parse_tap` — see module docs for full workflow.
+/// ```
 pub fn parse_tap(text: &str) -> TapSummary {
     let mut s = TapSummary::default();
     for line in text.lines() {
@@ -34,6 +47,14 @@ pub fn parse_tap(text: &str) -> TapSummary {
     s
 }
 
+/// Receipt from tap.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `receipt_from_tap` — see module docs for full workflow.
+/// ```
 pub fn receipt_from_tap(run_id: &str, summary: &TapSummary, source: &str) -> VerificationReceipt {
     let total = summary
         .planned

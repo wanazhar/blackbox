@@ -28,6 +28,14 @@ fn basename_in(command: &[String], names: &[&str]) -> bool {
 pub struct AiderAdapter;
 
 impl AiderAdapter {
+    /// Create a new instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use blackbox as _;
+    /// // `new` — see module docs for full workflow.
+    /// ```
     pub fn new() -> Self {
         Self
     }
@@ -119,6 +127,14 @@ impl HarnessAdapter for AiderAdapter {
 pub struct GeminiAdapter;
 
 impl GeminiAdapter {
+    /// Create a new instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use blackbox as _;
+    /// // `new` — see module docs for full workflow.
+    /// ```
     pub fn new() -> Self {
         Self
     }
@@ -208,6 +224,14 @@ impl HarnessAdapter for GeminiAdapter {
 pub struct CursorAdapter;
 
 impl CursorAdapter {
+    /// Create a new instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use blackbox as _;
+    /// // `new` — see module docs for full workflow.
+    /// ```
     pub fn new() -> Self {
         Self
     }
@@ -303,9 +327,18 @@ impl HarnessAdapter for CursorAdapter {
 
 // ── OpenCode ────────────────────────────────────────────────────────
 
+/// `OpenCodeAdapter` value.
 pub struct OpenCodeAdapter;
 
 impl OpenCodeAdapter {
+    /// Create a new instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use blackbox as _;
+    /// // `new` — see module docs for full workflow.
+    /// ```
     pub fn new() -> Self {
         Self
     }
@@ -353,9 +386,18 @@ impl HarnessAdapter for OpenCodeAdapter {
 
 // ── Grok ────────────────────────────────────────────────────────────
 
+/// `GrokAdapter` value.
 pub struct GrokAdapter;
 
 impl GrokAdapter {
+    /// Create a new instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use blackbox as _;
+    /// // `new` — see module docs for full workflow.
+    /// ```
     pub fn new() -> Self {
         Self
     }

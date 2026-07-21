@@ -15,55 +15,91 @@ use crate::workspace_manifest::WorkspaceManifest;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// `CapsuleCompleteness` classification.
 pub enum CapsuleCompleteness {
+    /// `ByteExact` variant.
     ByteExact,
+    /// `SanitizedComplete` variant.
     SanitizedComplete,
+    /// `Partial` variant.
     Partial,
+    /// `MetadataOnly` variant.
     MetadataOnly,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// `TransformationEntry` value.
 pub struct TransformationEntry {
+    /// Filesystem path.
     pub path: String,
+    /// Transformation.
     pub transformation: String,
+    /// Original hash available.
     pub original_hash_available: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Capsule hash.
     pub capsule_hash: Option<String>,
+    /// Byte exact.
     pub byte_exact: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// `CapsuleManifest` value.
 pub struct CapsuleManifest {
+    /// Schema identifier string.
     pub schema: String,
+    /// Version string or number.
     pub version: u32,
+    /// Creation timestamp.
     pub created_at: String,
+    /// Source run id.
     pub source_run_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Experiment id.
     pub experiment_id: Option<String>,
+    /// Command argv.
     pub command: Vec<String>,
+    /// Command fidelity.
     pub command_fidelity: String,
+    /// Completeness.
     pub completeness: CapsuleCompleteness,
     #[serde(default)]
+    /// Transformation ledger.
     pub transformation_ledger: Vec<TransformationEntry>,
     #[serde(default)]
+    /// Limitations.
     pub limitations: Vec<String>,
+    /// Portable archive sha256.
     pub portable_archive_sha256: String,
+    /// Manifest sha256.
     pub manifest_sha256: String,
     #[serde(default)]
+    /// Verification receipt ids.
     pub verification_receipt_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Git commit.
     pub git_commit: Option<String>,
     /// Explicit statement: model output is not deterministic replay.
     pub model_replay_deterministic: bool,
 }
 
 #[derive(Debug, Clone, Default)]
+/// `CapsuleCreateOpts` value.
 pub struct CapsuleCreateOpts {
+    /// Experiment id.
     pub experiment_id: Option<String>,
+    /// Include receipts.
     pub include_receipts: bool,
 }
 
 /// Create a capsule JSON document wrapping a portable archive + completeness metadata.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `create_capsule` — see module docs for full workflow.
+/// ```
 pub async fn create_capsule(
     store: &dyn TraceStore,
     run: &Run,
@@ -156,6 +192,13 @@ pub async fn create_capsule(
 }
 
 /// Write capsule to path.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `write_capsule_file` — see module docs for full workflow.
+/// ```
 pub async fn write_capsule_file(
     store: &dyn TraceStore,
     run: &Run,
@@ -171,6 +214,13 @@ pub async fn write_capsule_file(
 }
 
 /// Helper used by tests to store a small blob under a known path key.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `ensure_blob` — see module docs for full workflow.
+/// ```
 pub async fn ensure_blob(store: &dyn TraceStore, data: &[u8]) -> anyhow::Result<BlobReference> {
     store.store_blob(data).await
 }

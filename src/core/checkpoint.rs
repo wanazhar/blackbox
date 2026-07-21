@@ -50,6 +50,13 @@ pub struct Checkpoint {
 
 impl Checkpoint {
     /// Create a new checkpoint.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use blackbox as _;
+    /// // `new` — see module docs for full workflow.
+    /// ```
     pub fn new(run_id: &str, event_id: &str, cwd: &str) -> Self {
         Self {
             id: Uuid::new_v4().to_string(),

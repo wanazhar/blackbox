@@ -8,17 +8,31 @@ use serde::{Deserialize, Serialize};
 
 use crate::adapter_protocol::manifest::{AdapterManifest, ADAPTER_PROTOCOL};
 
+/// `MAX_ADAPTER_EVENT_BYTES` constant.
 pub const MAX_ADAPTER_EVENT_BYTES: usize = 1024 * 1024; // 1 MiB
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// `ValidationReport` value.
 pub struct ValidationReport {
+    /// Whether the operation succeeded.
     pub ok: bool,
+    /// Error messages.
     pub errors: Vec<String>,
+    /// Warning messages.
     pub warnings: Vec<String>,
     #[serde(default)]
+    /// Events validated.
     pub events_validated: usize,
 }
 
+/// Validate adapter manifest.
+///
+/// # Examples
+///
+/// ```
+/// # use blackbox as _;
+/// // `validate_adapter_manifest` — see module docs for full workflow.
+/// ```
 pub fn validate_adapter_manifest(m: &AdapterManifest) -> ValidationReport {
     let mut r = ValidationReport {
         ok: true,
@@ -47,6 +61,13 @@ pub fn validate_adapter_manifest(m: &AdapterManifest) -> ValidationReport {
 }
 
 /// Validate one NDJSON adapter event line (canonical subset).
+///
+/// # Examples
+///
+/// ```
+/// # use blackbox as _;
+/// // `validate_adapter_event` — see module docs for full workflow.
+/// ```
 pub fn validate_adapter_event(line: &str) -> ValidationReport {
     let mut r = ValidationReport {
         ok: true,
@@ -95,6 +116,13 @@ pub fn validate_adapter_event(line: &str) -> ValidationReport {
 ///
 /// Empty stdout is a warning (fixture-only adapters), not a hard failure.
 /// Invalid lines or non-zero exit (when events expected) fail the report.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `run_live_conformance` — see module docs for full workflow.
+/// ```
 pub fn run_live_conformance(m: &AdapterManifest, timeout: Duration) -> ValidationReport {
     let mut r = ValidationReport {
         ok: true,

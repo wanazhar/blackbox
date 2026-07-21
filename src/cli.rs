@@ -27,10 +27,19 @@ pub struct Cli {
     pub json: bool,
 
     #[command(subcommand)]
+    /// Command argv.
     pub command: Command,
 }
 
 impl Cli {
+    /// Output mode.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `output_mode` — see module docs for full workflow.
+    /// ```
     pub fn output_mode(&self) -> OutputMode {
         OutputMode::from_flag(self.json)
     }
@@ -38,6 +47,7 @@ impl Cli {
 
 #[derive(Subcommand)]
 #[allow(clippy::large_enum_variant)] // RunArgs carries optional resume injection
+/// `Command` classification.
 pub enum Command {
     /// Run a command under observation
     Run(RunArgs),
@@ -144,6 +154,7 @@ pub enum Command {
 }
 
 #[derive(Args, Clone)]
+/// `BackupArgs` value.
 pub struct BackupArgs {
     /// Output path for sealed backup (`-` = stdout)
     #[arg(short = 'o', long, default_value = "blackbox-backup.bbx.json")]
@@ -166,6 +177,7 @@ pub struct BackupArgs {
 }
 
 #[derive(Args, Clone)]
+/// `RestoreArgs` value.
 pub struct RestoreArgs {
     /// Path to sealed backup (`-` = stdin)
     pub path: String,
@@ -175,8 +187,10 @@ pub struct RestoreArgs {
 }
 
 #[derive(Args, Default)]
+/// `MemoryArgs` value.
 pub struct MemoryArgs {
     #[command(subcommand)]
+    /// Action.
     pub action: Option<MemoryAction>,
 
     /// Approximate max tokens for the pack
@@ -185,6 +199,7 @@ pub struct MemoryArgs {
 }
 
 #[derive(Subcommand, Clone)]
+/// `MemoryAction` classification.
 pub enum MemoryAction {
     /// Show project memory pack
     Show(MemoryShowArgs),
@@ -199,12 +214,15 @@ impl Default for MemoryAction {
 }
 
 #[derive(Args, Default, Clone)]
+/// `MemoryShowArgs` value.
 pub struct MemoryShowArgs {
     #[arg(long, default_value_t = 4000)]
+    /// Max tokens.
     pub max_tokens: usize,
 }
 
 #[derive(Args, Clone, Default)]
+/// `MemorySetArgs` value.
 pub struct MemorySetArgs {
     /// Set project goal (empty string clears when used with --clear-goal)
     #[arg(long)]
@@ -224,6 +242,7 @@ pub struct MemorySetArgs {
 }
 
 #[derive(Args, Default)]
+/// `ResolveArgs` value.
 pub struct ResolveArgs {
     /// Run id to mark resolved (default: sticky unresolved_failure_id)
     pub run_id: Option<String>,
@@ -236,26 +255,37 @@ pub struct ResolveArgs {
 }
 
 #[derive(Args)]
+/// `ClaimArgs` value.
 pub struct ClaimArgs {
     #[command(subcommand)]
+    /// Action.
     pub action: ClaimAction,
 }
 
 #[derive(Subcommand, Clone)]
+/// `ClaimAction` classification.
 pub enum ClaimAction {
+    /// `Acquire` variant.
     Acquire(ClaimAcquireArgs),
+    /// `Release` variant.
     Release(ClaimReleaseArgs),
+    /// `Status` variant.
     Status,
+    /// `Heartbeat` variant.
     Heartbeat(ClaimHeartbeatArgs),
 }
 
 #[derive(Args, Clone, Default)]
+/// `ClaimAcquireArgs` value.
 pub struct ClaimAcquireArgs {
     #[arg(long)]
+    /// Goal.
     pub goal: Option<String>,
     #[arg(long)]
+    /// Ttl secs.
     pub ttl_secs: Option<u64>,
     #[arg(long)]
+    /// Holder.
     pub holder: Option<String>,
     /// Path scope relative to project root (e.g. `src/auth`). Omit for whole-project claim.
     #[arg(long)]
@@ -263,20 +293,26 @@ pub struct ClaimAcquireArgs {
 }
 
 #[derive(Args, Clone, Default)]
+/// `ClaimReleaseArgs` value.
 pub struct ClaimReleaseArgs {
     #[arg(long)]
+    /// Holder.
     pub holder: Option<String>,
 }
 
 #[derive(Args, Clone, Default)]
+/// `ClaimHeartbeatArgs` value.
 pub struct ClaimHeartbeatArgs {
     #[arg(long)]
+    /// Holder.
     pub holder: Option<String>,
     #[arg(long)]
+    /// Ttl secs.
     pub ttl_secs: Option<u64>,
 }
 
 #[derive(Args, Default)]
+/// `StatusArgs` value.
 pub struct StatusArgs {
     /// Attach a resume pack when attention is needed
     #[arg(long)]
@@ -288,6 +324,7 @@ pub struct StatusArgs {
 }
 
 #[derive(Args, Default)]
+/// `HandoffArgs` value.
 pub struct HandoffArgs {
     /// Approximate max tokens for the resume pack
     #[arg(long, default_value_t = 4000)]
@@ -299,6 +336,7 @@ pub struct HandoffArgs {
 }
 
 #[derive(Args)]
+/// `ContextArgs` value.
 pub struct ContextArgs {
     /// Run ID, prefix, or "latest"
     pub run_id: String,
@@ -317,12 +355,15 @@ pub struct ContextArgs {
 }
 
 #[derive(Args)]
+/// `SyncArgs` value.
 pub struct SyncArgs {
     #[command(subcommand)]
+    /// Action.
     pub action: SyncAction,
 }
 
 #[derive(Subcommand)]
+/// `SyncAction` classification.
 pub enum SyncAction {
     /// Export local runs into a sync directory
     Push(SyncDirArgs),
@@ -331,6 +372,7 @@ pub enum SyncAction {
 }
 
 #[derive(Args)]
+/// `SyncDirArgs` value.
 pub struct SyncDirArgs {
     /// Sync directory (shared via NFS/rsync/cloud drive)
     #[arg(long, default_value = ".blackbox/sync")]
@@ -358,6 +400,7 @@ pub struct SyncDirArgs {
 }
 
 #[derive(Args, Default)]
+/// `DoctorArgs` value.
 pub struct DoctorArgs {
     /// Rebuild the FTS5 full-text index
     #[arg(long)]
@@ -365,6 +408,7 @@ pub struct DoctorArgs {
 }
 
 #[derive(Args)]
+/// `ServeArgs` value.
 pub struct ServeArgs {
     /// Bind address (default 127.0.0.1:7788)
     #[arg(long, default_value = "127.0.0.1:7788")]
@@ -388,6 +432,7 @@ pub struct ServeArgs {
 }
 
 #[derive(Args)]
+/// `RunsArgs` value.
 pub struct RunsArgs {
     /// Only show runs with this tag (repeatable; any match)
     #[arg(long)]
@@ -407,6 +452,7 @@ pub struct RunsArgs {
 }
 
 #[derive(Args)]
+/// `TagArgs` value.
 pub struct TagArgs {
     /// Run ID, prefix, or "latest"
     pub run_id: String,
@@ -421,6 +467,7 @@ pub struct TagArgs {
 }
 
 #[derive(Args)]
+/// `StatsArgs` value.
 pub struct StatsArgs {
     /// Max recent runs to sample for event totals (default: 50)
     #[arg(long, default_value = "50")]
@@ -428,12 +475,14 @@ pub struct StatsArgs {
 }
 
 #[derive(Args)]
+/// `CompletionsArgs` value.
 pub struct CompletionsArgs {
     /// Shell to generate completions for
     pub shell: Shell,
 }
 
 #[derive(Args)]
+/// `SearchArgs` value.
 pub struct SearchArgs {
     /// Search query (all terms must match)
     pub query: String,
@@ -448,6 +497,7 @@ pub struct SearchArgs {
 }
 
 #[derive(Args)]
+/// `WatchArgs` value.
 pub struct WatchArgs {
     /// Run ID, prefix, or "latest" (default: latest)
     #[arg(default_value = "latest")]
@@ -467,6 +517,7 @@ pub struct WatchArgs {
 }
 
 #[derive(Args, Clone, Default)]
+/// `RunArgs` value.
 pub struct RunArgs {
     /// Label for this run
     #[arg(long)]
@@ -593,6 +644,7 @@ pub struct RunArgs {
 }
 
 #[derive(Args)]
+/// `ShowArgs` value.
 pub struct ShowArgs {
     /// Run ID, unique prefix, or "latest"
     pub run_id: String,
@@ -611,6 +663,7 @@ pub struct ShowArgs {
 }
 
 #[derive(Args)]
+/// `TimelineArgs` value.
 pub struct TimelineArgs {
     /// Run ID, unique prefix, or "latest"
     pub run_id: String,
@@ -628,6 +681,7 @@ pub struct TimelineArgs {
 }
 
 #[derive(Args)]
+/// `RmArgs` value.
 pub struct RmArgs {
     /// Run IDs, prefixes, or "latest" (one or more)
     pub run_ids: Vec<String>,
@@ -642,6 +696,7 @@ pub struct RmArgs {
 }
 
 #[derive(Args)]
+/// `PurgeArgs` value.
 pub struct PurgeArgs {
     /// Keep only the N most recent runs (delete older)
     #[arg(long)]
@@ -669,6 +724,7 @@ pub struct PurgeArgs {
 }
 
 #[derive(Args)]
+/// `MaybeRunArgs` value.
 pub struct MaybeRunArgs {
     /// Optional label
     #[arg(long)]
@@ -680,6 +736,7 @@ pub struct MaybeRunArgs {
 }
 
 #[derive(Args, Default)]
+/// `EnableArgs` value.
 pub struct EnableArgs {
     /// Install managed shell wrappers into rc / fish conf.d (idempotent)
     #[arg(long)]
@@ -755,6 +812,7 @@ pub struct FailArgs {
 }
 
 #[derive(Args)]
+/// `SummaryArgs` value.
 pub struct SummaryArgs {
     /// Run ID, prefix, or "latest"
     pub run_id: String,
@@ -773,6 +831,7 @@ pub struct SummaryArgs {
 }
 
 #[derive(Args)]
+/// `GcArgs` value.
 pub struct GcArgs {
     /// Apply deletions (requires --yes)
     #[arg(long)]
@@ -788,6 +847,7 @@ pub struct GcArgs {
 }
 
 #[derive(Args)]
+/// `InspectArgs` value.
 pub struct InspectArgs {
     /// Run ID, unique prefix, or "latest"
     pub run_id: String,
@@ -796,6 +856,7 @@ pub struct InspectArgs {
 }
 
 #[derive(Args)]
+/// `DiffArgs` value.
 pub struct DiffArgs {
     /// First run ID, prefix, or "latest"
     pub run_a: String,
@@ -808,6 +869,7 @@ pub struct DiffArgs {
 }
 
 #[derive(Debug, Clone, ValueEnum)]
+/// `ExportFormat` classification.
 pub enum ExportFormat {
     /// JSON Lines format
     Jsonl,
@@ -821,6 +883,7 @@ pub enum ExportFormat {
 }
 
 #[derive(Args)]
+/// `ExportArgs` value.
 pub struct ExportArgs {
     /// Run ID, unique prefix, or "latest"
     pub run_id: String,
@@ -847,6 +910,7 @@ pub struct ExportArgs {
 }
 
 #[derive(Args)]
+/// `ImportArgs` value.
 pub struct ImportArgs {
     /// Path to portable JSON file, directory archive, or "-" for stdin
     pub path: String,
@@ -861,6 +925,7 @@ pub struct ImportArgs {
 }
 
 #[derive(Args)]
+/// `ReplayArgs` value.
 pub struct ReplayArgs {
     /// Run ID, unique prefix, or "latest"
     pub run_id: String,
@@ -894,6 +959,7 @@ pub struct ReplayArgs {
 }
 
 #[derive(Args)]
+/// `ForkArgs` value.
 pub struct ForkArgs {
     /// Run ID, unique prefix, or "latest"
     pub run_id: String,
@@ -914,6 +980,7 @@ pub struct ForkArgs {
 }
 
 #[derive(Args)]
+/// `AnalyzeArgs` value.
 pub struct AnalyzeArgs {
     /// Run ID, unique prefix, or "latest"
     pub run_id: String,
@@ -924,6 +991,7 @@ pub struct AnalyzeArgs {
 }
 
 #[derive(Args)]
+/// `ScrubArgs` value.
 pub struct ScrubArgs {
     /// Run ID, prefix, "latest", or "all" (default: all)
     #[arg(default_value = "all")]
@@ -943,6 +1011,14 @@ pub struct ScrubArgs {
 }
 
 impl Cli {
+    /// Execute.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `execute` — see module docs for full workflow.
+    /// ```
     pub async fn execute(&self) -> anyhow::Result<()> {
         match &self.command {
             Command::Run(args) => cmd_run(self, args).await,

@@ -5,6 +5,13 @@ use crate::core::event::TraceEvent;
 use crate::storage::TraceStore;
 
 /// Reconstruct plain-text terminal output for a run from `terminal.output` events.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `rebuild_terminal_transcript` — see module docs for full workflow.
+/// ```
 pub async fn rebuild_terminal_transcript(
     store: &dyn TraceStore,
     events: &[TraceEvent],
@@ -56,6 +63,13 @@ pub async fn rebuild_terminal_transcript(
 }
 
 /// Compact tool-call transcript (name + input preview).
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `rebuild_tool_transcript` — see module docs for full workflow.
+/// ```
 pub fn rebuild_tool_transcript(events: &[TraceEvent]) -> String {
     let mut lines = Vec::new();
     for ev in events {

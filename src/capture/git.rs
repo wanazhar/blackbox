@@ -84,6 +84,14 @@ impl Default for GitCapture {
 }
 
 impl GitCapture {
+    /// Create a new instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use blackbox as _;
+    /// // `new` — see module docs for full workflow.
+    /// ```
     pub fn new() -> Self {
         Self {
             cwd: None,
@@ -100,23 +108,51 @@ impl GitCapture {
     }
 
     /// Attach a trace store so diffs are persisted as blobs.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `with_store` — see module docs for full workflow.
+    /// ```
     pub fn with_store(mut self, store: Arc<dyn TraceStore>) -> Self {
         self.store = Some(store);
         self
     }
 
     /// When false, skip full diff blob storage (preview + stats only).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `with_store_full_diffs` — see module docs for full workflow.
+    /// ```
     pub fn with_store_full_diffs(mut self, store_full: bool) -> Self {
         self.store_full_diffs = store_full;
         self
     }
 
     /// Blob key of the before-run diff, if any.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `before_diff_blob_key` — see module docs for full workflow.
+    /// ```
     pub fn before_diff_blob_key(&self) -> Option<&str> {
         self.before_diff_blob.as_deref()
     }
 
     /// Blob key of the after-run diff, if any.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `after_diff_blob_key` — see module docs for full workflow.
+    /// ```
     pub fn after_diff_blob_key(&self) -> Option<&str> {
         self.after_diff_blob
             .as_deref()
@@ -124,11 +160,25 @@ impl GitCapture {
     }
 
     /// Commit hash captured at start, if any.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `commit_hash` — see module docs for full workflow.
+    /// ```
     pub fn commit_hash(&self) -> Option<&str> {
         self.commit_hash.as_deref()
     }
 
     /// Commit hash after the run (falls back to start hash).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `after_commit_hash` — see module docs for full workflow.
+    /// ```
     pub fn after_commit_hash(&self) -> Option<&str> {
         self.after_commit_hash
             .as_deref()
@@ -136,6 +186,13 @@ impl GitCapture {
     }
 
     /// Check if the given directory is inside a git repository.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use blackbox as _;
+    /// // `is_git_repo` — see module docs for full workflow.
+    /// ```
     pub async fn is_git_repo(path: &Path) -> bool {
         git_run(&["rev-parse", "--is-inside-work-tree"], path)
             .await

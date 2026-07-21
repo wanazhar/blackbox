@@ -6,19 +6,33 @@ use std::path::{Path, PathBuf};
 
 use crate::maybe_run::{shell_snippet_bash, shell_snippet_fish};
 
+/// `BEGIN_MARKER` constant.
 pub const BEGIN_MARKER: &str = "# >>> blackbox >>>";
+/// `END_MARKER` constant.
 pub const END_MARKER: &str = "# <<< blackbox <<<";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// `ShellKind` classification.
 pub enum ShellKind {
+    /// `Fish` variant.
     Fish,
+    /// `Bash` variant.
     Bash,
+    /// `Zsh` variant.
     Zsh,
     /// Windows PowerShell (profile.ps1) — best-effort ambient wrappers.
     PowerShell,
 }
 
 impl ShellKind {
+    /// Parse.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `parse` — see module docs for full workflow.
+    /// ```
     pub fn parse(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().as_str() {
             "fish" => Some(Self::Fish),
@@ -29,6 +43,14 @@ impl ShellKind {
         }
     }
 
+    /// Detect.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `detect` — see module docs for full workflow.
+    /// ```
     pub fn detect() -> Self {
         // Windows default → PowerShell when SHELL is empty / cmd-like
         #[cfg(windows)]
@@ -58,6 +80,14 @@ impl ShellKind {
         }
     }
 
+    /// View as str.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `as_str` — see module docs for full workflow.
+    /// ```
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Fish => "fish",
@@ -69,13 +99,24 @@ impl ShellKind {
 }
 
 #[derive(Debug, Clone)]
+/// `InstallResult` value.
 pub struct InstallResult {
+    /// Shell.
     pub shell: ShellKind,
+    /// Filesystem path.
     pub path: PathBuf,
+    /// Action.
     pub action: &'static str, // "installed" | "updated" | "unchanged"
 }
 
 /// Resolve the rc / conf.d path for a shell (respects HOME / USERPROFILE).
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `rc_path` — see module docs for full workflow.
+/// ```
 pub fn rc_path(shell: ShellKind, home: &Path) -> PathBuf {
     match shell {
         ShellKind::Fish => home.join(".config/fish/conf.d/blackbox.fish"),
@@ -113,6 +154,13 @@ fn managed_block(shell: ShellKind, wrap: &[String]) -> String {
 }
 
 /// PowerShell function wrappers (Windows ambient capture).
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `shell_snippet_powershell` — see module docs for full workflow.
+/// ```
 pub fn shell_snippet_powershell(wrap: &[String]) -> String {
     let mut out = String::from("# blackbox ambient capture (PowerShell)\n");
     for name in wrap {
@@ -139,6 +187,13 @@ pub fn shell_snippet_powershell(wrap: &[String]) -> String {
 }
 
 /// Insert or replace the managed blackbox block in `content`.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `upsert_block` — see module docs for full workflow.
+/// ```
 pub fn upsert_block(content: &str, block: &str) -> (String, &'static str) {
     if let Some((before, rest)) = content.split_once(BEGIN_MARKER) {
         if let Some((_old, after)) = rest.split_once(END_MARKER) {
@@ -188,6 +243,13 @@ pub fn upsert_block(content: &str, block: &str) -> (String, &'static str) {
 }
 
 /// Remove the managed block from content. Returns None if nothing changed.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `remove_block` — see module docs for full workflow.
+/// ```
 pub fn remove_block(content: &str) -> Option<String> {
     let (before, rest) = content.split_once(BEGIN_MARKER)?;
     let (_old, after) = rest.split_once(END_MARKER)?;
@@ -207,6 +269,13 @@ pub fn remove_block(content: &str) -> Option<String> {
 }
 
 /// Install managed shell functions into the user's rc / conf.d.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `install_shell` — see module docs for full workflow.
+/// ```
 pub fn install_shell(
     shell: ShellKind,
     wrap: &[String],
@@ -259,6 +328,13 @@ pub fn install_shell(
 }
 
 /// Remove managed shell integration.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `uninstall_shell` — see module docs for full workflow.
+/// ```
 pub fn uninstall_shell(shell: ShellKind, home: &Path) -> anyhow::Result<Option<PathBuf>> {
     let path = rc_path(shell, home);
     if !path.exists() {

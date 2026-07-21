@@ -5,14 +5,26 @@ use crate::verification::receipt::{
 };
 
 #[derive(Debug, Clone, Default)]
+/// `JunitSummary` value.
 pub struct JunitSummary {
+    /// Tests.
     pub tests: u64,
+    /// Failures.
     pub failures: u64,
+    /// Error messages.
     pub errors: u64,
+    /// Skipped.
     pub skipped: u64,
 }
 
 /// Parse a subset of JUnit XML (testsuite/testsuites attributes).
+///
+/// # Examples
+///
+/// ```
+/// # use blackbox as _;
+/// // `parse_junit_xml` — see module docs for full workflow.
+/// ```
 pub fn parse_junit_xml(xml: &str) -> anyhow::Result<JunitSummary> {
     let mut summary = JunitSummary::default();
     // Attribute extraction without a full XML dependency.
@@ -42,6 +54,14 @@ pub fn parse_junit_xml(xml: &str) -> anyhow::Result<JunitSummary> {
     Ok(summary)
 }
 
+/// Receipt from junit.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `receipt_from_junit` — see module docs for full workflow.
+/// ```
 pub fn receipt_from_junit(
     run_id: &str,
     summary: &JunitSummary,

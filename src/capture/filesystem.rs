@@ -28,9 +28,13 @@ pub enum SymlinkPolicy {
 /// How a path relates to the capture root.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PathScope {
+    /// `InRoot` variant.
     InRoot,
+    /// `OutsideRoot` variant.
     OutsideRoot,
+    /// `Symlink` variant.
     Symlink,
+    /// `Ignored` variant.
     Ignored,
 }
 
@@ -61,6 +65,14 @@ pub struct FilesystemCapture {
 }
 
 impl FilesystemCapture {
+    /// Create a new instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use blackbox as _;
+    /// // `new` — see module docs for full workflow.
+    /// ```
     pub fn new() -> Self {
         Self {
             event_tx: None,
@@ -73,12 +85,27 @@ impl FilesystemCapture {
         }
     }
 
+    /// Set symlink policy and return self.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `with_symlink_policy` — see module docs for full workflow.
+    /// ```
     pub fn with_symlink_policy(mut self, policy: SymlinkPolicy) -> Self {
         self.symlink_policy = policy;
         self
     }
 
     /// Shared ignore policy (aligned with workspace_manifest / seed).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `should_ignore` — see module docs for full workflow.
+    /// ```
     pub fn should_ignore(path: &Path) -> bool {
         for component in path.components() {
             if let std::path::Component::Normal(name) = component {
@@ -100,6 +127,13 @@ impl FilesystemCapture {
     }
 
     /// Classify path against canonical project root and symlink policy.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `classify_path` — see module docs for full workflow.
+    /// ```
     pub fn classify_path(root: &Path, path: &Path, policy: SymlinkPolicy) -> PathScope {
         if Self::should_ignore(path) {
             return PathScope::Ignored;

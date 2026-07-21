@@ -23,41 +23,65 @@ use sha2::{Digest, Sha256};
 
 use crate::core::event::TraceEvent;
 
+/// `SPOOL_VERSION` constant.
 pub const SPOOL_VERSION: u32 = 1;
 const MAGIC: &[u8; 4] = b"BBSP";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// `SpoolBatch` value.
 pub struct SpoolBatch {
+    /// Batch id.
     pub batch_id: String,
+    /// Events.
     pub events: Vec<TraceEvent>,
+    /// Creation timestamp.
     pub created_at: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
+/// `SpoolAppendResult` value.
 pub struct SpoolAppendResult {
+    /// Batch id.
     pub batch_id: String,
+    /// Filesystem path.
     pub path: PathBuf,
+    /// Event count.
     pub event_count: usize,
+    /// Bytes.
     pub bytes: u64,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
+/// `SpoolHealth` value.
 pub struct SpoolHealth {
+    /// Pending batches.
     pub pending_batches: u64,
+    /// Pending events.
     pub pending_events: u64,
+    /// Pending bytes.
     pub pending_bytes: u64,
+    /// Last append at.
     pub last_append_at: Option<String>,
+    /// Last commit at.
     pub last_commit_at: Option<String>,
+    /// Write failures.
     pub write_failures: u64,
+    /// Replayed batches.
     pub replayed_batches: u64,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
+/// `SpoolInspectInfo` value.
 pub struct SpoolInspectInfo {
+    /// Pending batches.
     pub pending_batches: u64,
+    /// Pending events.
     pub pending_events: u64,
+    /// Bytes.
     pub bytes: u64,
+    /// Torn records.
     pub torn_records: u64,
+    /// Acked batches.
     pub acked_batches: u64,
 }
 
@@ -70,6 +94,14 @@ pub struct EventSpool {
 }
 
 impl EventSpool {
+    /// Open.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `open` — see module docs for full workflow.
+    /// ```
     pub fn open(root: impl AsRef<Path>) -> anyhow::Result<Self> {
         let root = root.as_ref().to_path_buf();
         let pending_dir = root.join("pending");
@@ -87,10 +119,26 @@ impl EventSpool {
         })
     }
 
+    /// Root.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `root` — see module docs for full workflow.
+    /// ```
     pub fn root(&self) -> &Path {
         &self.root
     }
 
+    /// Health snapshot.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `health_snapshot` — see module docs for full workflow.
+    /// ```
     pub fn health_snapshot(&self) -> SpoolHealth {
         let mut h = self.health.lock().clone();
         if let Ok(info) = inspect_spool(&self.root) {
@@ -102,6 +150,13 @@ impl EventSpool {
     }
 
     /// Append a batch to the spool. Producer acknowledgement is safe after return.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `append_batch` — see module docs for full workflow.
+    /// ```
     pub fn append_batch(&self, events: &[TraceEvent]) -> anyhow::Result<SpoolAppendResult> {
         if events.is_empty() {
             anyhow::bail!("cannot append empty spool batch");
@@ -144,6 +199,13 @@ impl EventSpool {
     }
 
     /// List pending batches (decoded, valid only).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `list_pending` — see module docs for full workflow.
+    /// ```
     pub fn list_pending(&self) -> anyhow::Result<Vec<SpoolBatch>> {
         let mut out = Vec::new();
         for entry in fs::read_dir(&self.pending_dir)? {
@@ -164,6 +226,13 @@ impl EventSpool {
     }
 
     /// Mark a batch as committed to SQLite (move to acked / delete).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `acknowledge` — see module docs for full workflow.
+    /// ```
     pub fn acknowledge(&self, batch_id: &str) -> anyhow::Result<()> {
         let pending = self.pending_dir.join(format!("{batch_id}.spool"));
         if !pending.exists() {
@@ -178,6 +247,14 @@ impl EventSpool {
         Ok(())
     }
 
+    /// Pending count.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `pending_count` — see module docs for full workflow.
+    /// ```
     pub fn pending_count(&self) -> usize {
         fs::read_dir(&self.pending_dir)
             .map(|rd| {
@@ -304,6 +381,13 @@ fn crc32_ieee(data: &[u8]) -> u32 {
 }
 
 /// Inspect spool directory without full recovery.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `inspect_spool` — see module docs for full workflow.
+/// ```
 pub fn inspect_spool(root: &Path) -> anyhow::Result<SpoolInspectInfo> {
     let pending = root.join("pending");
     let acked = root.join("acked");

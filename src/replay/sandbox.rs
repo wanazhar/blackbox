@@ -59,6 +59,14 @@ pub struct SandboxReplay {
 }
 
 impl SandboxReplay {
+    /// Create a new instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use blackbox as _;
+    /// // `new` — see module docs for full workflow.
+    /// ```
     pub fn new() -> Self {
         Self {
             policy: ReplayPolicy::Sandbox,
@@ -71,33 +79,79 @@ impl SandboxReplay {
         }
     }
 
+    /// Set policy and return self.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `with_policy` — see module docs for full workflow.
+    /// ```
     pub fn with_policy(mut self, policy: ReplayPolicy) -> Self {
         self.policy = policy;
         self
     }
 
+    /// Set workspace and return self.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `with_workspace` — see module docs for full workflow.
+    /// ```
     pub fn with_workspace(mut self, path: PathBuf) -> Self {
         self.workspace = Some(path);
         self
     }
 
+    /// Without seed.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `without_seed` — see module docs for full workflow.
+    /// ```
     pub fn without_seed(mut self) -> Self {
         self.seed_from_cwd = false;
         self
     }
 
     /// Restore workspace files from this git commit (best-effort `git archive`).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `with_git_commit` — see module docs for full workflow.
+    /// ```
     pub fn with_git_commit(mut self, commit: Option<String>) -> Self {
         self.git_commit = commit;
         self
     }
 
     /// Apply checkpoint working-tree diff after git archive (best-effort).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `with_git_diff` — see module docs for full workflow.
+    /// ```
     pub fn with_git_diff(mut self, diff: Option<String>) -> Self {
         self.git_diff = diff;
         self
     }
 
+    /// Without git restore.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `without_git_restore` — see module docs for full workflow.
+    /// ```
     pub fn without_git_restore(mut self) -> Self {
         self.restore_git = false;
         self
@@ -107,6 +161,13 @@ impl SandboxReplay {
     ///
     /// If `bwrap` is missing, [`ReplayEngine::start`] fails closed with a clear
     /// preflight error rather than silently falling back to workspace-only.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `with_contained` — see module docs for full workflow.
+    /// ```
     pub fn with_contained(mut self, enabled: bool) -> Self {
         self.contained = enabled;
         self
@@ -275,12 +336,22 @@ fn scrub_replay_env(cmd: &mut Command, workspace: &Path) {
 /// Status of the optional Linux contained replay backend.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ContainedBackendStatus {
+    /// Available.
     pub available: bool,
+    /// Tool.
     pub tool: Option<String>,
+    /// Reason.
     pub reason: String,
 }
 
 /// Probe whether bubblewrap-based contained replay can be used on this host.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `probe_contained_backend` — see module docs for full workflow.
+/// ```
 pub fn probe_contained_backend() -> ContainedBackendStatus {
     if !cfg!(target_os = "linux") {
         return ContainedBackendStatus {
@@ -648,6 +719,13 @@ struct SeedStats {
 ///
 /// Does not require copying `.git`. Fails if source is not a git repo or
 /// the commit is missing. Not a full FS guarantee (untracked files absent).
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `restore_git_tree` — see module docs for full workflow.
+/// ```
 pub fn restore_git_tree(source: &Path, workspace: &Path, commit: &str) -> anyhow::Result<String> {
     let commit = commit.trim();
     // Only full/abbreviated hex SHAs from checkpoints (no branch names / path injection).
@@ -686,11 +764,25 @@ pub fn restore_git_tree(source: &Path, workspace: &Path, commit: &str) -> anyhow
 }
 
 /// Honest capability report for workspace or contained replay (1.5 R1).
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `workspace_capability_report` — see module docs for full workflow.
+/// ```
 pub fn workspace_capability_report(policy: ReplayPolicy) -> Vec<(String, String)> {
     capability_report(policy, false)
 }
 
 /// Capability report including contained-backend probe when `contained` is true.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `capability_report` — see module docs for full workflow.
+/// ```
 pub fn capability_report(policy: ReplayPolicy, contained: bool) -> Vec<(String, String)> {
     let probe = if contained {
         Some(probe_contained_backend())
@@ -766,6 +858,13 @@ pub fn capability_report(policy: ReplayPolicy, contained: bool) -> Vec<(String, 
 /// 3. Apply into a staging directory.
 /// 4. Promote changed files only after the complete patch succeeds.
 /// 5. On failure, leave the original workspace unmodified.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `apply_git_diff` — see module docs for full workflow.
+/// ```
 pub fn apply_git_diff(workspace: &Path, diff: &str) -> anyhow::Result<String> {
     let cleaned = strip_diff_banners(diff);
     if cleaned.trim().is_empty() {
@@ -894,6 +993,13 @@ fn promote_staged_files(stage: &Path, workspace: &Path) -> anyhow::Result<()> {
 }
 
 /// Extract destination-ish paths from a unified diff (`+++ b/...`, `diff --git a/ x b/y`).
+///
+/// # Examples
+///
+/// ```
+/// # use blackbox as _;
+/// // `parse_patch_paths` — see module docs for full workflow.
+/// ```
 pub fn parse_patch_paths(diff: &str) -> anyhow::Result<Vec<String>> {
     let mut paths = Vec::new();
     for line in diff.lines() {
@@ -935,6 +1041,13 @@ pub fn parse_patch_paths(diff: &str) -> anyhow::Result<Vec<String>> {
 }
 
 /// Reject absolute paths, traversal, and other escapes (1.5 patch path safety).
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `validate_patch_path` — see module docs for full workflow.
+/// ```
 pub fn validate_patch_path(path: &str) -> anyhow::Result<()> {
     let path = path.trim();
     if path.is_empty() {

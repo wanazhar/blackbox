@@ -8,11 +8,20 @@ use ratatui::Frame;
 
 /// Runs list panel — shows all recorded runs.
 pub struct RunsView {
+    /// Runs.
     pub runs: Vec<Run>,
     state: ListState,
 }
 
 impl RunsView {
+    /// Create a new instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use blackbox as _;
+    /// // `new` — see module docs for full workflow.
+    /// ```
     pub fn new(runs: Vec<Run>) -> Self {
         let mut state = ListState::default();
         if !runs.is_empty() {

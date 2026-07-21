@@ -11,12 +11,22 @@ use std::path::{Path, PathBuf};
 /// One finding from a store-level scan.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoreScanFinding {
+    /// Filesystem path.
     pub path: PathBuf,
+    /// Event or item kind string.
     pub kind: &'static str,
+    /// Detail.
     pub detail: String,
 }
 
 /// Scan a single byte buffer for secrets; returns short descriptions.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `scan_bytes` — see module docs for full workflow.
+/// ```
 pub fn scan_bytes(scanner: &SecretScanner, data: &[u8], label: &str) -> Vec<String> {
     // Lossy decode is intentional: we want to find ASCII/UTF-8 secrets even
     // inside binary pages. We also search raw bytes for known ASCII prefixes.
@@ -46,6 +56,13 @@ pub fn scan_bytes(scanner: &SecretScanner, data: &[u8], label: &str) -> Vec<Stri
 }
 
 /// Scan DB path (+ wal/shm siblings) and all files under blob_dir.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `scan_store_paths` — see module docs for full workflow.
+/// ```
 pub fn scan_store_paths(
     scanner: &SecretScanner,
     db_path: &Path,
@@ -97,6 +114,13 @@ fn db_related_paths(db_path: &Path) -> Vec<PathBuf> {
 }
 
 /// Assert helper for tests: panic with detail if any finding exists.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `assert_store_clean` — see module docs for full workflow.
+/// ```
 pub fn assert_store_clean(scanner: &SecretScanner, db_path: &Path, blob_dir: &Path) {
     let findings = scan_store_paths(scanner, db_path, blob_dir);
     assert!(

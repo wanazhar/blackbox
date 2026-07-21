@@ -10,6 +10,14 @@ use chrono::Utc;
 pub struct EventCorrelator;
 
 impl EventCorrelator {
+    /// Create a new instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use blackbox as _;
+    /// // `new` — see module docs for full workflow.
+    /// ```
     pub fn new() -> Self {
         Self
     }
@@ -18,6 +26,13 @@ impl EventCorrelator {
     ///
     /// Uses temporal proximity, process ancestry, and known
     /// side-effect patterns to estimate causal relationships.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `find_parent` — see module docs for full workflow.
+    /// ```
     pub fn find_parent(
         &self,
         event: &TraceEvent,

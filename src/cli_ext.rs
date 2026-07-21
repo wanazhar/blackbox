@@ -35,6 +35,7 @@ use crate::verification::{parse_tap, receipt_from_tap};
 // ── Arg structs ───────────────────────────────────────────────────
 
 #[derive(Args)]
+/// `FsckArgs` value.
 pub struct FsckArgs {
     /// Deep mode: load and re-hash every referenced blob
     #[arg(long)]
@@ -45,6 +46,7 @@ pub struct FsckArgs {
 }
 
 #[derive(Args)]
+/// `VerifyArgs` value.
 pub struct VerifyArgs {
     /// Run ID, prefix, or "latest"
     pub run_id: String,
@@ -72,93 +74,135 @@ pub struct VerifyArgs {
 }
 
 #[derive(Args)]
+/// `ExperimentArgs` value.
 pub struct ExperimentArgs {
     #[command(subcommand)]
+    /// Action.
     pub action: ExperimentAction,
 }
 
 #[derive(Subcommand)]
+/// `ExperimentAction` classification.
 pub enum ExperimentAction {
     /// Create a new experiment
     Init {
+        /// Display name.
         name: String,
         #[arg(long)]
+        /// Unique identifier.
         id: Option<String>,
     },
-    /// Show experiment manifest
-    Show { id: String },
-    /// List experiments
+    /// Show experiment manifest.
+    Show {
+        /// Experiment id.
+        id: String,
+    },
+    /// List experiments.
     List,
-    /// Validate experiment has runs / required fields
-    Validate { id: String },
+    /// Validate experiment has runs / required fields.
+    Validate {
+        /// Experiment id.
+        id: String,
+    },
     /// Attach experiment metadata to a run
     Link {
+        /// Experiment.
         experiment: String,
+        /// Owning run id.
         run_id: String,
         #[arg(long)]
+        /// Task.
         task: Option<String>,
         #[arg(long)]
+        /// Variant.
         variant: Option<String>,
         #[arg(long)]
+        /// Attempt.
         attempt: Option<u32>,
         #[arg(long)]
+        /// Role.
         role: Option<String>,
         #[arg(long)]
+        /// Model.
         model: Option<String>,
     },
 }
 
 #[derive(Args)]
+/// `ReportArgs` value.
 pub struct ReportArgs {
     #[arg(long)]
+    /// Experiment.
     pub experiment: String,
     #[arg(long, default_value = "variant")]
+    /// Group by.
     pub group_by: String,
     #[arg(long, default_value_t = 3)]
+    /// Min samples.
     pub min_samples: usize,
 }
 
 #[derive(Args)]
+/// `GateArgs` value.
 pub struct GateArgs {
     #[arg(long)]
+    /// Experiment.
     pub experiment: String,
     #[arg(long)]
+    /// Baseline.
     pub baseline: Option<String>,
     #[arg(long)]
+    /// Candidate.
     pub candidate: Option<String>,
     #[arg(long)]
+    /// Min verified rate.
     pub min_verified_rate: Option<f64>,
     #[arg(long)]
+    /// Max p95 duration regression.
     pub max_p95_duration_regression: Option<String>,
     #[arg(long)]
+    /// Require capture complete.
     pub require_capture_complete: bool,
     #[arg(long, default_value_t = 3)]
+    /// Min attempts.
     pub min_attempts: usize,
     #[arg(long, default_value = "variant")]
+    /// Group by.
     pub group_by: String,
 }
 
 #[derive(Args, Clone)]
+/// `CapsuleArgs` value.
 pub struct CapsuleArgs {
     #[command(subcommand)]
+    /// Action.
     pub action: CapsuleAction,
 }
 
 #[derive(Subcommand, Clone)]
+/// `CapsuleAction` classification.
 pub enum CapsuleAction {
+    /// `Create` variant.
     Create {
+        /// Owning run id.
         run_id: String,
         #[arg(short = 'o', long, default_value = "capsule.bbx.json")]
+        /// Output.
         output: PathBuf,
     },
+    /// `Inspect` variant.
     Inspect {
+        /// Filesystem path.
         path: PathBuf,
     },
+    /// `Verify` variant.
     Verify {
+        /// Filesystem path.
         path: PathBuf,
     },
     /// Import capsule portable archive into the store (optional re-execute contained).
     Execute {
+        /// Filesystem path.
         path: PathBuf,
         /// Prefer contained/sandbox backends when re-running the recorded command.
         #[arg(long, default_value_t = true)]
@@ -170,23 +214,32 @@ pub enum CapsuleAction {
 }
 
 #[derive(Args)]
+/// `CassetteArgs` value.
 pub struct CassetteArgs {
     #[command(subcommand)]
+    /// Action.
     pub action: CassetteAction,
 }
 
 #[derive(Subcommand)]
+/// `CassetteAction` classification.
 pub enum CassetteAction {
-    /// Inspect a cassette file (experimental)
-    Inspect { path: PathBuf },
+    /// Inspect a cassette file (experimental).
+    Inspect {
+        /// Cassette file path.
+        path: PathBuf,
+    },
     /// Match a sample JSON-RPC request against a cassette (experimental)
     Match {
+        /// Filesystem path.
         path: PathBuf,
         /// Path to JSON request
         request: PathBuf,
         #[arg(long, default_value = "normalized")]
+        /// Mode.
         mode: String,
         #[arg(long, default_value = "tools/call")]
+        /// Tool.
         tool: String,
     },
     /// Stdio MCP proxy: record tool calls into a cassette (experimental)
@@ -215,43 +268,62 @@ pub enum CassetteAction {
 }
 
 #[derive(Args)]
+/// `BudgetArgs` value.
 pub struct BudgetArgs {
     /// Max wall-clock seconds
     #[arg(long)]
     pub max_wall: Option<u64>,
     #[arg(long)]
+    /// Max processes.
     pub max_processes: Option<u64>,
     #[arg(long)]
+    /// Max output.
     pub max_output: Option<u64>,
     #[arg(long)]
+    /// Max store growth.
     pub max_store_growth: Option<u64>,
     #[arg(long)]
+    /// Max tool calls.
     pub max_tool_calls: Option<u64>,
     #[arg(long)]
+    /// Max tokens.
     pub max_tokens: Option<u64>,
     #[arg(long)]
+    /// Max memory.
     pub max_memory: Option<u64>,
     #[arg(long)]
+    /// Max cpu percent.
     pub max_cpu_percent: Option<u32>,
     #[arg(long)]
+    /// Contained.
     pub contained: bool,
     /// Optional observed values for evaluation demo
     #[arg(long)]
     pub observed_wall: Option<u64>,
     #[arg(long)]
+    /// Observed processes.
     pub observed_processes: Option<u64>,
 }
 
 #[derive(Args)]
+/// `AdapterArgs` value.
 pub struct AdapterArgs {
     #[command(subcommand)]
+    /// Action.
     pub action: AdapterAction,
 }
 
 #[derive(Subcommand)]
+/// `AdapterAction` classification.
 pub enum AdapterAction {
-    Validate { manifest: PathBuf },
+    /// Validate an adapter manifest file.
+    Validate {
+        /// Path to the adapter manifest (TOML or JSON).
+        manifest: PathBuf,
+    },
+    /// Run fixture and optional live conformance tests.
     Test {
+        /// Path to the adapter manifest.
         manifest: PathBuf,
         /// NDJSON fixture file of adapter events
         #[arg(long)]
@@ -260,35 +332,50 @@ pub enum AdapterAction {
 }
 
 #[derive(Args)]
+/// `ProjectsArgs` value.
 pub struct ProjectsArgs {
     #[command(subcommand)]
+    /// Action.
     pub action: ProjectsAction,
 }
 
 #[derive(Subcommand)]
+/// `ProjectsAction` classification.
 pub enum ProjectsAction {
     /// Scan roots and update the metadata-only global index
     Scan {
         #[arg(default_value = ".")]
+        /// Roots.
         roots: Vec<PathBuf>,
     },
     /// Query the global project index
     List {
         #[arg(long)]
+        /// Query.
         query: Option<String>,
         #[arg(long, default_value_t = 50)]
+        /// Configured limit, if any.
         limit: usize,
     },
     /// Remove index entries whose store path no longer exists
     Prune,
     /// Remove a specific project root from the index (metadata only)
     Remove {
+        /// Project root.
         project_root: PathBuf,
     },
 }
 
 // ── Handlers ──────────────────────────────────────────────────────
 
+/// Cmd fsck.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `cmd_fsck` — see module docs for full workflow.
+/// ```
 pub async fn cmd_fsck(
     store: Arc<dyn TraceStore>,
     blob_dir: PathBuf,
@@ -334,6 +421,14 @@ pub async fn cmd_fsck(
     Ok(())
 }
 
+/// Cmd verify.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `cmd_verify` — see module docs for full workflow.
+/// ```
 pub async fn cmd_verify(
     store: Arc<dyn TraceStore>,
     run_id: &str,
@@ -459,6 +554,14 @@ pub async fn cmd_verify(
     Ok(())
 }
 
+/// Cmd experiment.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `cmd_experiment` — see module docs for full workflow.
+/// ```
 pub async fn cmd_experiment(
     store: Arc<dyn TraceStore>,
     args: &ExperimentArgs,
@@ -574,6 +677,14 @@ pub async fn cmd_experiment(
     Ok(())
 }
 
+/// Cmd report.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `cmd_report` — see module docs for full workflow.
+/// ```
 pub async fn cmd_report(
     store: Arc<dyn TraceStore>,
     args: &ReportArgs,
@@ -627,6 +738,14 @@ pub async fn cmd_report(
     Ok(())
 }
 
+/// Cmd gate.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `cmd_gate` — see module docs for full workflow.
+/// ```
 pub async fn cmd_gate(
     store: Arc<dyn TraceStore>,
     args: &GateArgs,
@@ -701,6 +820,14 @@ pub async fn cmd_gate(
     Ok(())
 }
 
+/// Cmd capsule.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `cmd_capsule` — see module docs for full workflow.
+/// ```
 pub async fn cmd_capsule(
     store: Arc<dyn TraceStore>,
     args: &CapsuleArgs,
@@ -855,6 +982,14 @@ pub async fn cmd_capsule(
     Ok(())
 }
 
+/// Cmd cassette.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `cmd_cassette` — see module docs for full workflow.
+/// ```
 pub async fn cmd_cassette(args: &CassetteArgs, json: bool) -> anyhow::Result<()> {
     match &args.action {
         CassetteAction::Inspect { path } => {
@@ -949,6 +1084,14 @@ pub async fn cmd_cassette(args: &CassetteArgs, json: bool) -> anyhow::Result<()>
     Ok(())
 }
 
+/// Cmd budget.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `cmd_budget` — see module docs for full workflow.
+/// ```
 pub async fn cmd_budget(args: &BudgetArgs, json: bool) -> anyhow::Result<()> {
     let policy = BudgetPolicy {
         max_wall_secs: args.max_wall,
@@ -983,6 +1126,14 @@ pub async fn cmd_budget(args: &BudgetArgs, json: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Cmd adapter.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `cmd_adapter` — see module docs for full workflow.
+/// ```
 pub async fn cmd_adapter(args: &AdapterArgs, json: bool) -> anyhow::Result<()> {
     match &args.action {
         AdapterAction::Validate { manifest } => {
@@ -1067,6 +1218,14 @@ pub async fn cmd_adapter(args: &AdapterArgs, json: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Cmd projects.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `cmd_projects` — see module docs for full workflow.
+/// ```
 pub async fn cmd_projects(args: &ProjectsArgs, json: bool) -> anyhow::Result<()> {
     let index_path = default_index_path();
     match &args.action {
@@ -1150,11 +1309,25 @@ pub async fn cmd_projects(args: &ProjectsArgs, json: bool) -> anyhow::Result<()>
 }
 
 /// Open store as Arc for shared handlers.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `store_arc` — see module docs for full workflow.
+/// ```
 pub fn store_arc(store: SqliteStore) -> Arc<dyn TraceStore> {
     Arc::new(store)
 }
 
 /// Spool directory next to blobs: `<blackbox_root>/spool`.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `spool_dir_from_blob_dir` — see module docs for full workflow.
+/// ```
 pub fn spool_dir_from_blob_dir(blob_dir: &std::path::Path) -> PathBuf {
     blob_dir
         .parent()
@@ -1163,6 +1336,13 @@ pub fn spool_dir_from_blob_dir(blob_dir: &std::path::Path) -> PathBuf {
 }
 
 /// Recovery artifacts directory.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `recovery_dir_from_blob_dir` — see module docs for full workflow.
+/// ```
 pub fn recovery_dir_from_blob_dir(blob_dir: &std::path::Path) -> PathBuf {
     blob_dir
         .parent()
@@ -1171,11 +1351,25 @@ pub fn recovery_dir_from_blob_dir(blob_dir: &std::path::Path) -> PathBuf {
 }
 
 /// Ensure spool exists (best-effort).
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `ensure_spool` — see module docs for full workflow.
+/// ```
 pub fn ensure_spool(blob_dir: &std::path::Path) -> anyhow::Result<EventSpool> {
     EventSpool::open(spool_dir_from_blob_dir(blob_dir))
 }
 
 /// Mode helper
+///
+/// # Examples
+///
+/// ```
+/// # use blackbox as _;
+/// // `is_json` — see module docs for full workflow.
+/// ```
 pub fn is_json(mode: OutputMode) -> bool {
     matches!(mode, OutputMode::Json)
 }

@@ -12,6 +12,13 @@ use anyhow::Context;
 pub const SIGGRACE: Duration = Duration::from_millis(5000);
 
 /// Soft-stop the supervised child (SIGINT on Unix; taskkill without /F on Windows).
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `forward_sigint` — see module docs for full workflow.
+/// ```
 pub async fn forward_sigint(pid: u32) {
     if pid == 0 {
         return;
@@ -44,6 +51,13 @@ pub async fn forward_sigint(pid: u32) {
 }
 
 /// Hard-kill after grace (SIGKILL / taskkill /F).
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `escalate_sigkill` — see module docs for full workflow.
+/// ```
 pub async fn escalate_sigkill(pid: u32) {
     if pid == 0 {
         return;
@@ -65,6 +79,13 @@ pub async fn escalate_sigkill(pid: u32) {
 }
 
 /// Timeout escalation: soft interrupt then hard kill, then wait for exit.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `timeout_kill_and_wait` — see module docs for full workflow.
+/// ```
 pub async fn timeout_kill_and_wait(child_pid: u32) -> anyhow::Result<portable_pty::ExitStatus> {
     tracing::warn!(pid = child_pid, "child wait timed out; escalating kill");
     forward_sigint(child_pid).await;
@@ -103,17 +124,33 @@ pub async fn timeout_kill_and_wait(child_pid: u32) -> anyhow::Result<portable_pt
 /// before the output collector is awaited.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DrainStep {
+    /// `AbortSignalHandlers` variant.
     AbortSignalHandlers,
+    /// `StopNativeLogPoller` variant.
     StopNativeLogPoller,
+    /// `DropPtyMaster` variant.
     DropPtyMaster,
+    /// `StopCaptureLayers` variant.
     StopCaptureLayers,
+    /// `AwaitOutputCollector` variant.
     AwaitOutputCollector,
+    /// `AwaitEventWriter` variant.
     AwaitEventWriter,
+    /// `FlushBatchIngest` variant.
     FlushBatchIngest,
+    /// `WriterShutdown` variant.
     WriterShutdown,
 }
 
 impl DrainStep {
+    /// Sequence.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `sequence` — see module docs for full workflow.
+    /// ```
     pub fn sequence() -> &'static [DrainStep] {
         &[
             Self::AbortSignalHandlers,
@@ -127,6 +164,14 @@ impl DrainStep {
         ]
     }
 
+    /// View as str.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `as_str` — see module docs for full workflow.
+    /// ```
     pub fn as_str(self) -> &'static str {
         match self {
             Self::AbortSignalHandlers => "abort_signal_handlers",

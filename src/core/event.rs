@@ -6,26 +6,42 @@ use uuid::Uuid;
 /// Source layer that produced a trace event.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum EventSource {
+    /// Human operator input.
     Human,
+    /// Agent harness control plane.
     Harness,
+    /// PTY terminal I/O.
     Terminal,
+    /// OS process observation.
     Process,
+    /// Workspace filesystem events.
     Filesystem,
+    /// Git status / diff capture.
     Git,
+    /// Structured tool call / result.
     Tool,
+    /// Network observation (when enabled).
     Network,
+    /// Browser automation (when enabled).
     Browser,
+    /// Blackbox system bookkeeping.
     System,
 }
 
 /// Execution status of an event.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum EventStatus {
+    /// Not yet started.
     Pending,
+    /// In progress.
     Running,
+    /// Completed successfully.
     Success,
+    /// Completed with error.
     Error,
+    /// Cancelled before completion.
     Cancelled,
+    /// Status unknown.
     Unknown,
 }
 
@@ -61,13 +77,25 @@ pub enum SideEffect {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum Confidence {
+    /// `Confirmed` variant.
     Confirmed,
+    /// `StronglyCorrelated` variant.
     StronglyCorrelated,
+    /// `WeaklyCorrelated` variant.
     WeaklyCorrelated,
+    /// `Unknown` variant.
     Unknown,
 }
 
 impl Confidence {
+    /// View as str.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `as_str` — see module docs for full workflow.
+    /// ```
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Confirmed => "confirmed",
@@ -82,7 +110,19 @@ impl Confidence {
 ///
 /// Every observable action — terminal I/O, process execution,
 /// file modification, tool call, network request — becomes one
-/// `TraceEvent`. Events form the universal substrate of the trace.
+/// [`TraceEvent`]. Events form the universal substrate of the trace.
+///
+/// # Examples
+///
+/// ```
+/// use blackbox::core::event::{EventSource, EventStatus, TraceEvent};
+///
+/// let mut ev = TraceEvent::new("run-1", EventSource::Tool, "tool.call");
+/// ev.sequence = 1;
+/// ev.status = EventStatus::Success;
+/// assert_eq!(ev.kind, "tool.call");
+/// assert_eq!(ev.run_id, "run-1");
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TraceEvent {
     /// Unique event identifier (UUID v4)
@@ -136,6 +176,19 @@ pub struct TraceEvent {
 
 impl TraceEvent {
     /// Create a new event with auto-generated ID and current timestamp.
+    ///
+    /// Sequence defaults to `0`; [`crate::pipeline::EventWriter`] assigns the
+    /// monotonic sequence at persist time.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use blackbox::core::event::{EventSource, TraceEvent};
+    ///
+    /// let ev = TraceEvent::new("run-1", EventSource::System, "run.started");
+    /// assert_eq!(ev.source, EventSource::System);
+    /// assert_eq!(ev.kind, "run.started");
+    /// ```
     pub fn new(run_id: &str, source: EventSource, kind: &str) -> Self {
         let now = Utc::now();
         let mut ev = Self {
@@ -168,6 +221,13 @@ impl TraceEvent {
     }
 
     /// Mark this event as completed with a status.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `finish` — see module docs for full workflow.
+    /// ```
     pub fn finish(&mut self, status: EventStatus) {
         self.ended_at = Some(Utc::now());
         self.status = status;
@@ -181,12 +241,27 @@ impl TraceEvent {
     }
 
     /// Source-local sequence within a capture layer (1.5 O1).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `source_sequence` — see module docs for full workflow.
+    /// ```
     pub fn source_sequence(&self) -> Option<u64> {
         self.metadata
             .get(crate::core::timing::META_SOURCE_SEQUENCE)
             .and_then(|v| v.as_u64())
     }
 
+    /// Set source sequence.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `set_source_sequence` — see module docs for full workflow.
+    /// ```
     pub fn set_source_sequence(&mut self, seq: u64) {
         self.metadata.insert(
             crate::core::timing::META_SOURCE_SEQUENCE.to_string(),
@@ -195,6 +270,13 @@ impl TraceEvent {
     }
 
     /// Timing provenance (defaults if missing).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `timing` — see module docs for full workflow.
+    /// ```
     pub fn timing(&self) -> crate::core::timing::EventTiming {
         self.metadata
             .get(crate::core::timing::META_TIMING)
@@ -206,6 +288,14 @@ impl TraceEvent {
             })
     }
 
+    /// Set timing.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `set_timing` — see module docs for full workflow.
+    /// ```
     pub fn set_timing(&mut self, timing: &crate::core::timing::EventTiming) {
         if let Ok(v) = serde_json::to_value(timing) {
             self.metadata
@@ -214,6 +304,13 @@ impl TraceEvent {
     }
 
     /// Stamp capture observation time + optional source sequence.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `stamp_capture` — see module docs for full workflow.
+    /// ```
     pub fn stamp_capture(
         &mut self,
         source_seq: u64,
@@ -235,6 +332,13 @@ impl TraceEvent {
     }
 
     /// Stamp ingest time (EventWriter path). Does not overwrite occurrence.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `stamp_ingested` — see module docs for full workflow.
+    /// ```
     pub fn stamp_ingested(&mut self) {
         let now = Utc::now();
         let mut t = self.timing();

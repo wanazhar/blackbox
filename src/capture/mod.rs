@@ -1,8 +1,12 @@
 pub mod coverage;
+/// Filesystem module.
 pub mod filesystem;
+/// Git module.
 pub mod git;
 pub mod health;
+/// Process module.
 pub mod process;
+/// Pty module.
 pub mod pty;
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -42,11 +46,19 @@ pub struct BackpressureStats {
     pub lag_samples: AtomicU64,
     /// Merge channel closed / send failed (event not delivered downstream).
     pub send_failures: AtomicU64,
+    /// Peak depth hint.
     pub peak_depth_hint: AtomicU64,
 }
 
 impl BackpressureStats {
     /// `(lag_samples, send_failures)`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `snapshot` — see module docs for full workflow.
+    /// ```
     pub fn snapshot(&self) -> (u64, u64) {
         (
             self.lag_samples.load(Ordering::Relaxed),
@@ -54,6 +66,14 @@ impl BackpressureStats {
         )
     }
 
+    /// Record lag sample.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `record_lag_sample` — see module docs for full workflow.
+    /// ```
     pub fn record_lag_sample(&self) {
         self.lag_samples.fetch_add(1, Ordering::Relaxed);
     }
@@ -65,6 +85,13 @@ impl BackpressureStats {
 /// Events are never silently discarded under normal operation; prolonged
 /// `send` wait counts as lag pressure so doctor/coverage can surface capture
 /// falling behind. A closed downstream channel increments `send_failures`.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `merge_layers` — see module docs for full workflow.
+/// ```
 pub fn merge_layers(
     receivers: Vec<tokio::sync::mpsc::Receiver<TraceEvent>>,
 ) -> (

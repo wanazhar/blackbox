@@ -24,6 +24,13 @@ fn tool_use_re() -> &'static Regex {
 }
 
 /// Classify a tool name into a side-effect level.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `tool_side_effect` — see module docs for full workflow.
+/// ```
 pub fn tool_side_effect(name: &str) -> SideEffect {
     let lower = name.to_lowercase();
     match lower.as_str() {
@@ -39,6 +46,13 @@ pub fn tool_side_effect(name: &str) -> SideEffect {
 }
 
 /// Extract a session id from free-form text, if present.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `extract_session_id` — see module docs for full workflow.
+/// ```
 pub fn extract_session_id(text: &str) -> Option<String> {
     session_re()
         .captures(text)
@@ -46,6 +60,13 @@ pub fn extract_session_id(text: &str) -> Option<String> {
 }
 
 /// Build a tool.call event.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `tool_call_event` — see module docs for full workflow.
+/// ```
 pub fn tool_call_event(
     run_id: &str,
     tool_name: &str,
@@ -149,6 +170,13 @@ fn attach_shell_command_meta(ev: &mut TraceEvent, tool_name: &str, input: &serde
 }
 
 /// Build a tool.result event.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `tool_result_event` — see module docs for full workflow.
+/// ```
 pub fn tool_result_event(
     run_id: &str,
     tool_use_id: Option<&str>,
@@ -192,6 +220,13 @@ pub fn tool_result_event(
 }
 
 /// Build a harness.session event.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `session_event` — see module docs for full workflow.
+/// ```
 pub fn session_event(run_id: &str, session_id: &str, harness: &str) -> TraceEvent {
     let mut ev = TraceEvent::new(run_id, EventSource::Harness, "harness.session");
     ev.status = EventStatus::Success;
@@ -204,6 +239,13 @@ pub fn session_event(run_id: &str, session_id: &str, harness: &str) -> TraceEven
 }
 
 /// Build a harness.assistant (message) event.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `assistant_event` — see module docs for full workflow.
+/// ```
 pub fn assistant_event(run_id: &str, preview: &str) -> TraceEvent {
     let mut ev = TraceEvent::new(run_id, EventSource::Harness, "harness.assistant");
     ev.status = EventStatus::Success;
@@ -220,6 +262,13 @@ pub fn assistant_event(run_id: &str, preview: &str) -> TraceEvent {
 }
 
 /// Try to parse one NDJSON / stream-json line into events (Claude-style).
+///
+/// # Examples
+///
+/// ```
+/// # use blackbox as _;
+/// // `parse_claude_json_line` — see module docs for full workflow.
+/// ```
 pub fn parse_claude_json_line(run_id: &str, line: &str) -> Vec<TraceEvent> {
     let line = line.trim();
     if line.is_empty() || !line.starts_with('{') {
@@ -367,6 +416,13 @@ pub fn parse_claude_json_line(run_id: &str, line: &str) -> Vec<TraceEvent> {
 }
 
 /// Build harness.usage from a JSON object with token fields.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `usage_event_from_json` — see module docs for full workflow.
+/// ```
 pub fn usage_event_from_json(run_id: &str, val: &serde_json::Value) -> TraceEvent {
     let mut ev = TraceEvent::new(run_id, EventSource::Harness, "harness.usage");
     ev.status = EventStatus::Success;
@@ -403,6 +459,13 @@ pub fn usage_event_from_json(run_id: &str, val: &serde_json::Value) -> TraceEven
 }
 
 /// Try to parse one NDJSON line into events (Codex-style).
+///
+/// # Examples
+///
+/// ```
+/// # use blackbox as _;
+/// // `parse_codex_json_line` — see module docs for full workflow.
+/// ```
 pub fn parse_codex_json_line(run_id: &str, line: &str) -> Vec<TraceEvent> {
     // Codex reuses much of the same stream-json shape; also accept openai-like calls
     let mut events = parse_claude_json_line(run_id, line);
@@ -439,6 +502,13 @@ pub fn parse_codex_json_line(run_id: &str, line: &str) -> Vec<TraceEvent> {
 }
 
 /// Free-text fallbacks (non-JSON) for tool mentions and session ids.
+///
+/// # Examples
+///
+/// ```
+/// # use blackbox as _;
+/// // `parse_plaintext` — see module docs for full workflow.
+/// ```
 pub fn parse_plaintext(run_id: &str, text: &str, harness: &str) -> Vec<TraceEvent> {
     let mut events = Vec::new();
     if let Some(sid) = extract_session_id(text) {

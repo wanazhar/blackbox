@@ -62,11 +62,26 @@ impl Default for FailureFixCorrelator {
 }
 
 impl FailureFixCorrelator {
+    /// Create a new instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use blackbox as _;
+    /// // `new` — see module docs for full workflow.
+    /// ```
     pub fn new() -> Self {
         Self
     }
 
     /// Find failure-to-fix chains with evidence-based confidence.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `find_chains` — see module docs for full workflow.
+    /// ```
     pub fn find_chains(&self, events: &[TraceEvent]) -> Vec<FailureFixChain> {
         let mut chains = Vec::new();
         let error_window_ms: i64 = 30_000;

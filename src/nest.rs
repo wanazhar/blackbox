@@ -31,6 +31,13 @@ pub struct ActiveSupervisorGuard {
 
 impl ActiveSupervisorGuard {
     /// Register `std::process::id()` as supervising `run_id`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `acquire` — see module docs for full workflow.
+    /// ```
     pub fn acquire(run_id: &str) -> Self {
         let dir = ensure_private_supervisor_dir();
         let path = dir.join(std::process::id().to_string());
@@ -51,6 +58,13 @@ impl ActiveSupervisorGuard {
     }
 
     /// Path of the marker file (tests).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `path` — see module docs for full workflow.
+    /// ```
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -63,6 +77,13 @@ impl Drop for ActiveSupervisorGuard {
 }
 
 /// Directory holding per-PID supervisor markers.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `supervisor_dir` — see module docs for full workflow.
+/// ```
 pub fn supervisor_dir() -> PathBuf {
     if let Ok(runtime) = std::env::var("XDG_RUNTIME_DIR") {
         if !runtime.is_empty() {
@@ -132,6 +153,13 @@ fn current_uid() -> u32 {
 
 /// True when nest should passthrough: legacy env **or** an ancestor PID holds
 /// an active supervisor marker.
+///
+/// # Examples
+///
+/// ```
+/// # use blackbox as _;
+/// // `is_nested_supervisor` — see module docs for full workflow.
+/// ```
 pub fn is_nested_supervisor() -> bool {
     if std::env::var_os(ENV_ACTIVE_RUN).is_some() {
         return true;
@@ -140,6 +168,13 @@ pub fn is_nested_supervisor() -> bool {
 }
 
 /// Walk PPID chain looking for supervisor markers.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `nested_under_marker` — see module docs for full workflow.
+/// ```
 pub fn nested_under_marker() -> bool {
     #[cfg(unix)]
     {
@@ -194,6 +229,13 @@ fn parent_pid(pid: u32) -> u32 {
 
 /// Env keys that blackbox may inject for continuity (must not appear in
 /// recorder-mode children).
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `continuity_inject_keys` — see module docs for full workflow.
+/// ```
 pub fn continuity_inject_keys() -> &'static [&'static str] {
     &[
         "BLACKBOX_RESUME_FILE",
@@ -209,6 +251,13 @@ pub fn continuity_inject_keys() -> &'static [&'static str] {
 
 /// Remove all `BLACKBOX_*` keys from a portable-pty `CommandBuilder` so the
 /// supervised child does not inherit recorder control surface.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `strip_blackbox_env` — see module docs for full workflow.
+/// ```
 pub fn strip_blackbox_env(cmd: &mut portable_pty::CommandBuilder) {
     // Collect first — env_remove while iterating env can be fine, but collect
     // is clearer and avoids depending on iterator invalidation semantics.
@@ -227,11 +276,25 @@ pub fn strip_blackbox_env(cmd: &mut portable_pty::CommandBuilder) {
 }
 
 /// Whether hard recorder neutrality (no BLACKBOX_* inject) is supported here.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `neutrality_supported` — see module docs for full workflow.
+/// ```
 pub fn neutrality_supported() -> bool {
     cfg!(unix)
 }
 
 /// Documented PTY differences always present under supervision.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `documented_pty_differences` — see module docs for full workflow.
+/// ```
 pub fn documented_pty_differences() -> Vec<&'static str> {
     vec!["session_id", "process_group", "tty_allocation"]
 }

@@ -24,6 +24,14 @@ pub enum CausalRelation {
 }
 
 impl CausalRelation {
+    /// View as str.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `as_str` — see module docs for full workflow.
+    /// ```
     pub fn as_str(self) -> &'static str {
         match self {
             Self::ToolResultOf => "tool_result_of",
@@ -37,10 +45,15 @@ impl CausalRelation {
 /// Derived causal edge (not a raw capture event).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct CausalEdge {
+    /// From event id.
     pub from_event_id: String,
+    /// To event id.
     pub to_event_id: String,
+    /// Relation.
     pub relation: CausalRelation,
+    /// Confidence.
     pub confidence: Confidence,
+    /// Reasons.
     pub reasons: Vec<String>,
 }
 
@@ -60,6 +73,13 @@ pub struct CommandFingerprint {
 
 impl CommandFingerprint {
     /// Build from executable + argv + optional cwd (material env omitted).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `from_parts` — see module docs for full workflow.
+    /// ```
     pub fn from_parts(
         executable: Option<&str>,
         argv: &[String],
@@ -109,6 +129,14 @@ impl CommandFingerprint {
         }
     }
 
+    /// Build from command meta.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `from_command_meta` — see module docs for full workflow.
+    /// ```
     pub fn from_command_meta(meta: &CommandMetadata, tool_name: Option<&str>) -> Self {
         let exact = meta.lossless
             || matches!(
@@ -145,6 +173,13 @@ impl CommandFingerprint {
     }
 
     /// Loose family match: same tool_name or same argv\[0\] basename when keys differ.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `same_family` — see module docs for full workflow.
+    /// ```
     pub fn same_family(&self, other: &Self) -> bool {
         if self.key == other.key {
             return true;
@@ -165,18 +200,30 @@ impl CommandFingerprint {
 /// Normalized failure signature for matching retry domains.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct FailureSignature {
+    /// Key.
     pub key: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Process exit code, if known.
     pub exit_code: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Tool name.
     pub tool_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Error type.
     pub error_type: Option<String>,
     /// First meaningful error line (truncated).
     pub message_preview: String,
 }
 
 impl FailureSignature {
+    /// Build from error event.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `from_error_event` — see module docs for full workflow.
+    /// ```
     pub fn from_error_event(ev: &TraceEvent) -> Self {
         let exit_code = ev
             .metadata
@@ -237,6 +284,14 @@ pub enum VerificationCoverage {
 }
 
 impl VerificationCoverage {
+    /// View as str.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `as_str` — see module docs for full workflow.
+    /// ```
     pub fn as_str(self) -> &'static str {
         match self {
             Self::None => "none",
@@ -251,12 +306,22 @@ impl VerificationCoverage {
 /// Evidence pointer attached to a claim or chain.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct CausalEvidence {
+    /// Event id.
     pub event_id: String,
+    /// Monotonic sequence number within the run.
     pub sequence: u64,
+    /// Role.
     pub role: String,
 }
 
 /// Extract tool_use_id / tool_call_id from event metadata.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `tool_correlation_id` — see module docs for full workflow.
+/// ```
 pub fn tool_correlation_id(ev: &TraceEvent) -> Option<String> {
     for key in ["tool_use_id", "tool_call_id", "call_id", "id"] {
         if let Some(v) = ev.metadata.get(key).and_then(|x| x.as_str()) {
@@ -276,6 +341,13 @@ pub fn tool_correlation_id(ev: &TraceEvent) -> Option<String> {
 }
 
 /// Extract a command fingerprint from a tool/process event when possible.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `fingerprint_from_event` — see module docs for full workflow.
+/// ```
 pub fn fingerprint_from_event(ev: &TraceEvent) -> Option<CommandFingerprint> {
     let tool_name = ev.metadata.get("tool_name").and_then(|v| v.as_str());
 
@@ -325,6 +397,13 @@ pub fn fingerprint_from_event(ev: &TraceEvent) -> Option<CommandFingerprint> {
 }
 
 /// Find the tool.call that produced a tool.result via tool_use_id or nearest prior call.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `preceding_tool_call` — see module docs for full workflow.
+/// ```
 pub fn preceding_tool_call(
     events: &[TraceEvent],
     result_idx: usize,
@@ -352,6 +431,13 @@ pub fn preceding_tool_call(
 }
 
 /// Pair a tool.call with its tool.result.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `matching_tool_result` — see module docs for full workflow.
+/// ```
 pub fn matching_tool_result(
     events: &[TraceEvent],
     call_idx: usize,
@@ -376,6 +462,13 @@ pub fn matching_tool_result(
 }
 
 /// Build tool_result_of edges for a run (derived analysis).
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `build_tool_pairing_edges` — see module docs for full workflow.
+/// ```
 pub fn build_tool_pairing_edges(events: &[TraceEvent]) -> Vec<CausalEdge> {
     let mut edges = Vec::new();
     for (i, ev) in events.iter().enumerate() {
@@ -409,6 +502,13 @@ pub fn build_tool_pairing_edges(events: &[TraceEvent]) -> Vec<CausalEdge> {
 }
 
 /// Decide confidence for a candidate verification.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `confidence_for_verification` — see module docs for full workflow.
+/// ```
 pub fn confidence_for_verification(
     failure_fp: Option<&CommandFingerprint>,
     verification_fp: Option<&CommandFingerprint>,

@@ -1,5 +1,8 @@
+/// Environment module.
 pub mod environment;
+/// Export module.
 pub mod export;
+/// Scanner module.
 pub mod scanner;
 pub mod store_scan;
 pub mod stream;

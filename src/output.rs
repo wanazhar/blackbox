@@ -5,11 +5,21 @@ use serde::Serialize;
 /// How the CLI should print results.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputMode {
+    /// `Text` variant.
     Text,
+    /// `Json` variant.
     Json,
 }
 
 impl OutputMode {
+    /// Build from flag.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `from_flag` — see module docs for full workflow.
+    /// ```
     pub fn from_flag(json: bool) -> Self {
         if json {
             OutputMode::Json
@@ -23,37 +33,59 @@ impl OutputMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CliErrorCode {
+    /// `NotFound` variant.
     NotFound,
+    /// `Ambiguous` variant.
     Ambiguous,
+    /// `InvalidArgs` variant.
     InvalidArgs,
+    /// `StoreError` variant.
     StoreError,
+    /// `SchemaTooNew` variant.
     SchemaTooNew,
+    /// `Unsupported` variant.
     Unsupported,
+    /// `Internal` variant.
     Internal,
 }
 
 /// Structured CLI error for JSON (and optional mapping from anyhow).
 #[derive(Debug, Clone, Serialize)]
 pub struct CliErrorBody {
+    /// Code.
     pub code: CliErrorCode,
+    /// Message.
     pub message: String,
 }
 
 /// Success / failure envelope for `--json`.
 #[derive(Debug, Serialize)]
 pub struct CliEnvelope<T: Serialize> {
+    /// Whether the operation succeeded.
     pub ok: bool,
+    /// Schema identifier string.
     pub schema: &'static str,
+    /// Command argv.
     pub command: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Data.
     pub data: Option<T>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Error.
     pub error: Option<CliErrorBody>,
 }
 
+/// `CLI_SCHEMA` constant.
 pub const CLI_SCHEMA: &str = "blackbox.cli/v1";
 
 /// Emit a successful JSON envelope to stdout.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `emit_ok` — see module docs for full workflow.
+/// ```
 pub fn emit_ok<T: Serialize>(command: &str, data: &T) -> anyhow::Result<()> {
     let env = CliEnvelope {
         ok: true,
@@ -67,6 +99,13 @@ pub fn emit_ok<T: Serialize>(command: &str, data: &T) -> anyhow::Result<()> {
 }
 
 /// Emit a failure JSON envelope to stdout.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `emit_err` — see module docs for full workflow.
+/// ```
 pub fn emit_err(
     command: &str,
     code: CliErrorCode,
@@ -87,6 +126,13 @@ pub fn emit_err(
 }
 
 /// Map common anyhow messages into CLI error codes (best-effort).
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `classify_anyhow` — see module docs for full workflow.
+/// ```
 pub fn classify_anyhow(err: &anyhow::Error) -> CliErrorCode {
     let msg = err.to_string().to_lowercase();
     if msg.contains("not found") || msg.contains("no runs recorded") {

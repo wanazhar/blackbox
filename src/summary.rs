@@ -27,22 +27,39 @@ const SALIENT_ERROR_CAP: usize = 200;
 const SALIENT_KIND_CAP: usize = 100;
 
 #[derive(Debug, Clone, Serialize)]
+/// `SummaryView` value.
 pub struct SummaryView {
+    /// Owning run id.
     pub run_id: String,
+    /// Short id.
     pub short_id: String,
+    /// Status value.
     pub status: crate::core::run::RunStatus,
+    /// Process exit code, if known.
     pub exit_code: Option<i32>,
+    /// Duration in milliseconds.
     pub duration_ms: Option<u64>,
+    /// Command argv.
     pub command: Vec<String>,
+    /// Associated tags.
     pub tags: Vec<String>,
+    /// Tools.
     pub tools: ToolsSummary,
+    /// Error messages.
     pub errors: Vec<StructuredErrorView>,
+    /// Side effects.
     pub side_effects: Vec<SideEffectSample>,
+    /// Git.
     pub git: GitSummary,
+    /// Resume.
     pub resume: ResumeView,
+    /// Truncated.
     pub truncated: bool,
+    /// Events scanned.
     pub events_scanned: usize,
+    /// Total events.
     pub total_events: Option<usize>,
+    /// Hints.
     pub hints: Vec<String>,
     /// Failure-to-fix correlation chains.
     #[serde(default)]
@@ -101,15 +118,22 @@ pub struct SummaryView {
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
+/// `AnomalyView` value.
 pub struct AnomalyView {
+    /// Event or item kind string.
     pub kind: String,
+    /// Severity.
     pub severity: String,
+    /// Detail.
     pub detail: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Event id.
     pub event_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Monotonic sequence number within the run.
     pub sequence: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Count.
     pub count: Option<usize>,
 }
 
@@ -129,70 +153,105 @@ impl From<Anomaly> for AnomalyView {
 /// A pointer agents can use to jump to evidence in the timeline.
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct EvidenceLink {
+    /// Role.
     pub role: String,
+    /// Detail.
     pub detail: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Event id.
     pub event_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Monotonic sequence number within the run.
     pub sequence: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Filesystem path.
     pub path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// `TurningPointView` value.
 pub struct TurningPointView {
+    /// Event or item kind string.
     pub kind: String,
+    /// Detail.
     pub detail: String,
+    /// Event id.
     pub event_id: Option<String>,
+    /// Monotonic sequence number within the run.
     pub sequence: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// `RetryWasteView` value.
 pub struct RetryWasteView {
+    /// Event or item kind string.
     pub kind: String,
+    /// Detail.
     pub detail: String,
+    /// Count.
     pub count: usize,
+    /// Sample event ids.
     pub sample_event_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// `FailureFixChainView` value.
 pub struct FailureFixChainView {
+    /// Error event id.
     pub error_event_id: String,
+    /// Error message.
     pub error_message: String,
+    /// Files changed.
     pub files_changed: Vec<String>,
+    /// Retry occurred.
     pub retry_occurred: bool,
+    /// Retry successful.
     pub retry_successful: Option<bool>,
     /// Snake_case confidence: confirmed | strongly_correlated | weakly_correlated | unknown
     pub confidence: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Failure fingerprint.
     pub failure_fingerprint: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Verification fingerprint.
     pub verification_fingerprint: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Verification coverage.
     pub verification_coverage: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Reasons.
     pub reasons: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Evidence.
     pub evidence: Vec<EvidenceLink>,
 }
 
 /// Material postmortem claim with confidence + evidence (1.4 G1).
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct PostmortemClaim {
+    /// Claim.
     pub claim: String,
+    /// Confidence.
     pub confidence: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Evidence.
     pub evidence: Vec<EvidenceLink>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Reasons.
     pub reasons: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
+/// `CaptureCoverageView` value.
 pub struct CaptureCoverageView {
+    /// Total events.
     pub total_events: u64,
     #[serde(default)]
+    /// Quality score.
     pub quality_score: u8,
+    /// Surfaces.
     pub surfaces: Vec<SurfaceView>,
+    /// Optional notes.
     pub notes: Vec<String>,
     /// Weighted contribution math (1.4 C3); empty on older runs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -200,38 +259,58 @@ pub struct CaptureCoverageView {
 }
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
+/// `SurfaceView` value.
 pub struct SurfaceView {
+    /// Display name.
     pub name: String,
+    /// Enabled.
     pub enabled: bool,
     #[serde(default)]
+    /// Status value.
     pub status: String,
+    /// Events count.
     pub events_count: u64,
+    /// Optional note.
     pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// `ToolsSummary` value.
 pub struct ToolsSummary {
+    /// Total.
     pub total: usize,
+    /// Failed.
     pub failed: usize,
+    /// Names.
     pub names: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// `SideEffectSample` value.
 pub struct SideEffectSample {
+    /// Monotonic sequence number within the run.
     pub sequence: u64,
+    /// Event or item kind string.
     pub kind: String,
+    /// Detail.
     pub detail: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// `GitSummary` value.
 pub struct GitSummary {
+    /// Start.
     pub start: Option<String>,
+    /// End.
     pub end: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
+/// `SummaryOptions` value.
 pub struct SummaryOptions {
+    /// Short.
     pub short: bool,
+    /// Full.
     pub full: bool,
 }
 
@@ -240,6 +319,13 @@ pub struct SummaryOptions {
 /// Factual totals come from run aggregates (or a recompute). Event evidence
 /// uses a head+tail+salient strategy so early instructions/failures survive
 /// large later windows. `--short` / `--full` change detail, not aggregate facts.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `build_summary` — see module docs for full workflow.
+/// ```
 pub async fn build_summary(
     store: &dyn TraceStore,
     run: &Run,
@@ -1236,6 +1322,13 @@ fn build_narrative(data: &SummaryNarrativeData) -> String {
 }
 
 /// Human-readable summary text.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `format_summary_text` — see module docs for full workflow.
+/// ```
 pub fn format_summary_text(s: &SummaryView) -> String {
     let mut out = String::new();
     out.push_str(&format!(

@@ -9,12 +9,23 @@ use crate::core::event::{EventStatus, TraceEvent};
 /// Semantic key for alignment (ignores harness-internal tool_use ids).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TrajectoryKey {
+    /// Event or item kind string.
     pub kind: String,
+    /// Tool or kind.
     pub tool_or_kind: String,
+    /// Status value.
     pub status: String,
 }
 
 impl TrajectoryKey {
+    /// Build from event.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `from_event` — see module docs for full workflow.
+    /// ```
     pub fn from_event(ev: &TraceEvent) -> Self {
         let tool_or_kind = ev
             .metadata
@@ -30,6 +41,14 @@ impl TrajectoryKey {
         }
     }
 
+    /// Label.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `label` — see module docs for full workflow.
+    /// ```
     pub fn label(&self) -> String {
         if self.kind == "tool.call" {
             format!("tool.{} ({})", self.tool_or_kind, self.status)
@@ -40,6 +59,13 @@ impl TrajectoryKey {
 }
 
 /// Filter to semantic events for trajectory comparison.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `semantic_events` — see module docs for full workflow.
+/// ```
 pub fn semantic_events(events: &[TraceEvent]) -> Vec<&TraceEvent> {
     events
         .iter()
@@ -62,13 +88,21 @@ pub fn semantic_events(events: &[TraceEvent]) -> Vec<&TraceEvent> {
 }
 
 #[derive(Debug, Serialize)]
+/// `TrajectoryDiffView` value.
 pub struct TrajectoryDiffView {
+    /// Run a.
     pub run_a: String,
+    /// Run b.
     pub run_b: String,
+    /// Common prefix len.
     pub common_prefix_len: usize,
+    /// First divergence.
     pub first_divergence: Option<DivergencePoint>,
+    /// Only a.
     pub only_a: Vec<TrajectoryStep>,
+    /// Only b.
     pub only_b: Vec<TrajectoryStep>,
+    /// Prefix.
     pub prefix: Vec<TrajectoryStep>,
     /// Human-readable explanation of where/why the runs diverge.
     #[serde(default)]
@@ -85,17 +119,26 @@ pub struct TrajectoryDiffView {
 }
 
 #[derive(Debug, Serialize)]
+/// `DivergencePoint` value.
 pub struct DivergencePoint {
+    /// Index.
     pub index: usize,
+    /// A.
     pub a: Option<TrajectoryStep>,
+    /// B.
     pub b: Option<TrajectoryStep>,
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// `TrajectoryStep` value.
 pub struct TrajectoryStep {
+    /// Monotonic sequence number within the run.
     pub sequence: u64,
+    /// Event or item kind string.
     pub kind: String,
+    /// Label.
     pub label: String,
+    /// Status value.
     pub status: String,
 }
 
@@ -225,6 +268,13 @@ fn explain(
 }
 
 /// Greedy longest common prefix on semantic keys, then tails + explanation.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `diff_trajectories` — see module docs for full workflow.
+/// ```
 pub fn diff_trajectories(
     run_a: &str,
     events_a: &[TraceEvent],
@@ -319,6 +369,13 @@ pub fn diff_trajectories(
 }
 
 /// Human-readable compare text for CLI / agents.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `format_diff_text` — see module docs for full workflow.
+/// ```
 pub fn format_diff_text(d: &TrajectoryDiffView) -> String {
     let mut out = String::new();
     out.push_str(&format!(

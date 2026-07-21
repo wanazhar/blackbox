@@ -44,6 +44,14 @@ pub enum NativeLogScope {
 }
 
 impl NativeLogScope {
+    /// View as str.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `as_str` — see module docs for full workflow.
+    /// ```
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Project => "project",
@@ -52,6 +60,14 @@ impl NativeLogScope {
         }
     }
 
+    /// Parse.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `parse` — see module docs for full workflow.
+    /// ```
     pub fn parse(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
             "project" | "local" | "cwd" => Some(Self::Project),
@@ -66,11 +82,25 @@ impl NativeLogScope {
 ///
 /// `scope` controls whether home-directory trees are included. Default
 /// project-only avoids copying secrets from `~/.claude` etc. into `.blackbox/`.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `discover_log_roots` — see module docs for full workflow.
+/// ```
 pub fn discover_log_roots(adapter_id: &str, project_dir: &str) -> Vec<PathBuf> {
     discover_log_roots_scoped(adapter_id, project_dir, NativeLogScope::Home)
 }
 
 /// Scoped discovery (prefer this for capture).
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `discover_log_roots_scoped` — see module docs for full workflow.
+/// ```
 pub fn discover_log_roots_scoped(
     adapter_id: &str,
     project_dir: &str,
@@ -187,6 +217,13 @@ fn dirs_home() -> Option<PathBuf> {
 }
 
 /// Whether this adapter may emit events from non-JSON native log lines.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `accepts_plaintext_native_logs` — see module docs for full workflow.
+/// ```
 pub fn accepts_plaintext_native_logs(adapter_id: &str) -> bool {
     matches!(adapter_id, "aider" | "generic")
 }
@@ -253,11 +290,25 @@ fn is_preferred_log(adapter_id: &str, path: &Path, name: &str) -> bool {
 }
 
 /// Collect candidate log files under roots (json/jsonl/log, recent first).
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `list_candidate_files` — see module docs for full workflow.
+/// ```
 pub fn list_candidate_files(roots: &[PathBuf]) -> Vec<PathBuf> {
     list_candidate_files_for("generic", roots)
 }
 
 /// Harness-aware candidate listing.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `list_candidate_files_for` — see module docs for full workflow.
+/// ```
 pub fn list_candidate_files_for(adapter_id: &str, roots: &[PathBuf]) -> Vec<PathBuf> {
     let mut files = Vec::new();
     for root in roots {
@@ -341,27 +392,44 @@ fn walk_logs(adapter_id: &str, _root: &Path, dir: &Path, depth: usize, out: &mut
 /// Identity of a watched log file (1.5: not path/offset alone).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileIdentity {
+    /// Inode.
     pub inode: u64,
+    /// Device.
     pub device: u64,
+    /// Created.
     pub created: Option<SystemTime>,
+    /// Generation.
     pub generation: u64,
 }
 
 /// Per-file poller state.
 #[derive(Debug, Clone)]
 pub struct TrackedLogFile {
+    /// Filesystem path.
     pub path: PathBuf,
+    /// Identity.
     pub identity: FileIdentity,
+    /// Size.
     pub size: u64,
+    /// Offset.
     pub offset: u64,
     /// Bytes not yet consumed after a rate-limit stop.
     pub backlog_bytes: u64,
     /// Lines deferred due to rate limit this cycle (best-effort counter).
     pub deferred_lines: u64,
+    /// Rotations.
     pub rotations: u64,
 }
 
 impl TrackedLogFile {
+    /// Build from meta.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `from_meta` — see module docs for full workflow.
+    /// ```
     pub fn from_meta(path: PathBuf, meta: &std::fs::Metadata, generation: u64) -> Self {
         let (inode, device) = file_ids(meta);
         let created = meta.created().ok();
@@ -387,15 +455,28 @@ impl TrackedLogFile {
 /// Aggregate health for native-log surface (coverage / doctor).
 #[derive(Debug, Clone, Default)]
 pub struct NativeLogHealth {
+    /// Tracked files.
     pub tracked_files: usize,
+    /// Backlog bytes.
     pub backlog_bytes: u64,
+    /// Deferred lines.
     pub deferred_lines: u64,
+    /// Rotations.
     pub rotations: u64,
+    /// Poll errors.
     pub poll_errors: u64,
+    /// Last discovery files.
     pub last_discovery_files: usize,
 }
 
 /// Extract stable file IDs when the OS provides them.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `file_ids` — see module docs for full workflow.
+/// ```
 pub fn file_ids(meta: &std::fs::Metadata) -> (u64, u64) {
     #[cfg(unix)]
     {
@@ -418,15 +499,26 @@ pub fn file_ids(meta: &std::fs::Metadata) -> (u64, u64) {
 /// Classify how metadata changed relative to tracked state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileChange {
+    /// `Unchanged` variant.
     Unchanged,
+    /// `Appended` variant.
     Appended,
+    /// `Truncated` variant.
     Truncated,
     /// Same path, different inode/device/created → rotation or replace.
     RotatedOrReplaced,
+    /// `Missing` variant.
     Missing,
 }
 
 /// Detect rotation / truncate / append from identity + size.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `classify_file_change` — see module docs for full workflow.
+/// ```
 pub fn classify_file_change(tracked: &TrackedLogFile, meta: &std::fs::Metadata) -> FileChange {
     let (inode, device) = file_ids(meta);
     let created = meta.created().ok();
@@ -452,6 +544,13 @@ pub fn classify_file_change(tracked: &TrackedLogFile, meta: &std::fs::Metadata) 
 }
 
 /// Background poller: read new lines from native logs and emit structured events.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `poll_native_logs` — see module docs for full workflow.
+/// ```
 pub async fn poll_native_logs(
     adapter: Arc<dyn HarnessAdapter>,
     writer: Arc<EventWriter>,

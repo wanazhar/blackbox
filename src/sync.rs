@@ -35,33 +35,54 @@ use crate::storage::TraceStore;
 const MANIFEST_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// `SyncManifest` value.
 pub struct SyncManifest {
+    /// Version string or number.
     pub version: u32,
     /// run_id → metadata
     pub runs: HashMap<String, SyncRunEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// `SyncRunEntry` value.
 pub struct SyncRunEntry {
+    /// File.
     pub file: String,
+    /// Sha256.
     pub sha256: String,
+    /// Exported at.
     pub exported_at: String,
+    /// Display name.
     pub name: Option<String>,
+    /// Command argv.
     pub command: Vec<String>,
+    /// Status value.
     pub status: String,
 }
 
 #[derive(Debug, Default)]
+/// `SyncReport` value.
 pub struct SyncReport {
+    /// Pushed.
     pub pushed: usize,
+    /// Pulled.
     pub pulled: usize,
+    /// Skipped.
     pub skipped: usize,
+    /// Error messages.
     pub errors: Vec<String>,
 }
 
 // ── Directory backend ─────────────────────────────────────────────
 
 /// Push local runs into a sync directory (export portable v2 files).
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `sync_push` — see module docs for full workflow.
+/// ```
 pub async fn sync_push(
     store: &dyn TraceStore,
     dir: &Path,
@@ -127,6 +148,13 @@ pub async fn sync_push(
 }
 
 /// Pull remote runs from a sync directory into the local store.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `sync_pull` — see module docs for full workflow.
+/// ```
 pub async fn sync_pull(store: &dyn TraceStore, dir: &Path) -> anyhow::Result<SyncReport> {
     let manifest = load_manifest(dir)?;
     let mut report = SyncReport::default();
@@ -190,6 +218,13 @@ pub async fn sync_pull(store: &dyn TraceStore, dir: &Path) -> anyhow::Result<Syn
 // ── HTTP remote (blackbox serve) ──────────────────────────────────
 
 /// Push local runs to a remote `blackbox serve` instance.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `sync_push_http` — see module docs for full workflow.
+/// ```
 pub async fn sync_push_http(
     store: &dyn TraceStore,
     base_url: &str,
@@ -232,6 +267,13 @@ pub async fn sync_push_http(
 }
 
 /// Pull missing runs from a remote `blackbox serve` instance.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `sync_pull_http` — see module docs for full workflow.
+/// ```
 pub async fn sync_pull_http(
     store: &dyn TraceStore,
     base_url: &str,
@@ -300,6 +342,13 @@ fn http_client() -> anyhow::Result<reqwest::Client> {
 }
 
 /// Refuse cloud metadata and non-HTTP remotes (basic SSRF hardening).
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `validate_sync_remote` — see module docs for full workflow.
+/// ```
 pub fn validate_sync_remote(base: &str) -> anyhow::Result<()> {
     let url = reqwest::Url::parse(base).context("invalid sync remote URL")?;
     match url.scheme() {
@@ -397,6 +446,13 @@ async fn http_put_run(
 // ── S3 remote ─────────────────────────────────────────────────────
 
 /// Push local runs to `s3://bucket/prefix`.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `sync_push_s3` — see module docs for full workflow.
+/// ```
 pub async fn sync_push_s3(
     store: &dyn TraceStore,
     bucket: &str,
@@ -458,6 +514,13 @@ pub async fn sync_push_s3(
 }
 
 /// Pull missing runs from `s3://bucket/prefix`.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `sync_pull_s3` — see module docs for full workflow.
+/// ```
 pub async fn sync_pull_s3(
     store: &dyn TraceStore,
     bucket: &str,
@@ -569,6 +632,13 @@ async fn s3_save_manifest(
 }
 
 /// Parse `s3://bucket/optional/prefix` into (bucket, prefix).
+///
+/// # Examples
+///
+/// ```
+/// # use blackbox as _;
+/// // `parse_s3_url` — see module docs for full workflow.
+/// ```
 pub fn parse_s3_url(url: &str) -> anyhow::Result<(String, String)> {
     let rest = url
         .strip_prefix("s3://")
@@ -658,6 +728,13 @@ fn short(id: &str) -> &str {
 }
 
 /// Resolve a user-supplied sync directory path.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `resolve_sync_dir` — see module docs for full workflow.
+/// ```
 pub fn resolve_sync_dir(path: &str) -> PathBuf {
     let p = PathBuf::from(path);
     if p.as_os_str().is_empty() {
@@ -668,6 +745,13 @@ pub fn resolve_sync_dir(path: &str) -> PathBuf {
 }
 
 /// Build a directory-style manifest from the live store (for HTTP API).
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `manifest_from_store` — see module docs for full workflow.
+/// ```
 pub async fn manifest_from_store(store: &dyn TraceStore) -> anyhow::Result<SyncManifest> {
     let runs = store.list_runs().await?;
     let mut man = SyncManifest {

@@ -6,6 +6,13 @@ use crate::transcript::rebuild_tool_transcript;
 ///
 /// Includes tool summary, event table with detail column, client-side
 /// filter, and a light/dark theme via prefers-color-scheme.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `export_html` — see module docs for full workflow.
+/// ```
 pub fn export_html(run: &Run, events: &[TraceEvent], redact: bool) -> anyhow::Result<String> {
     let run_json = {
         let mut v = serde_json::to_value(run)?;

@@ -12,14 +12,27 @@ use crate::storage::TraceStore;
 
 /// Env vars set for auto-resume / continuity (also discoverable by harnesses/agents).
 pub const ENV_AUTO_RESUME: &str = "BLACKBOX_AUTO_RESUME";
+/// `ENV_RESUME_FILE` constant.
 pub const ENV_RESUME_FILE: &str = "BLACKBOX_RESUME_FILE";
+/// `ENV_RESUME_RUN_ID` constant.
 pub const ENV_RESUME_RUN_ID: &str = "BLACKBOX_RESUME_RUN_ID";
+/// `ENV_RESUME_HINT` constant.
 pub const ENV_RESUME_HINT: &str = "BLACKBOX_RESUME_HINT";
+/// `ENV_MEMORY_FILE` constant.
 pub const ENV_MEMORY_FILE: &str = "BLACKBOX_MEMORY_FILE";
+/// `ENV_MEMORY_SCHEMA` constant.
 pub const ENV_MEMORY_SCHEMA: &str = "BLACKBOX_MEMORY_SCHEMA";
+/// `ENV_CONTINUITY` constant.
 pub const ENV_CONTINUITY: &str = "BLACKBOX_CONTINUITY";
 
 /// Whether auto-resume is active (config + env) — 1.1 compat (true when continuity ≠ off).
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `auto_resume_enabled` — see module docs for full workflow.
+/// ```
 pub fn auto_resume_enabled(cfg: Option<&BlackboxConfig>) -> bool {
     resolve_continuity(cfg, false, false) != ContinuityMode::Off
 }
@@ -27,10 +40,15 @@ pub fn auto_resume_enabled(cfg: Option<&BlackboxConfig>) -> bool {
 /// Materialized continuity injection for a launch.
 #[derive(Debug, Clone)]
 pub struct ResumeInjection {
+    /// Owning run id.
     pub run_id: String,
+    /// Short id.
     pub short_id: String,
+    /// File path.
     pub file_path: PathBuf,
+    /// Preamble.
     pub preamble: String,
+    /// Hint.
     pub hint: String,
     /// Legacy single-run-shaped fields kept for apply_to_launch / tests.
     pub pack: crate::context::ContextPackView,
@@ -38,15 +56,20 @@ pub struct ResumeInjection {
     pub memory: ProjectMemoryPack,
     /// Predecessor for parent_run_id when attention ≥ continue.
     pub predecessor_run_id: Option<String>,
+    /// Attention level.
     pub attention_level: AttentionLevel,
 }
 
 /// Options for continuity prepare.
 #[derive(Debug, Clone)]
 pub struct ContinuityPrepareOpts {
+    /// Max tokens.
     pub max_tokens: usize,
+    /// Continuity.
     pub continuity: ContinuityMode,
+    /// Project root.
     pub project_root: PathBuf,
+    /// Store db.
     pub store_db: PathBuf,
     /// End-of-run write path: always write MEMORY when continuity ≠ off.
     pub end_of_run_write: bool,
@@ -67,6 +90,13 @@ impl Default for ContinuityPrepareOpts {
 /// Build resume injection from sticky state + store when continuity requires launch inject.
 ///
 /// 1.1-compatible entry: uses attention/failure gate equivalent to continuity=attention.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `prepare_resume_injection` — see module docs for full workflow.
+/// ```
 pub async fn prepare_resume_injection(
     store: &dyn TraceStore,
     blackbox_root: &Path,
@@ -92,6 +122,13 @@ pub async fn prepare_resume_injection(
 /// Prepare continuity injection (launch path).
 ///
 /// Returns None when continuity is off, or attention-only with attention_level=none.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `prepare_continuity_injection` — see module docs for full workflow.
+/// ```
 pub async fn prepare_continuity_injection(
     store: Option<&dyn TraceStore>,
     blackbox_root: &Path,
@@ -189,6 +226,13 @@ pub async fn prepare_continuity_injection(
 }
 
 /// End-of-run: always refresh MEMORY files when continuity ≠ off.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `refresh_memory_files_end_of_run` — see module docs for full workflow.
+/// ```
 pub async fn refresh_memory_files_end_of_run(
     store: Option<&dyn TraceStore>,
     blackbox_root: &Path,
@@ -298,6 +342,13 @@ fn memory_to_context_pack(
 /// - Sets BLACKBOX_RESUME_* and BLACKBOX_MEMORY_* env vars
 /// - For Claude `-p` / `--print` prompts: prepends compact memory preamble
 /// - For Codex `exec <prompt>`: prepends to the trailing prompt arg when present
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `apply_to_launch` — see module docs for full workflow.
+/// ```
 pub fn apply_to_launch(
     command: &[String],
     env: &mut std::collections::HashMap<String, String>,

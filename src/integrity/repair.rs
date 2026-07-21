@@ -7,6 +7,13 @@ use crate::storage::TraceStore;
 use super::report::{FsckReport, RepairAction, RepairPlan};
 
 /// Build a repair plan from fsck findings (no mutations).
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `plan_repairs` — see module docs for full workflow.
+/// ```
 pub fn plan_repairs(report: &FsckReport) -> RepairPlan {
     let mut actions = Vec::new();
     for f in &report.findings {
@@ -86,6 +93,13 @@ pub fn plan_repairs(report: &FsckReport) -> RepairPlan {
 }
 
 /// Apply only `auto_safe` actions from a plan. Idempotent for aggregate recompute.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `apply_repair_plan` — see module docs for full workflow.
+/// ```
 pub async fn apply_repair_plan(
     store: &dyn TraceStore,
     plan: &RepairPlan,

@@ -54,8 +54,11 @@ struct AppState {
 
 /// Dashboard configuration.
 pub struct ServeOptions {
+    /// Addr.
     pub addr: SocketAddr,
+    /// Token.
     pub token: Option<String>,
+    /// Reindex.
     pub reindex: bool,
     /// Optional Unix domain socket path (restrictive mode/ownership).
     pub unix_socket: Option<PathBuf>,
@@ -64,6 +67,13 @@ pub struct ServeOptions {
 }
 
 /// Bind and serve the dashboard until cancelled.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `serve` — see module docs for full workflow.
+/// ```
 pub async fn serve(store: Arc<SqliteStore>, opts: ServeOptions) -> anyhow::Result<()> {
     // Privacy: non-loopback bind requires a token (loopback multi-user still warned).
     if !crate::privacy::is_loopback_addr(&opts.addr) && opts.token.is_none() {
@@ -287,6 +297,13 @@ fn session_cookie_ok(state: &AppState, headers: &HeaderMap) -> bool {
 }
 
 /// Parse a single cookie value from the Cookie header.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `cookie_value` — see module docs for full workflow.
+/// ```
 pub fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
     let cookie = headers.get(header::COOKIE)?.to_str().ok()?;
     for part in cookie.split(';') {

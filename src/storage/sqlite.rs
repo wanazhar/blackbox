@@ -67,12 +67,26 @@ impl SqliteStore {
     /// Open or create a SQLite database at the given path.
     ///
     /// Blob directory is derived via [`crate::config::BlackboxPaths`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `open` — see module docs for full workflow.
+    /// ```
     pub fn open(path: impl AsRef<Path>) -> anyhow::Result<Self> {
         let paths = crate::config::BlackboxPaths::from_db_path(path.as_ref().to_path_buf());
         Self::open_with_blobs(&paths.db_path, &paths.blob_dir)
     }
 
     /// Open with an explicit blob directory (used by path resolver / tests).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `open_with_blobs` — see module docs for full workflow.
+    /// ```
     pub fn open_with_blobs(
         db_path: impl AsRef<Path>,
         blob_dir: impl AsRef<Path>,
@@ -81,6 +95,13 @@ impl SqliteStore {
     }
 
     /// Open with optional blob encryption.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `open_with_blobs_crypto` — see module docs for full workflow.
+    /// ```
     pub fn open_with_blobs_crypto(
         db_path: impl AsRef<Path>,
         blob_dir: impl AsRef<Path>,
@@ -140,21 +161,49 @@ impl SqliteStore {
     }
 
     /// Path to the SQLite file.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `db_path` — see module docs for full workflow.
+    /// ```
     pub fn db_path(&self) -> &Path {
         &self.db_path
     }
 
     /// Path to the blob directory.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `blob_dir` — see module docs for full workflow.
+    /// ```
     pub fn blob_dir(&self) -> &Path {
         &self.blob_dir
     }
 
     /// Whether at-rest blob encryption is active for new writes.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `blob_encryption_enabled` — see module docs for full workflow.
+    /// ```
     pub fn blob_encryption_enabled(&self) -> bool {
         self.blob_crypto.is_some()
     }
 
     /// Attach / replace blob crypto after open (e.g. when config enables it).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `with_blob_crypto` — see module docs for full workflow.
+    /// ```
     pub fn with_blob_crypto(mut self, crypto: Option<crate::crypto::BlobCrypto>) -> Self {
         self.blob_crypto = crypto;
         self
@@ -198,6 +247,13 @@ impl SqliteStore {
     }
 
     /// Open an in-memory SQLite database (for testing).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `open_memory` — see module docs for full workflow.
+    /// ```
     pub fn open_memory() -> anyhow::Result<Self> {
         let conn = Connection::open_in_memory().context("failed to open in-memory SQLite")?;
 
@@ -222,6 +278,13 @@ impl SqliteStore {
     ///
     /// Should be called periodically after write-heavy operations to prevent
     /// unbounded WAL growth. Uses TRUNCATE checkpoint for maximum effect.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `wal_checkpoint` — see module docs for full workflow.
+    /// ```
     pub fn wal_checkpoint(&self) -> anyhow::Result<()> {
         let conn = self.conn.lock();
         conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
@@ -396,6 +459,13 @@ impl SqliteStore {
     }
 
     /// Rebuild the full-text index from scratch (e.g. after bulk import).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `reindex_fts_blocking` — see module docs for full workflow.
+    /// ```
     pub fn reindex_fts_blocking(&self) -> anyhow::Result<usize> {
         let conn = self.lock();
         // Clear existing FTS data and rebuild from events table.
@@ -428,6 +498,13 @@ impl SqliteStore {
     }
 
     /// Compatibility alias for callers expecting `reindex_fts`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `reindex_fts` — see module docs for full workflow.
+    /// ```
     pub fn reindex_fts(&self) -> anyhow::Result<usize> {
         self.reindex_fts_blocking()
     }

@@ -7,12 +7,19 @@ use crate::storage::TraceStore;
 /// One search hit.
 #[derive(Debug, Clone)]
 pub struct SearchHit {
+    /// Owning run id.
     pub run_id: String,
+    /// Run label.
     pub run_label: String,
+    /// Event id.
     pub event_id: Option<String>,
+    /// Monotonic sequence number within the run.
     pub sequence: Option<u64>,
+    /// Event or item kind string.
     pub kind: String,
+    /// Snippet.
     pub snippet: String,
+    /// Score.
     pub score: u32,
     /// Backend used: "fts5" or "scan"
     pub backend: &'static str,
@@ -23,6 +30,13 @@ pub struct SearchHit {
 /// Prefer SQLite FTS5 for events when the store supports it; fall back to
 /// scanning recent runs. Run-level matches always use a linear scan of
 /// run metadata (command/name/tags/notes).
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `search_store` — see module docs for full workflow.
+/// ```
 pub async fn search_store(
     store: &dyn TraceStore,
     query: &str,

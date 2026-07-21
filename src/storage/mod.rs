@@ -1,5 +1,10 @@
+//! Trace storage: SQLite backend, blob keys, and pagination helpers.
+
+/// Cursor / page types for run and event listing.
 pub mod page;
+/// SQLite-backed [`TraceStore`] implementation.
 pub mod sqlite;
+/// Shared store path helpers and open options.
 pub mod store;
 
 use crate::aggregates::RunAggregates;
@@ -15,11 +20,28 @@ pub use page::{
     EventPageCursor, RunFilters, RunPage, RunPageCursor,
 };
 
+#[async_trait::async_trait]
 /// Storage backend for run traces, events, checkpoints, and blobs.
 ///
-/// The recommended MVP storage is SQLite for metadata +
-/// a content-addressed blob store for large payloads.
-#[async_trait::async_trait]
+/// The recommended MVP storage is SQLite for metadata plus a
+/// content-addressed blob store for large payloads.
+///
+/// # Examples
+///
+/// ```no_run
+/// use std::sync::Arc;
+/// use blackbox::storage::sqlite::SqliteStore;
+/// use blackbox::storage::TraceStore;
+/// use blackbox::core::run::Run;
+///
+/// # async fn demo() -> anyhow::Result<()> {
+/// let store = Arc::new(SqliteStore::open_memory()?) as Arc<dyn TraceStore>;
+/// let run = Run::new(vec!["echo".into(), "hi".into()], "/tmp".into());
+/// store.insert_run(&run).await?;
+/// assert!(store.get_run(&run.id).await?.is_some());
+/// # Ok(())
+/// # }
+/// ```
 pub trait TraceStore: Send + Sync + 'static {
     // ── Runs ──
 
@@ -385,18 +407,22 @@ pub trait TraceStore: Send + Sync + 'static {
 
     // ── Experiments (1.6 Phase D) ──
 
+    /// Insert or update an experiment manifest.
     async fn upsert_experiment(&self, _manifest: &ExperimentManifest) -> anyhow::Result<()> {
         anyhow::bail!("experiments not supported by this store backend")
     }
 
+    /// Load an experiment manifest by id.
     async fn get_experiment(&self, _id: &str) -> anyhow::Result<Option<ExperimentManifest>> {
         Ok(None)
     }
 
+    /// List all experiment manifests.
     async fn list_experiments(&self) -> anyhow::Result<Vec<ExperimentManifest>> {
         Ok(Vec::new())
     }
 
+    /// Attach typed experiment metadata to a run.
     async fn put_run_experiment_meta(
         &self,
         _run_id: &str,
@@ -405,6 +431,7 @@ pub trait TraceStore: Send + Sync + 'static {
         anyhow::bail!("run experiment meta not supported by this store backend")
     }
 
+    /// Load experiment metadata for a run, if any.
     async fn get_run_experiment_meta(
         &self,
         _run_id: &str,
@@ -412,6 +439,7 @@ pub trait TraceStore: Send + Sync + 'static {
         Ok(None)
     }
 
+    /// List run ids linked to an experiment (stable order).
     async fn list_runs_for_experiment(
         &self,
         _experiment_id: &str,

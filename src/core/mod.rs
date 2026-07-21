@@ -1,9 +1,13 @@
+/// Blob module.
 pub mod blob;
 pub mod blob_refs;
+/// Checkpoint module.
 pub mod checkpoint;
 pub mod command;
+/// Event module.
 pub mod event;
 pub mod process_tree;
+/// Run module.
 pub mod run;
 pub mod timing;
 

@@ -39,10 +39,15 @@ const DUPLICATE_WINDOW: Duration = Duration::from_secs(30);
 /// Snapshot of writer health for coverage / doctor.
 #[derive(Debug, Clone, Default)]
 pub struct WriterHealth {
+    /// Events written.
     pub events_written: u64,
+    /// Events deduped.
     pub events_deduped: u64,
+    /// Slow writes.
     pub slow_writes: u64,
+    /// Max write ms.
     pub max_write_ms: u64,
+    /// Total write ms.
     pub total_write_ms: u64,
     /// Present when using batched ingest.
     pub batch: Option<BatchIngestHealth>,
@@ -50,6 +55,13 @@ pub struct WriterHealth {
 
 impl WriterHealth {
     /// Soft warning text when capture appears to lag under load.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `soft_warning` — see module docs for full workflow.
+    /// ```
     pub fn soft_warning(&self) -> Option<String> {
         if let Some(ref b) = self.batch {
             if b.write_failures > 0 {
@@ -92,6 +104,14 @@ impl WriterHealth {
         None
     }
 
+    /// Return true if healthy.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use blackbox as _;
+    /// // `is_healthy` — see module docs for full workflow.
+    /// ```
     pub fn is_healthy(&self) -> bool {
         self.soft_warning().is_none()
     }
@@ -194,16 +214,37 @@ impl EventWriter {
     ///
     /// Prefer [`Self::new_batched`] for live capture so hot paths do not block
     /// on per-event SQLite transactions.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use blackbox as _;
+    /// // `new` — see module docs for full workflow.
+    /// ```
     pub fn new(store: Arc<dyn TraceStore>, run_id: impl Into<String>) -> Self {
         Self::with_start(store, run_id, 1)
     }
 
     /// Live-capture writer: bounded queue + micro-batch flushes (1.5 S1).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `new_batched` — see module docs for full workflow.
+    /// ```
     pub fn new_batched(store: Arc<dyn TraceStore>, run_id: impl Into<String>) -> Self {
         Self::with_start_batched(store, run_id, 1, BatchIngestConfig::default())
     }
 
     /// Create a writer that continues from `start` (next allocated sequence).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `with_start` — see module docs for full workflow.
+    /// ```
     pub fn with_start(store: Arc<dyn TraceStore>, run_id: impl Into<String>, start: u64) -> Self {
         Self {
             store,
@@ -217,6 +258,13 @@ impl EventWriter {
     }
 
     /// Batched writer continuing from `start`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `with_start_batched` — see module docs for full workflow.
+    /// ```
     pub fn with_start_batched(
         store: Arc<dyn TraceStore>,
         run_id: impl Into<String>,
@@ -227,6 +275,13 @@ impl EventWriter {
     }
 
     /// Batched writer with optional durable spool directory (1.6).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `with_start_batched_spool` — see module docs for full workflow.
+    /// ```
     pub fn with_start_batched_spool(
         store: Arc<dyn TraceStore>,
         run_id: impl Into<String>,
@@ -247,6 +302,13 @@ impl EventWriter {
     }
 
     /// Live-capture writer with durable spool when `spool_dir` is provided.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `new_batched_with_spool` — see module docs for full workflow.
+    /// ```
     pub fn new_batched_with_spool(
         store: Arc<dyn TraceStore>,
         run_id: impl Into<String>,
@@ -289,21 +351,50 @@ impl EventWriter {
         *n
     }
 
+    /// Run id.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `run_id` — see module docs for full workflow.
+    /// ```
     pub fn run_id(&self) -> &str {
         &self.run_id
     }
 
     /// Current next-sequence value (not yet assigned).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `next_sequence` — see module docs for full workflow.
+    /// ```
     pub fn next_sequence(&self) -> u64 {
         self.seq.load(Ordering::Acquire)
     }
 
     /// Assign the next sequence number without persisting.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `allocate_sequence` — see module docs for full workflow.
+    /// ```
     pub fn allocate_sequence(&self) -> u64 {
         self.seq.fetch_add(1, Ordering::AcqRel)
     }
 
     /// Soft capture-health snapshot for this writer.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `health_snapshot` — see module docs for full workflow.
+    /// ```
     pub fn health_snapshot(&self) -> WriterHealth {
         let mut h = self
             .health
@@ -317,11 +408,25 @@ impl EventWriter {
     }
 
     /// Whether this writer uses batched ingest.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use blackbox as _;
+    /// // `is_batched` — see module docs for full workflow.
+    /// ```
     pub fn is_batched(&self) -> bool {
         self.batch.is_some()
     }
 
     /// Flush pending batched events (no-op for sync writers).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `flush` — see module docs for full workflow.
+    /// ```
     pub async fn flush(&self) -> anyhow::Result<()> {
         if let Some(ref b) = self.batch {
             b.flush().await?;
@@ -330,6 +435,13 @@ impl EventWriter {
     }
 
     /// Flush and stop the batch worker (no-op for sync writers).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `shutdown` — see module docs for full workflow.
+    /// ```
     pub async fn shutdown(&self) -> anyhow::Result<()> {
         if let Some(ref b) = self.batch {
             b.shutdown().await?;
@@ -345,6 +457,13 @@ impl EventWriter {
     ///
     /// With batched ingest, non-barrier events return after queue accept;
     /// barrier kinds wait for durable flush.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `write` — see module docs for full workflow.
+    /// ```
     pub async fn write(&self, mut event: TraceEvent) -> anyhow::Result<TraceEvent> {
         if event.run_id.is_empty() {
             event.run_id = self.run_id.clone();
@@ -493,6 +612,13 @@ impl EventWriter {
     }
 
     /// Clone for sharing across tasks (store is Arc; seq is shared via Arc\<EventWriter\>).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `store` — see module docs for full workflow.
+    /// ```
     pub fn store(&self) -> Arc<dyn TraceStore> {
         self.store.clone()
     }

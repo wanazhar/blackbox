@@ -19,11 +19,26 @@ use crate::core::event::{EventSource, SideEffect, TraceEvent};
 pub struct SideEffectClassifier;
 
 impl SideEffectClassifier {
+    /// Create a new instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use blackbox as _;
+    /// // `new` — see module docs for full workflow.
+    /// ```
     pub fn new() -> Self {
         Self
     }
 
     /// Classify a command string into a side-effect level.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `classify_command` — see module docs for full workflow.
+    /// ```
     pub fn classify_command(&self, command: &str) -> SideEffect {
         let lower = command.to_lowercase();
         let parts: Vec<&str> = lower.split_whitespace().collect();
@@ -90,6 +105,13 @@ impl SideEffectClassifier {
     }
 
     /// Classify an event based on its kind, source, and metadata.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `classify_event` — see module docs for full workflow.
+    /// ```
     pub fn classify_event(&self, event: &TraceEvent) -> SideEffect {
         // Already classified
         if event.side_effect != SideEffect::Unknown {

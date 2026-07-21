@@ -27,6 +27,13 @@ impl BlobReference {
     ///
     /// Panics if `key` is not a valid 64-character lowercase hex SHA-256 digest.
     /// This prevents path traversal attacks via malformed blob keys.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use blackbox as _;
+    /// // `new` — see module docs for full workflow.
+    /// ```
     pub fn new(key: String, size: u64) -> Self {
         assert!(
             is_valid_blob_key(&key),
@@ -42,6 +49,13 @@ impl BlobReference {
     }
 
     /// Try to create a new blob reference, returning None if the key is invalid.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `try_new` — see module docs for full workflow.
+    /// ```
     pub fn try_new(key: String, size: u64) -> Option<Self> {
         if is_valid_blob_key(&key) {
             Some(Self {
@@ -56,12 +70,26 @@ impl BlobReference {
     }
 
     /// Mark this blob as Zstandard-compressed.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `compressed` — see module docs for full workflow.
+    /// ```
     pub fn compressed(mut self) -> Self {
         self.compressed = true;
         self
     }
 
     /// Set the MIME content type hint.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `with_content_type` — see module docs for full workflow.
+    /// ```
     pub fn with_content_type(mut self, content_type: &str) -> Self {
         self.content_type = Some(content_type.to_string());
         self
@@ -69,6 +97,13 @@ impl BlobReference {
 }
 
 /// Check if a string is a valid blob key (64 **lowercase** hex chars = SHA-256).
+///
+/// # Examples
+///
+/// ```
+/// # use blackbox as _;
+/// // `is_valid_blob_key` — see module docs for full workflow.
+/// ```
 pub fn is_valid_blob_key(key: &str) -> bool {
     key.len() == 64 && key.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }

@@ -6,6 +6,13 @@
 use crate::core::event::{EventSource, EventStatus, TraceEvent};
 
 /// Build a layer lifecycle event.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `layer_event` — see module docs for full workflow.
+/// ```
 pub fn layer_event(
     run_id: &str,
     layer: &str,
@@ -25,23 +32,62 @@ pub fn layer_event(
     ev
 }
 
+/// Layer started.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `layer_started` — see module docs for full workflow.
+/// ```
 pub fn layer_started(run_id: &str, layer: &str) -> TraceEvent {
     layer_event(run_id, layer, "started", EventStatus::Success, None)
 }
 
+/// Layer failed.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `layer_failed` — see module docs for full workflow.
+/// ```
 pub fn layer_failed(run_id: &str, layer: &str, detail: &str) -> TraceEvent {
     layer_event(run_id, layer, "failed", EventStatus::Error, Some(detail))
 }
 
+/// Layer stopped.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `layer_stopped` — see module docs for full workflow.
+/// ```
 pub fn layer_stopped(run_id: &str, layer: &str, detail: Option<&str>) -> TraceEvent {
     layer_event(run_id, layer, "stopped", EventStatus::Success, detail)
 }
 
+/// Layer lag.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `layer_lag` — see module docs for full workflow.
+/// ```
 pub fn layer_lag(run_id: &str, layer: &str, detail: &str) -> TraceEvent {
     layer_event(run_id, layer, "lag", EventStatus::Error, Some(detail))
 }
 
 /// Infer per-layer failure from structured health events (preferred).
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `failed_layers_from_events` — see module docs for full workflow.
+/// ```
 pub fn failed_layers_from_events(events: &[TraceEvent]) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for ev in events {

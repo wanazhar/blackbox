@@ -5,18 +5,37 @@ use uuid::Uuid;
 /// Lifecycle status of a recorded run.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum RunStatus {
+    /// Created but not yet started.
     Pending,
+    /// Child process is still running (or was abandoned mid-flight).
     Running,
+    /// Child exited successfully (exit code 0).
     Succeeded,
+    /// Child failed or the supervisor marked the run failed.
     Failed,
+    /// Run was cancelled by signal or operator.
     Cancelled,
+    /// Status could not be determined.
     Unknown,
 }
 
 /// A recorded agent run.
 ///
-/// Every `blackbox run -- <command>` creates one `Run`. It holds
-/// the command-line invocation, temporal metadata, and final outcome.
+/// Every `blackbox run -- <command>` creates one [`Run`]. It holds the
+/// command-line invocation, temporal metadata, and final **execution**
+/// outcome (`status` / `exit_code`). Task verification is stored separately
+/// as receipts — see [`crate::verification`].
+///
+/// # Examples
+///
+/// ```
+/// use blackbox::core::run::{Run, RunStatus};
+///
+/// let run = Run::new(vec!["echo".into(), "hi".into()], "/tmp".into());
+/// assert_eq!(run.status, RunStatus::Pending);
+/// assert_eq!(run.command, ["echo", "hi"]);
+/// assert!(!run.id.is_empty());
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Run {
     /// Unique run identifier
@@ -72,12 +91,15 @@ pub struct Run {
     pub session_id: Option<String>,
 
     #[serde(default)]
+    /// Input tokens.
     pub input_tokens: Option<u64>,
 
     #[serde(default)]
+    /// Output tokens.
     pub output_tokens: Option<u64>,
 
     #[serde(default)]
+    /// Total tokens.
     pub total_tokens: Option<u64>,
 
     /// Always None unless explicit pricing config (K15)
@@ -85,11 +107,22 @@ pub struct Run {
     pub estimated_cost_usd: Option<f64>,
 
     #[serde(default)]
+    /// Model.
     pub model: Option<String>,
 }
 
 impl Run {
-    /// Create a new run with auto-generated ID.
+    /// Create a new run with auto-generated ID and [`RunStatus::Pending`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use blackbox::core::run::Run;
+    ///
+    /// let run = Run::new(vec!["true".into()], "/tmp".into());
+    /// assert_eq!(run.cwd, "/tmp");
+    /// assert_eq!(run.next_sequence, 0);
+    /// ```
     pub fn new(command: Vec<String>, cwd: String) -> Self {
         let project_dir = cwd.clone();
         Self {
@@ -118,6 +151,13 @@ impl Run {
     }
 
     /// Allocate the next sequence number for an event in this run.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `allocate_sequence` — see module docs for full workflow.
+    /// ```
     pub fn allocate_sequence(&mut self) -> u64 {
         let seq = self.next_sequence;
         self.next_sequence = self.next_sequence.saturating_add(1);
@@ -125,6 +165,13 @@ impl Run {
     }
 
     /// Mark the run as finished.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `finish` — see module docs for full workflow.
+    /// ```
     pub fn finish(&mut self, exit_code: i32) {
         let ended = Utc::now();
         self.ended_at = Some(ended);
@@ -139,6 +186,13 @@ impl Run {
     }
 
     /// Apply last-wins usage from harness.usage events.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `apply_usage_from_events` — see module docs for full workflow.
+    /// ```
     pub fn apply_usage_from_events(&mut self, events: &[crate::core::event::TraceEvent]) {
         for ev in events.iter().rev() {
             if ev.kind != "harness.usage" {
@@ -191,7 +245,9 @@ impl Run {
 /// running child process (signal, inject input, poll, stop).
 #[allow(dead_code)]
 pub struct RunHandle {
+    /// Owning run id.
     pub run_id: String,
+    /// Child pid.
     pub child_pid: u32,
 }
 

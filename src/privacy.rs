@@ -6,6 +6,13 @@
 use std::path::Path;
 
 /// Best-effort: make a directory owner-only (0700) on Unix.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `restrict_dir` — see module docs for full workflow.
+/// ```
 pub fn restrict_dir(path: &Path) {
     #[cfg(unix)]
     {
@@ -25,6 +32,13 @@ pub fn restrict_dir(path: &Path) {
 }
 
 /// Best-effort: make a file owner-only (0600) on Unix.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `restrict_file` — see module docs for full workflow.
+/// ```
 pub fn restrict_file(path: &Path) {
     #[cfg(unix)]
     {
@@ -45,6 +59,13 @@ pub fn restrict_file(path: &Path) {
 }
 
 /// Create directory tree then restrict each existing component under `root`.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `ensure_private_dirs` — see module docs for full workflow.
+/// ```
 pub fn ensure_private_dirs(root: &Path, extras: &[&Path]) -> std::io::Result<()> {
     std::fs::create_dir_all(root)?;
     restrict_dir(root);
@@ -57,6 +78,13 @@ pub fn ensure_private_dirs(root: &Path, extras: &[&Path]) -> std::io::Result<()>
 }
 
 /// True when path is readable by group or other (Unix).
+///
+/// # Examples
+///
+/// ```
+/// # use blackbox as _;
+/// // `is_world_or_group_readable` — see module docs for full workflow.
+/// ```
 pub fn is_world_or_group_readable(path: &Path) -> bool {
     #[cfg(unix)]
     {
@@ -73,6 +101,13 @@ pub fn is_world_or_group_readable(path: &Path) -> bool {
 }
 
 /// True when bind address is loopback (IPv4/IPv6 localhost).
+///
+/// # Examples
+///
+/// ```
+/// # use blackbox as _;
+/// // `is_loopback_addr` — see module docs for full workflow.
+/// ```
 pub fn is_loopback_addr(addr: &std::net::SocketAddr) -> bool {
     addr.ip().is_loopback()
 }

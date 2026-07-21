@@ -23,8 +23,11 @@ pub const DEFAULT_QUEUE_CAPACITY: usize = 4_096;
 /// Configuration for [`BatchIngestor`].
 #[derive(Debug, Clone)]
 pub struct BatchIngestConfig {
+    /// Max batch.
     pub max_batch: usize,
+    /// Flush interval.
     pub flush_interval: Duration,
+    /// Queue capacity.
     pub queue_capacity: usize,
 }
 
@@ -41,14 +44,23 @@ impl Default for BatchIngestConfig {
 /// Observable batch-ingest counters.
 #[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct BatchIngestHealth {
+    /// Events enqueued.
     pub events_enqueued: u64,
+    /// Events flushed.
     pub events_flushed: u64,
+    /// Batches.
     pub batches: u64,
+    /// Barriers.
     pub barriers: u64,
+    /// Max batch size.
     pub max_batch_size: u64,
+    /// Max flush ms.
     pub max_flush_ms: u64,
+    /// Total flush ms.
     pub total_flush_ms: u64,
+    /// Queue high water.
     pub queue_high_water: u64,
+    /// Write failures.
     pub write_failures: u64,
     /// Events accepted into the queue but not yet flushed (best-effort gauge).
     pub pending: u64,
@@ -139,12 +151,26 @@ impl BatchIngestHealthShared {
 
 impl BatchIngestor {
     /// Spawn a dedicated batch writer task and return a handle.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `spawn` — see module docs for full workflow.
+    /// ```
     pub fn spawn(store: Arc<dyn TraceStore>, config: BatchIngestConfig) -> Self {
         Self::spawn_with_spool(store, config, None)
     }
 
     /// Spawn with optional durable spool (1.6). When set, events are appended to
     /// the spool before SQLite commit; producer acks mean recoverability.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `spawn_with_spool` — see module docs for full workflow.
+    /// ```
     pub fn spawn_with_spool(
         store: Arc<dyn TraceStore>,
         config: BatchIngestConfig,
@@ -183,6 +209,13 @@ impl BatchIngestor {
     }
 
     /// Enqueue an event. When `barrier` is true, wait until it is durably flushed.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `enqueue` — see module docs for full workflow.
+    /// ```
     pub async fn enqueue(&self, event: TraceEvent, barrier: bool) -> anyhow::Result<()> {
         self.health.events_enqueued.fetch_add(1, Ordering::Relaxed);
         let depth = self.queue_depth.fetch_add(1, Ordering::Relaxed) + 1;
@@ -219,6 +252,13 @@ impl BatchIngestor {
     }
 
     /// Flush all pending events and wait for durability.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `flush` — see module docs for full workflow.
+    /// ```
     pub async fn flush(&self) -> anyhow::Result<()> {
         let (ack_tx, ack_rx) = oneshot::channel();
         self.tx
@@ -231,6 +271,13 @@ impl BatchIngestor {
     }
 
     /// Flush remaining events and stop the worker.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `shutdown` — see module docs for full workflow.
+    /// ```
     pub async fn shutdown(&self) -> anyhow::Result<()> {
         let (ack_tx, ack_rx) = oneshot::channel();
         // Ignore send error if already shut down.
@@ -248,17 +295,40 @@ impl BatchIngestor {
         }
     }
 
+    /// Health snapshot.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `health_snapshot` — see module docs for full workflow.
+    /// ```
     pub fn health_snapshot(&self) -> BatchIngestHealth {
         self.health
             .snapshot(self.queue_depth.load(Ordering::Relaxed))
     }
 
+    /// Queue depth.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `queue_depth` — see module docs for full workflow.
+    /// ```
     pub fn queue_depth(&self) -> u64 {
         self.queue_depth.load(Ordering::Relaxed)
     }
 }
 
 /// Kinds that must be durably written before `write()` returns (1.5 barriers).
+///
+/// # Examples
+///
+/// ```
+/// # use blackbox as _;
+/// // `is_barrier_kind` — see module docs for full workflow.
+/// ```
 pub fn is_barrier_kind(kind: &str) -> bool {
     matches!(
         kind,

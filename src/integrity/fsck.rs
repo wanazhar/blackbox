@@ -16,17 +16,26 @@ use super::repair::plan_repairs;
 use super::report::{FsckFinding, FsckReport, FsckSeverity};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// `FsckMode` classification.
 pub enum FsckMode {
+    /// `Fast` variant.
     Fast,
+    /// `Deep` variant.
     Deep,
 }
 
 #[derive(Debug, Clone)]
+/// `FsckOptions` value.
 pub struct FsckOptions {
+    /// Mode.
     pub mode: FsckMode,
+    /// Apply safe automatic repairs.
     pub repair: bool,
+    /// Blob dir.
     pub blob_dir: Option<std::path::PathBuf>,
+    /// Spool dir.
     pub spool_dir: Option<std::path::PathBuf>,
+    /// Recovery dir.
     pub recovery_dir: Option<std::path::PathBuf>,
 }
 
@@ -44,6 +53,13 @@ impl Default for FsckOptions {
 
 /// Run store integrity checks. When `repair` is set, builds a plan, writes a
 /// recovery artifact, and applies only auto-safe repairs.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `fsck_store` — see module docs for full workflow.
+/// ```
 pub async fn fsck_store(
     store: Arc<dyn TraceStore>,
     opts: FsckOptions,

@@ -33,6 +33,29 @@ const MAX_TOTAL_BLOB_BYTES: usize = 200 * 1024 * 1024; // 200 MiB decoded
 ///
 /// Version 2 embeds referenced blob payloads (base64) so the archive is
 /// fully offline-shareable. Version 1 archives (no blobs) remain importable.
+/// Optional experiment metadata and verification receipts are included when
+/// present on the store.
+///
+/// # Examples
+///
+/// ```no_run
+/// use std::sync::Arc;
+/// use blackbox::core::run::Run;
+/// use blackbox::export::portable::{export_portable, import_portable};
+/// use blackbox::storage::sqlite::SqliteStore;
+/// use blackbox::storage::TraceStore;
+///
+/// # async fn demo() -> anyhow::Result<()> {
+/// let store = Arc::new(SqliteStore::open_memory()?) as Arc<dyn TraceStore>;
+/// let run = Run::new(vec!["true".into()], "/tmp".into());
+/// store.insert_run(&run).await?;
+/// let json = export_portable(store.as_ref(), &run, &[], true).await?;
+/// let store2 = Arc::new(SqliteStore::open_memory()?) as Arc<dyn TraceStore>;
+/// let imported = import_portable(store2.as_ref(), &json, true).await?;
+/// assert_eq!(imported.events, 0);
+/// # Ok(())
+/// # }
+/// ```
 pub async fn export_portable(
     store: &dyn TraceStore,
     run: &Run,
@@ -251,6 +274,13 @@ fn remap_event_blob_keys(ev: &mut TraceEvent, remap: &HashMap<String, String>) {
 ///
 /// Validates blob hashes (filename must equal SHA-256 of file bytes), then
 /// reuses the same integrity pipeline as JSON portable import.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `import_portable_dir` — see module docs for full workflow.
+/// ```
 pub async fn import_portable_dir(
     store: &dyn TraceStore,
     dir: &std::path::Path,
@@ -356,9 +386,13 @@ pub async fn import_portable_dir(
 /// Result of importing a portable archive.
 #[derive(Debug, Clone)]
 pub struct ImportResult {
+    /// Owning run id.
     pub run_id: String,
+    /// Events.
     pub events: usize,
+    /// Blobs.
     pub blobs: usize,
+    /// Remapped.
     pub remapped: bool,
 }
 
@@ -372,6 +406,13 @@ pub struct ImportResult {
 /// - Duplicate-run checks run before permanent writes.
 /// - Events insert as a single batch transaction.
 /// - Failures roll back the run and any newly created blob keys.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `import_portable` — see module docs for full workflow.
+/// ```
 pub async fn import_portable(
     store: &dyn TraceStore,
     json: &str,

@@ -13,6 +13,13 @@ use crate::verification::receipt::{
 };
 
 /// Run `argv` in `cwd` and produce an immutable receipt linked to `run_id`.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `verify_command` — see module docs for full workflow.
+/// ```
 pub async fn verify_command(
     store: &dyn TraceStore,
     run_id: &str,

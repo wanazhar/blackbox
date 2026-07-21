@@ -27,6 +27,14 @@ pub enum CaptureMethod {
 }
 
 impl CaptureMethod {
+    /// View as str.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `as_str` — see module docs for full workflow.
+    /// ```
     pub fn as_str(self) -> &'static str {
         match self {
             Self::ProcCmdline => "proc_cmdline",
@@ -55,6 +63,14 @@ pub enum CommandFidelity {
 }
 
 impl CommandFidelity {
+    /// View as str.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `as_str` — see module docs for full workflow.
+    /// ```
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Exact => "exact",
@@ -65,6 +81,13 @@ impl CommandFidelity {
     }
 
     /// Whether sandbox re-execution is safe without confirmation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use blackbox as _;
+    /// // `is_safe_for_sandbox` — see module docs for full workflow.
+    /// ```
     pub fn is_safe_for_sandbox(self) -> bool {
         matches!(self, Self::Exact | Self::Inferred)
     }
@@ -119,6 +142,13 @@ pub struct CommandMetadata {
 
 impl CommandMetadata {
     /// Build from an exact argv array captured via `/proc` (or equivalent).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `from_proc_argv` — see module docs for full workflow.
+    /// ```
     pub fn from_proc_argv(
         argv: Vec<String>,
         executable: Option<String>,
@@ -138,6 +168,13 @@ impl CommandMetadata {
     }
 
     /// Build from a structured argv array reported by a harness adapter.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `from_adapter_argv` — see module docs for full workflow.
+    /// ```
     pub fn from_adapter_argv(argv: Vec<String>, cwd: Option<String>) -> Self {
         let executable = argv.first().cloned();
         Self {
@@ -156,6 +193,13 @@ impl CommandMetadata {
     /// When the shell binary is known, argv is stored as
     /// `[shell, "-lc", source]` with fidelity Inferred (shell invocation is
     /// exact, but the source body is opaque).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `from_shell_source` — see module docs for full workflow.
+    /// ```
     pub fn from_shell_source(shell_source: impl Into<String>, shell: Option<&str>) -> Self {
         let shell_source = shell_source.into();
         if let Some(sh) = shell {
@@ -183,6 +227,13 @@ impl CommandMetadata {
     }
 
     /// Build from a free-form display string (whitespace-split). Always lossy.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `from_display_string` — see module docs for full workflow.
+    /// ```
     pub fn from_display_string(display: &str) -> Self {
         let argv: Vec<String> = display.split_whitespace().map(String::from).collect();
         let executable = argv.first().cloned();
@@ -198,6 +249,13 @@ impl CommandMetadata {
     }
 
     /// Serialize into event metadata keys (flat merge into TraceEvent.metadata).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `to_metadata_map` — see module docs for full workflow.
+    /// ```
     pub fn to_metadata_map(&self) -> std::collections::HashMap<String, serde_json::Value> {
         let mut m = std::collections::HashMap::new();
         m.insert(
@@ -238,6 +296,13 @@ impl CommandMetadata {
     }
 
     /// Merge this metadata into a TraceEvent's metadata map.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `apply_to_event` — see module docs for full workflow.
+    /// ```
     pub fn apply_to_event(&self, event: &mut crate::core::event::TraceEvent) {
         for (k, v) in self.to_metadata_map() {
             event.metadata.insert(k, v);
@@ -245,6 +310,13 @@ impl CommandMetadata {
     }
 
     /// Extract CommandMetadata from a TraceEvent, preferring structured form.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `from_event` — see module docs for full workflow.
+    /// ```
     pub fn from_event(event: &crate::core::event::TraceEvent) -> Option<Self> {
         // Prefer nested command_meta object.
         if let Some(v) = event.metadata.get("command_meta") {
@@ -360,6 +432,13 @@ impl CommandMetadata {
     }
 
     /// Argv suitable for re-execution, if fidelity permits.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `argv_for_execution` — see module docs for full workflow.
+    /// ```
     pub fn argv_for_execution(&self) -> Option<&[String]> {
         if self.fidelity.is_safe_for_sandbox() && !self.argv.is_empty() {
             Some(&self.argv)

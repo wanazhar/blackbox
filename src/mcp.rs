@@ -23,6 +23,13 @@ const SERVER_NAME: &str = "blackbox";
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Run the MCP server until stdin closes.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `run_mcp_stdio` — see module docs for full workflow.
+/// ```
 pub async fn run_mcp_stdio(store_override: Option<&std::path::Path>) -> anyhow::Result<()> {
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();

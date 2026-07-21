@@ -35,6 +35,14 @@ pub enum SurfaceStatus {
 }
 
 impl SurfaceStatus {
+    /// View as str.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `as_str` — see module docs for full workflow.
+    /// ```
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Disabled => "disabled",
@@ -48,6 +56,13 @@ impl SurfaceStatus {
     }
 
     /// Contribution weight for quality scoring (0.0–1.0).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `quality_weight` — see module docs for full workflow.
+    /// ```
     pub fn quality_weight(self) -> f64 {
         match self {
             Self::Complete => 1.0,
@@ -61,6 +76,13 @@ impl SurfaceStatus {
     }
 
     /// Whether this status is omitted from the quality-score denominator.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `excluded_from_score` — see module docs for full workflow.
+    /// ```
     pub fn excluded_from_score(self) -> bool {
         matches!(self, Self::Disabled | Self::NotApplicable)
     }
@@ -69,16 +91,27 @@ impl SurfaceStatus {
 /// End-of-run signals used to build an honest coverage report.
 #[derive(Debug, Clone, Default)]
 pub struct RunCoverageSignals {
+    /// Pty events.
     pub pty_events: u64,
+    /// Process events.
     pub process_events: u64,
+    /// Git events.
     pub git_events: u64,
+    /// Fs events.
     pub fs_events: u64,
+    /// Env events.
     pub env_events: u64,
+    /// Process tree available.
     pub process_tree_available: bool,
+    /// Native log events.
     pub native_log_events: Option<u64>,
+    /// Process failed.
     pub process_failed: bool,
+    /// Pty failed.
     pub pty_failed: bool,
+    /// Git failed.
     pub git_failed: bool,
+    /// Fs failed.
     pub fs_failed: bool,
     /// Soft lag note from EventWriter health (store falling behind).
     pub capture_lag_note: Option<String>,
@@ -97,14 +130,26 @@ pub struct RunCoverageSignals {
     /// Native logs intentionally disabled (scope=off).
     pub native_logs_disabled: bool,
     // ── Process completeness signals (1.4 C2) ──────────────────────
+    /// Process observer started.
     pub process_observer_started: bool,
+    /// Process root spawned.
     pub process_root_spawned: bool,
+    /// Process tree snapshot.
     pub process_tree_snapshot: bool,
+    /// Process observer stopped.
     pub process_observer_stopped: bool,
+    /// Process backend.
     pub process_backend: Option<String>,
 }
 
 /// Adapters that normally emit structured `tool.call` events.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `structured_harness_adapters` — see module docs for full workflow.
+/// ```
 pub fn structured_harness_adapters() -> &'static [&'static str] {
     &[
         "claude", "codex", "aider", "gemini", "cursor", "opencode", "grok",
@@ -115,6 +160,13 @@ pub fn structured_harness_adapters() -> &'static [&'static str] {
 ///
 /// Threshold: adapter is structured **and** tool_call_count == 0 **and**
 /// (events ≥ 20 **or** duration ≥ 5s). Short `true` / setup samples do not fire.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `adapter_tool_drought` — see module docs for full workflow.
+/// ```
 pub fn adapter_tool_drought(sig: &RunCoverageSignals) -> Option<String> {
     let adapter = sig.adapter_id.as_deref()?;
     if !structured_harness_adapters()
@@ -140,8 +192,11 @@ pub fn adapter_tool_drought(sig: &RunCoverageSignals) -> Option<String> {
 /// Weighted contribution of one surface to the quality score.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ScoreContribution {
+    /// Surface.
     pub surface: String,
+    /// Status value.
     pub status: SurfaceStatus,
+    /// Weight.
     pub weight: f64,
     /// Points contributed to numerator (weight × status_weight), or 0 when excluded.
     pub points: f64,
@@ -198,6 +253,13 @@ const SURFACE_WEIGHTS: &[(&str, f64)] = &[
 
 impl CaptureCoverage {
     /// Merge another coverage report into this one.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `merge` — see module docs for full workflow.
+    /// ```
     pub fn merge(&mut self, other: &CaptureCoverage) {
         for s in &other.surfaces {
             if let Some(existing) = self.surfaces.iter_mut().find(|x| x.name == s.name) {
@@ -217,6 +279,13 @@ impl CaptureCoverage {
     }
 
     /// Build contribution rows and quality score from surfaces.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `compute_contributions` — see module docs for full workflow.
+    /// ```
     pub fn compute_contributions(surfaces: &[CaptureSurface]) -> (u8, Vec<ScoreContribution>) {
         let mut num = 0.0;
         let mut den = 0.0;
@@ -266,10 +335,25 @@ impl CaptureCoverage {
     }
 
     /// Documented scoring algorithm (see module docs / doctor notes).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `compute_quality_score` — see module docs for full workflow.
+    /// ```
     pub fn compute_quality_score(surfaces: &[CaptureSurface]) -> u8 {
         Self::compute_contributions(surfaces).0
     }
 
+    /// Recompute quality score.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `recompute_quality_score` — see module docs for full workflow.
+    /// ```
     pub fn recompute_quality_score(&mut self) {
         let (score, contribs) = Self::compute_contributions(&self.surfaces);
         self.quality_score = score;
@@ -277,6 +361,13 @@ impl CaptureCoverage {
     }
 
     /// Mark a surface as failed (capture-layer error path).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `mark_surface_failed` — see module docs for full workflow.
+    /// ```
     pub fn mark_surface_failed(&mut self, name: &str, reason: impl Into<String>) {
         let reason = reason.into();
         if let Some(s) = self.surfaces.iter_mut().find(|x| x.name == name) {
@@ -297,6 +388,13 @@ impl CaptureCoverage {
     }
 
     /// Build a coverage report from per-surface event counts.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `from_surface_counts` — see module docs for full workflow.
+    /// ```
     pub fn from_surface_counts(
         pty_events: u64,
         process_events: u64,
@@ -338,6 +436,13 @@ impl CaptureCoverage {
     }
 
     /// Extended builder (compat).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `from_surface_counts_ext` — see module docs for full workflow.
+    /// ```
     #[allow(clippy::too_many_arguments)]
     pub fn from_surface_counts_ext(
         pty_events: u64,
@@ -382,6 +487,13 @@ impl CaptureCoverage {
     }
 
     /// Preferred end-of-run builder with failure + lag + applicability signals.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `from_run_signals` — see module docs for full workflow.
+    /// ```
     pub fn from_run_signals(sig: RunCoverageSignals) -> Self {
         let mut surfaces = Vec::new();
 

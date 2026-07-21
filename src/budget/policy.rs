@@ -4,40 +4,59 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// `BudgetCapability` classification.
 pub enum BudgetCapability {
+    /// `Enforced` variant.
     Enforced,
+    /// `ObservedOnly` variant.
     ObservedOnly,
+    /// `Unavailable` variant.
     Unavailable,
+    /// `NotApplicable` variant.
     NotApplicable,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// `BudgetStatus` value.
 pub struct BudgetStatus {
+    /// Display name.
     pub name: String,
+    /// Capability.
     pub capability: BudgetCapability,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Configured limit, if any.
     pub limit: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Observed value, if any.
     pub observed: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Unit label for the value.
     pub unit: Option<String>,
     #[serde(default)]
+    /// Optional note.
     pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// `BudgetPolicy` value.
 pub struct BudgetPolicy {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Max wall secs.
     pub max_wall_secs: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Max processes.
     pub max_processes: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Max output bytes.
     pub max_output_bytes: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Max store growth bytes.
     pub max_store_growth_bytes: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Max tool calls.
     pub max_tool_calls: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Max tokens.
     pub max_tokens: Option<u64>,
     /// RSS/address-space budget (cgroup v2 `memory.max` when available).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -46,11 +65,19 @@ pub struct BudgetPolicy {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_cpu_percent: Option<u32>,
     #[serde(default)]
+    /// Contained.
     pub contained: bool,
 }
 
 impl BudgetPolicy {
     /// Classify each budget for the current OS. Never report unavailable as enforced.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `capability_report` — see module docs for full workflow.
+    /// ```
     pub fn capability_report(&self) -> Vec<BudgetStatus> {
         let linux = cfg!(target_os = "linux");
         let mut out = Vec::new();

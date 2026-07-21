@@ -10,26 +10,44 @@ use crate::pipeline::WriterHealth;
 
 /// Inputs required to recompute end-of-run coverage for an existing run.
 pub struct RollupInputs<'a> {
+    /// Run.
     pub run: &'a Run,
+    /// Events.
     pub events: &'a [TraceEvent],
+    /// Writer health.
     pub writer_health: WriterHealth,
+    /// Merge lag.
     pub merge_lag: u64,
+    /// Merge send failures.
     pub merge_send_failures: u64,
+    /// Native log scope.
     pub native_log_scope: NativeLogScope,
 }
 
 /// Derived coverage event + optional warning events (not yet persisted).
 pub struct RollupOutput {
+    /// Coverage.
     pub coverage: CaptureCoverage,
+    /// Coverage event.
     pub coverage_event: TraceEvent,
+    /// Warning events.
     pub warning_events: Vec<TraceEvent>,
+    /// Capture lag note.
     pub capture_lag_note: Option<String>,
+    /// Session adapter guess.
     pub session_adapter_guess: Option<String>,
 }
 
 /// Build coverage and warning events from a stored event window.
 ///
 /// Safe to call after recovery to re-emit or recompute coverage for a run.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `build_coverage_events` — see module docs for full workflow.
+/// ```
 pub fn build_coverage_events(input: RollupInputs<'_>) -> RollupOutput {
     let all_events = input.events;
     let run = input.run;

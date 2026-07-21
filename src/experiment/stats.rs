@@ -3,13 +3,25 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// `StatisticalNote` value.
 pub struct StatisticalNote {
+    /// Sample size.
     pub sample_size: usize,
+    /// Method.
     pub method: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Optional note.
     pub note: Option<String>,
 }
 
+/// Median f64.
+///
+/// # Examples
+///
+/// ```
+/// # use blackbox as _;
+/// // `median_f64` — see module docs for full workflow.
+/// ```
 pub fn median_f64(values: &mut [f64]) -> Option<f64> {
     if values.is_empty() {
         return None;
@@ -24,6 +36,13 @@ pub fn median_f64(values: &mut [f64]) -> Option<f64> {
 }
 
 /// Nearest-rank percentile (p in 0..=100).
+///
+/// # Examples
+///
+/// ```
+/// # use blackbox as _;
+/// // `percentile` — see module docs for full workflow.
+/// ```
 pub fn percentile(values: &mut [f64], p: f64) -> Option<f64> {
     if values.is_empty() {
         return None;

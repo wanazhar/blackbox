@@ -1,6 +1,9 @@
+/// Event module.
 pub mod event;
 pub mod panels;
+/// Runs module.
 pub mod runs;
+/// Timeline v module.
 pub mod timeline_v;
 pub mod tui;
 

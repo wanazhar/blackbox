@@ -10,21 +10,33 @@ use crate::state::{AttentionLevel, ProjectState, RunPointer};
 use crate::storage::TraceStore;
 
 #[derive(Debug, Serialize)]
+/// `StatusView` value.
 pub struct StatusView {
+    /// Project root.
     pub project_root: String,
+    /// Store db.
     pub store_db: String,
+    /// Enabled.
     pub enabled: bool,
     /// Hard observe-only mode (no launch mutation / continuity inject).
     pub observe_only: bool,
     /// Continuity plane mode: always | attention | off.
     pub continuity_mode: String,
+    /// Wrap.
     pub wrap: Vec<String>,
+    /// Shell integration.
     pub shell_integration: ShellIntegrationView,
+    /// Retention.
     pub retention: RetentionStatusView,
+    /// Last run.
     pub last_run: Option<RunPointer>,
+    /// Last failure.
     pub last_failure: Option<RunPointer>,
+    /// Attention.
     pub attention: AttentionView,
+    /// Next commands.
     pub next_commands: Vec<String>,
+    /// Agent instructions.
     pub agent_instructions: Option<String>,
     /// Present when resume pack is requested and a target run exists.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -41,17 +53,26 @@ pub struct StatusView {
 }
 
 #[derive(Debug, Serialize)]
+/// `PostmortemHandoffView` value.
 pub struct PostmortemHandoffView {
+    /// Owning run id.
     pub run_id: String,
+    /// Short id.
     pub short_id: String,
+    /// Narrative.
     pub narrative: String,
+    /// Next action.
     pub next_action: String,
+    /// Failure count.
     pub failure_count: usize,
+    /// Turning points.
     pub turning_points: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
+/// `ShellIntegrationView` value.
 pub struct ShellIntegrationView {
+    /// Detected shell.
     pub detected_shell: String,
     /// True if any managed wrapper block is present in fish/bash/zsh rc paths.
     pub installed: bool,
@@ -62,25 +83,37 @@ pub struct ShellIntegrationView {
 }
 
 #[derive(Debug, Serialize)]
+/// `RetentionStatusView` value.
 pub struct RetentionStatusView {
+    /// Keep runs.
     pub keep_runs: u32,
+    /// Max age days.
     pub max_age_days: Option<u32>,
+    /// Auto apply.
     pub auto_apply: bool,
+    /// Auto gc blobs.
     pub auto_gc_blobs: bool,
 }
 
 #[derive(Debug, Serialize)]
+/// `AttentionView` value.
 pub struct AttentionView {
+    /// Needed.
     pub needed: bool,
     /// Additive 1.2 field.
     pub level: AttentionLevel,
+    /// Reason.
     pub reason: Option<String>,
+    /// Owning run id.
     pub run_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
+/// `StatusOptions` value.
 pub struct StatusOptions {
+    /// Include resume.
     pub include_resume: bool,
+    /// Max tokens.
     pub max_tokens: usize,
     /// When true, attach resume pack for last_run even without attention (handoff).
     pub force_resume: bool,
@@ -99,6 +132,14 @@ impl Default for StatusOptions {
     }
 }
 
+/// Build status.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `build_status` — see module docs for full workflow.
+/// ```
 pub async fn build_status(
     discovery: &ProjectDiscovery,
     store: Option<&dyn TraceStore>,
@@ -374,6 +415,14 @@ pub async fn build_status(
     })
 }
 
+/// Format status text.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `format_status_text` — see module docs for full workflow.
+/// ```
 pub fn format_status_text(v: &StatusView) -> String {
     let mut out = String::new();
     out.push_str(&format!("blackbox status — {}\n", v.project_root));

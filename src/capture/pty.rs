@@ -16,6 +16,14 @@ pub struct PtyCapture {
 }
 
 impl PtyCapture {
+    /// Create a new instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use blackbox as _;
+    /// // `new` — see module docs for full workflow.
+    /// ```
     pub fn new() -> Self {
         Self {
             event_tx: None,

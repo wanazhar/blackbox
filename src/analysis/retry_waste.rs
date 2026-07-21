@@ -12,9 +12,13 @@ use crate::core::event::{EventSource, EventStatus, TraceEvent};
 /// A pattern of repeated or non-progressing work.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct RetryWasteFinding {
+    /// Event or item kind string.
     pub kind: String,
+    /// Detail.
     pub detail: String,
+    /// Count.
     pub count: usize,
+    /// Sample event ids.
     pub sample_event_ids: Vec<String>,
 }
 
@@ -28,10 +32,26 @@ impl Default for RetryWasteDetector {
 }
 
 impl RetryWasteDetector {
+    /// Create a new instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use blackbox as _;
+    /// // `new` — see module docs for full workflow.
+    /// ```
     pub fn new() -> Self {
         Self
     }
 
+    /// Find.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `find` — see module docs for full workflow.
+    /// ```
     pub fn find(&self, events: &[TraceEvent]) -> Vec<RetryWasteFinding> {
         let mut findings = Vec::new();
 

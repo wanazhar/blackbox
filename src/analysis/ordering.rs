@@ -10,10 +10,15 @@ use crate::core::timing::{
 /// Pairwise occurrence relation for JSON/UI.
 #[derive(Debug, Clone, Serialize)]
 pub struct OrderingEdge {
+    /// Earlier id.
     pub earlier_id: String,
+    /// Later id.
     pub later_id: String,
+    /// Relation.
     pub relation: String,
+    /// Storage sequence earlier.
     pub storage_sequence_earlier: u64,
+    /// Storage sequence later.
     pub storage_sequence_later: u64,
     /// True when storage sequence order disagrees with occurrence order.
     pub storage_order_differs: bool,
@@ -22,14 +27,24 @@ pub struct OrderingEdge {
 /// Summary for timeline/postmortem consumers.
 #[derive(Debug, Clone, Serialize)]
 pub struct OrderingSummary {
+    /// Events.
     pub events: Vec<OrderView>,
     /// Events sorted by inferred occurrence (storage sequence unchanged on originals).
     pub occurrence_order_ids: Vec<String>,
+    /// Storage vs occurrence disagreements.
     pub storage_vs_occurrence_disagreements: usize,
+    /// Sample edges.
     pub sample_edges: Vec<OrderingEdge>,
 }
 
 /// Build an occurrence-oriented timeline view without rewriting storage sequences.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `occurrence_timeline` — see module docs for full workflow.
+/// ```
 pub fn occurrence_timeline(events: &[TraceEvent]) -> OrderingSummary {
     let views = order_views(events);
     let mut by_occurrence: Vec<&TraceEvent> = events.iter().collect();
@@ -79,6 +94,13 @@ pub fn occurrence_timeline(events: &[TraceEvent]) -> OrderingSummary {
 }
 
 /// Sort owned events by occurrence for analysis passes that need occurrence order.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `events_in_occurrence_order` — see module docs for full workflow.
+/// ```
 pub fn events_in_occurrence_order(events: &[TraceEvent]) -> Vec<TraceEvent> {
     let mut v = events.to_vec();
     sort_by_occurrence(&mut v);

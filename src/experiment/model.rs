@@ -3,37 +3,60 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+/// `EXPERIMENT_SCHEMA` constant.
 pub const EXPERIMENT_SCHEMA: &str = "blackbox.experiment/v1";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
+/// `ExperimentRole` classification.
 pub enum ExperimentRole {
+    /// `Baseline` variant.
     Baseline,
+    /// `Candidate` variant.
     Candidate,
+    /// `Control` variant.
     Control,
+    /// `Treatment` variant.
     Treatment,
     #[default]
+    /// `Unknown` variant.
     Unknown,
 }
 
 /// Checked-in or created experiment manifest.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExperimentManifest {
+    /// Schema identifier string.
     pub schema: String,
+    /// Unique identifier.
     pub id: String,
+    /// Display name.
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Human-readable description.
     pub description: Option<String>,
+    /// Creation timestamp.
     pub created_at: DateTime<Utc>,
     #[serde(default)]
+    /// Tasks.
     pub tasks: Vec<String>,
     #[serde(default)]
+    /// Variants.
     pub variants: Vec<String>,
     #[serde(default)]
+    /// Associated tags.
     pub tags: Vec<String>,
 }
 
 impl ExperimentManifest {
+    /// Create a new instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use blackbox as _;
+    /// // `new` — see module docs for full workflow.
+    /// ```
     pub fn new(id: impl Into<String>, name: impl Into<String>) -> Self {
         Self {
             schema: EXPERIMENT_SCHEMA.into(),
@@ -52,30 +75,43 @@ impl ExperimentManifest {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RunExperimentMeta {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Experiment id.
     pub experiment_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Task id.
     pub task_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Variant.
     pub variant: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Attempt.
     pub attempt: Option<u32>,
     #[serde(default)]
+    /// Role.
     pub role: ExperimentRole,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Seed.
     pub seed: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Dataset case.
     pub dataset_case: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Model.
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Provider.
     pub provider: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Harness.
     pub harness: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Harness version.
     pub harness_version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Git commit.
     pub git_commit: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Config fingerprint.
     pub config_fingerprint: Option<String>,
 }
 
@@ -84,6 +120,13 @@ impl RunExperimentMeta {
     ///
     /// Covers variant/task/role/model/provider/harness/seed/dataset so identical
     /// experimental setups share a fingerprint across attempts.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use blackbox as _;
+    /// // `compute_config_fingerprint` — see module docs for full workflow.
+    /// ```
     pub fn compute_config_fingerprint(&self) -> String {
         use crate::crypto::content_key;
         let raw = format!(
@@ -104,6 +147,13 @@ impl RunExperimentMeta {
     }
 
     /// Ensure `config_fingerprint` is populated from current fields.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `with_fingerprint` — see module docs for full workflow.
+    /// ```
     pub fn with_fingerprint(mut self) -> Self {
         if self.config_fingerprint.is_none() {
             self.config_fingerprint = Some(self.compute_config_fingerprint());
@@ -116,6 +166,13 @@ impl RunExperimentMeta {
 ///
 /// Counts existing runs that share the same experiment_id + task + variant
 /// fingerprint key. Pass already-loaded metas for the experiment.
+///
+/// # Examples
+///
+/// ```
+/// # use blackbox as _;
+/// // `next_attempt_number` — see module docs for full workflow.
+/// ```
 pub fn next_attempt_number(existing: &[RunExperimentMeta], for_meta: &RunExperimentMeta) -> u32 {
     let key = (
         for_meta.experiment_id.as_deref(),

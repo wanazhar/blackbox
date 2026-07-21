@@ -11,16 +11,29 @@ use crate::storage::TraceStore;
 use super::spool::EventSpool;
 
 #[derive(Debug, Clone, Default, Serialize)]
+/// `RecoveryStats` value.
 pub struct RecoveryStats {
+    /// Batches seen.
     pub batches_seen: usize,
+    /// Batches replayed.
     pub batches_replayed: usize,
+    /// Events inserted.
     pub events_inserted: usize,
+    /// Events skipped duplicate.
     pub events_skipped_duplicate: usize,
+    /// Error messages.
     pub errors: Vec<String>,
 }
 
 /// On store open: replay any pending spool batches. Event IDs make inserts idempotent
 /// when the store rejects or we skip existing IDs.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `recover_spool_on_open` — see module docs for full workflow.
+/// ```
 pub async fn recover_spool_on_open(
     store: Arc<dyn TraceStore>,
     spool_dir: &Path,

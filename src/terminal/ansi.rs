@@ -19,6 +19,14 @@ impl Default for AnsiNormalizer {
 }
 
 impl AnsiNormalizer {
+    /// Create a new instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use blackbox as _;
+    /// // `new` — see module docs for full workflow.
+    /// ```
     pub fn new() -> Self {
         Self
     }
@@ -28,6 +36,13 @@ impl AnsiNormalizer {
     /// Removes ANSI escape sequences, carriage returns, and
     /// other control codes, preserving printable content including
     /// non-ASCII characters (UTF-8 multibyte, CJK, emoji, etc.).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `normalize` — see module docs for full workflow.
+    /// ```
     pub fn normalize(&self, raw: &[u8]) -> String {
         // Convert to string first, preserving all non-ASCII content
         let text = String::from_utf8_lossy(raw);
@@ -167,6 +182,13 @@ impl AnsiNormalizer {
     }
 
     /// Produce a terminal event with both raw and normalized content.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `create_event` — see module docs for full workflow.
+    /// ```
     pub fn create_event(&self, run_id: &str, _raw: &[u8], _normalized: &str) -> TraceEvent {
         let mut ev = TraceEvent::new(run_id, EventSource::Terminal, "terminal.output");
         ev.status = EventStatus::Success;

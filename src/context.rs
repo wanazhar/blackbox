@@ -11,9 +11,13 @@ use crate::storage::TraceStore;
 use crate::summary::{build_summary, SummaryOptions, SummaryView};
 
 #[derive(Debug, Clone, Serialize)]
+/// `ContextPackView` value.
 pub struct ContextPackView {
+    /// Owning run id.
     pub run_id: String,
+    /// Short id.
     pub short_id: String,
+    /// Purpose.
     pub purpose: String,
     /// One-line status for agents scanning handoff JSON.
     pub headline: String,
@@ -21,35 +25,54 @@ pub struct ContextPackView {
     pub next_action: String,
     /// Why attention/handoff fired (or "ok" when healthy).
     pub attention_reason: String,
+    /// Summary.
     pub summary: SummaryView,
+    /// Failed tools.
     pub failed_tools: Vec<FailedTool>,
     /// Top structured errors (capped); preferred over scraping transcript.
     pub errors_top: Vec<ErrorTop>,
+    /// Last tools.
     pub last_tools: Vec<String>,
+    /// Filesystem writes.
     pub filesystem_writes: Vec<String>,
+    /// Transcript tail.
     pub transcript_tail: Option<String>,
+    /// Resume command.
     pub resume_command: Option<Vec<String>>,
+    /// Approx tokens.
     pub approx_tokens: usize,
+    /// Truncated.
     pub truncated: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// `FailedTool` value.
 pub struct FailedTool {
+    /// Monotonic sequence number within the run.
     pub sequence: u64,
+    /// Display name.
     pub name: String,
+    /// Detail.
     pub detail: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// `ErrorTop` value.
 pub struct ErrorTop {
+    /// Monotonic sequence number within the run.
     pub sequence: u64,
+    /// Error type.
     pub error_type: String,
+    /// Message.
     pub message: String,
 }
 
 #[derive(Debug, Clone)]
+/// `ContextOptions` value.
 pub struct ContextOptions {
+    /// Max tokens.
     pub max_tokens: usize,
+    /// Include transcript.
     pub include_transcript: bool,
 }
 
@@ -160,6 +183,14 @@ fn build_next_action(run: &Run, failed_tools: &[FailedTool]) -> String {
     }
 }
 
+/// Build context pack.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `build_context_pack` — see module docs for full workflow.
+/// ```
 pub async fn build_context_pack(
     store: &dyn TraceStore,
     run: &Run,

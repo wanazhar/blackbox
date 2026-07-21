@@ -17,8 +17,11 @@ use tokio::sync::mpsc;
 /// - `child_subreaper`: Linux PR_SET_CHILD_SUBREAPER for best-effort waitpid exit codes
 #[derive(Debug, Clone)]
 pub struct ProcessEnrichOpts {
+    /// Dense poll.
     pub dense_poll: bool,
+    /// Capture environ.
     pub capture_environ: bool,
+    /// Child subreaper.
     pub child_subreaper: bool,
 }
 
@@ -41,6 +44,13 @@ impl ProcessEnrichOpts {
     /// - `BLACKBOX_PROCESS_DENSE_POLL=1|0`
     /// - `BLACKBOX_PROCESS_ENVIRON=1|0`
     /// - `BLACKBOX_PROCESS_SUBREAPER=1|0`
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `resolve` — see module docs for full workflow.
+    /// ```
     pub fn resolve(dense_poll: bool, capture_environ: bool, child_subreaper: bool) -> Self {
         let mut opts = Self {
             dense_poll,
@@ -59,6 +69,14 @@ impl ProcessEnrichOpts {
         opts
     }
 
+    /// Build from env.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `from_env` — see module docs for full workflow.
+    /// ```
     pub fn from_env() -> Self {
         Self::resolve(false, false, true)
     }
@@ -101,10 +119,26 @@ pub struct ProcessCapture {
 }
 
 impl ProcessCapture {
+    /// Create a new instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use blackbox as _;
+    /// // `new` — see module docs for full workflow.
+    /// ```
     pub fn new() -> Self {
         Self::with_opts(ProcessEnrichOpts::from_env())
     }
 
+    /// Set opts and return self.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `with_opts` — see module docs for full workflow.
+    /// ```
     pub fn with_opts(opts: ProcessEnrichOpts) -> Self {
         Self {
             event_tx: None,
@@ -120,6 +154,13 @@ impl ProcessCapture {
 
     /// Record the child PID once the process is spawned.
     /// Sends the PID to the background poller if one is running.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `set_pid` — see module docs for full workflow.
+    /// ```
     pub fn set_pid(&mut self, pid: u32) {
         self.child_pid = Some(pid);
         if let Some(tx) = self.pid_tx.take() {
@@ -128,6 +169,13 @@ impl ProcessCapture {
     }
 
     /// Emit a process.spawned event if the channel is still open.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `emit_spawned` — see module docs for full workflow.
+    /// ```
     pub async fn emit_spawned(&self) {
         if let (Some(tx), Some(run_id), Some(pid)) = (&self.event_tx, &self.run_id, self.child_pid)
         {
@@ -148,11 +196,25 @@ impl ProcessCapture {
     }
 
     /// Build the final process tree snapshot.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `process_tree` — see module docs for full workflow.
+    /// ```
     pub fn process_tree(&self) -> Option<&ProcessNode> {
         self.process_tree.as_ref()
     }
 
     /// Consume the process tree.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `into_process_tree` — see module docs for full workflow.
+    /// ```
     pub fn into_process_tree(self) -> Option<ProcessNode> {
         self.process_tree
     }

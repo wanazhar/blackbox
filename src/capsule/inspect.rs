@@ -6,15 +6,30 @@ use crate::crypto::content_key;
 use crate::capsule::create::{CapsuleCompleteness, CapsuleManifest};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// `CapsuleInspectReport` value.
 pub struct CapsuleInspectReport {
+    /// Schema identifier string.
     pub schema: String,
+    /// Manifest.
     pub manifest: CapsuleManifest,
+    /// Integrity ok.
     pub integrity_ok: bool,
+    /// Issues.
     pub issues: Vec<String>,
+    /// Completeness.
     pub completeness: CapsuleCompleteness,
+    /// Model replay deterministic.
     pub model_replay_deterministic: bool,
 }
 
+/// Inspect capsule.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `inspect_capsule` — see module docs for full workflow.
+/// ```
 pub fn inspect_capsule(json: &str) -> anyhow::Result<CapsuleInspectReport> {
     let root: serde_json::Value = serde_json::from_str(json)?;
     let manifest: CapsuleManifest = serde_json::from_value(
@@ -70,6 +85,14 @@ pub fn inspect_capsule(json: &str) -> anyhow::Result<CapsuleInspectReport> {
     })
 }
 
+/// Verify capsule integrity.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `verify_capsule_integrity` — see module docs for full workflow.
+/// ```
 pub fn verify_capsule_integrity(json: &str) -> anyhow::Result<bool> {
     let report = inspect_capsule(json)?;
     Ok(report.integrity_ok && report.issues.iter().all(|i| !i.contains("byte_exact")))

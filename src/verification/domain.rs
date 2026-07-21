@@ -11,20 +11,35 @@ use crate::verification::receipt::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DomainMatchClass {
+    /// `Confirmed` variant.
     Confirmed,
+    /// `StronglyCorrelated` variant.
     StronglyCorrelated,
+    /// `WeaklyCorrelated` variant.
     WeaklyCorrelated,
+    /// `Unknown` variant.
     Unknown,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// `DomainMatchReport` value.
 pub struct DomainMatchReport {
+    /// Class.
     pub class: DomainMatchClass,
+    /// Score.
     pub score: u32,
+    /// Reasons.
     pub reasons: Vec<String>,
 }
 
 /// Score how well `receipt` covers `failure` (or a tool/test fingerprint).
+///
+/// # Examples
+///
+/// ```
+/// # use blackbox as _;
+/// // `match_receipt_to_failure` — see module docs for full workflow.
+/// ```
 pub fn match_receipt_to_failure(
     receipt: &VerificationReceipt,
     failure: Option<&TraceEvent>,
@@ -106,6 +121,14 @@ pub fn match_receipt_to_failure(
     }
 }
 
+/// Failure fingerprint.
+///
+/// # Examples
+///
+/// ```
+/// # use blackbox as _;
+/// // `failure_fingerprint` — see module docs for full workflow.
+/// ```
 pub fn failure_fingerprint(ev: &TraceEvent) -> String {
     use crate::crypto::content_key;
     let tool = ev
@@ -124,6 +147,13 @@ pub fn failure_fingerprint(ev: &TraceEvent) -> String {
 }
 
 /// Map domain class to receipt confidence (does not mutate storage).
+///
+/// # Examples
+///
+/// ```
+/// # use blackbox as _;
+/// // `confidence_from_domain` — see module docs for full workflow.
+/// ```
 pub fn confidence_from_domain(class: DomainMatchClass) -> VerificationConfidence {
     match class {
         DomainMatchClass::Confirmed => VerificationConfidence::Confirmed,
@@ -134,6 +164,13 @@ pub fn confidence_from_domain(class: DomainMatchClass) -> VerificationConfidence
 }
 
 /// Whether a receipt may satisfy a **strict** regression gate.
+///
+/// # Examples
+///
+/// ```
+/// # use blackbox as _;
+/// // `satisfies_strict_gate` — see module docs for full workflow.
+/// ```
 pub fn satisfies_strict_gate(receipt: &VerificationReceipt, domain: &DomainMatchReport) -> bool {
     matches!(receipt.status, VerificationStatus::Passed)
         && matches!(domain.class, DomainMatchClass::Confirmed)

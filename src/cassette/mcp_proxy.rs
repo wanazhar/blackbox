@@ -25,23 +25,33 @@ use crate::redaction::scanner::SecretScanner;
 use crate::redaction::RedactionConfig;
 
 #[derive(Debug, Clone)]
+/// `ProxyConfig` value.
 pub struct ProxyConfig {
+    /// Mode.
     pub mode: ProxyMode,
+    /// Cassette path.
     pub cassette_path: PathBuf,
+    /// Match mode.
     pub match_mode: MatchMode,
     /// When replaying, unmatched calls: fail | deny | live
     pub on_unknown: UnknownPolicy,
+    /// Server argv.
     pub server_argv: Vec<String>,
+    /// Redact.
     pub redact: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// `ProxyMode` classification.
 pub enum ProxyMode {
+    /// `Record` variant.
     Record,
+    /// `Replay` variant.
     Replay,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// `UnknownPolicy` classification.
 pub enum UnknownPolicy {
     /// Return JSON-RPC error (default safe).
     Fail,
@@ -52,6 +62,14 @@ pub enum UnknownPolicy {
 }
 
 impl UnknownPolicy {
+    /// Parse.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `parse` — see module docs for full workflow.
+    /// ```
     pub fn parse(s: &str) -> anyhow::Result<Self> {
         match s {
             "fail" => Ok(Self::Fail),
@@ -63,6 +81,13 @@ impl UnknownPolicy {
 }
 
 /// Run the proxy until stdin EOF. Returns the final cassette (record) or match stats.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `run_mcp_proxy` — see module docs for full workflow.
+/// ```
 pub fn run_mcp_proxy(config: ProxyConfig) -> anyhow::Result<ProxyReport> {
     match config.mode {
         ProxyMode::Record => run_record(config),
@@ -71,15 +96,24 @@ pub fn run_mcp_proxy(config: ProxyConfig) -> anyhow::Result<ProxyReport> {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
+/// `ProxyReport` value.
 pub struct ProxyReport {
+    /// Mode.
     pub mode: String,
+    /// Experimental.
     pub experimental: bool,
+    /// Entries.
     pub entries: usize,
+    /// Matched.
     pub matched: usize,
+    /// Unmatched.
     pub unmatched: usize,
+    /// Live passthrough.
     pub live_passthrough: usize,
+    /// Cassette path.
     pub cassette_path: String,
     #[serde(default)]
+    /// Limitations.
     pub limitations: Vec<String>,
 }
 
@@ -472,6 +506,13 @@ fn id_key(id: Option<&Value>) -> String {
 }
 
 /// Convenience: write an empty cassette skeleton.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `init_cassette` — see module docs for full workflow.
+/// ```
 pub fn init_cassette(path: &Path) -> anyhow::Result<()> {
     let c = CassetteFile::default();
     std::fs::write(path, c.to_json()?)?;

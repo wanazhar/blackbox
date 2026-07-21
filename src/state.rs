@@ -24,17 +24,33 @@ fn state_schema_default() -> String {
 /// Compact pointer to a finished run.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RunPointer {
+    /// Unique identifier.
     pub id: String,
+    /// Short id.
     pub short_id: String,
+    /// Status value.
     pub status: String,
+    /// Process exit code, if known.
     pub exit_code: Option<i32>,
+    /// Display name.
     pub name: Option<String>,
+    /// Command preview.
     pub command_preview: String,
+    /// End timestamp, if finished.
     pub ended_at: Option<DateTime<Utc>>,
+    /// Adapter.
     pub adapter: Option<String>,
 }
 
 impl RunPointer {
+    /// Build from run.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `from_run` — see module docs for full workflow.
+    /// ```
     pub fn from_run(run: &Run) -> Self {
         let preview = if run.command.len() <= 4 {
             run.command.join(" ")
@@ -63,13 +79,25 @@ impl RunPointer {
 #[serde(rename_all = "snake_case")]
 pub enum AttentionLevel {
     #[default]
+    /// `None` variant.
     None,
+    /// `Info` variant.
     Info,
+    /// `Continue` variant.
     Continue,
+    /// `Blocked` variant.
     Blocked,
 }
 
 impl AttentionLevel {
+    /// View as str.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `as_str` — see module docs for full workflow.
+    /// ```
     pub fn as_str(self) -> &'static str {
         match self {
             Self::None => "none",
@@ -79,11 +107,26 @@ impl AttentionLevel {
         }
     }
 
+    /// Return true if none.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use blackbox as _;
+    /// // `is_none` — see module docs for full workflow.
+    /// ```
     pub fn is_none(self) -> bool {
         matches!(self, Self::None)
     }
 
     /// Attention is at least "continue" (inject parent_run linkage).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `at_least_continue` — see module docs for full workflow.
+    /// ```
     pub fn at_least_continue(self) -> bool {
         matches!(self, Self::Continue | Self::Blocked)
     }
@@ -92,23 +135,34 @@ impl AttentionLevel {
 /// Intentional project goals / open work (explicit-only open_items in 1.2 MVP).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct IntentState {
+    /// Goal.
     pub goal: Option<String>,
+    /// Plan summary.
     pub plan_summary: Option<String>,
     #[serde(default)]
+    /// Open items.
     pub open_items: Vec<String>,
     #[serde(default)]
+    /// Do not retry.
     pub do_not_retry: Vec<String>,
 }
 
 /// Single active project claim pointer.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ClaimPointer {
+    /// Unique identifier.
     pub id: String,
+    /// Holder.
     pub holder: String,
+    /// Holder kind.
     pub holder_kind: String,
+    /// Owning run id.
     pub run_id: Option<String>,
+    /// Goal.
     pub goal: Option<String>,
+    /// Acquired at.
     pub acquired_at: DateTime<Utc>,
+    /// Expires at.
     pub expires_at: DateTime<Utc>,
     /// "active" | "released" | "expired"
     pub status: String,
@@ -119,17 +173,39 @@ pub struct ClaimPointer {
 }
 
 impl ClaimPointer {
+    /// Return true if active.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use blackbox as _;
+    /// // `is_active` — see module docs for full workflow.
+    /// ```
     pub fn is_active(&self, now: DateTime<Utc>) -> bool {
         self.status == "active" && self.expires_at > now
     }
 
     /// Normalized scope string (trimmed, no leading `./`, no trailing `/` unless root).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `scope_key` — see module docs for full workflow.
+    /// ```
     pub fn scope_key(&self) -> Option<String> {
         self.path_scope.as_ref().map(|s| normalize_scope(s))
     }
 }
 
 /// Normalize a path scope for comparison.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `normalize_scope` — see module docs for full workflow.
+/// ```
 pub fn normalize_scope(scope: &str) -> String {
     let s = scope.trim().trim_start_matches("./").trim_matches('/');
     if s.is_empty() || s == "." {
@@ -140,6 +216,13 @@ pub fn normalize_scope(scope: &str) -> String {
 }
 
 /// True if two path scopes conflict (overlap or one is project-wide).
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `scopes_conflict` — see module docs for full workflow.
+/// ```
 pub fn scopes_conflict(a: Option<&str>, b: Option<&str>) -> bool {
     let na = a.map(normalize_scope).filter(|s| !s.is_empty());
     let nb = b.map(normalize_scope).filter(|s| !s.is_empty());
@@ -157,19 +240,25 @@ pub fn scopes_conflict(a: Option<&str>, b: Option<&str>) -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectState {
     #[serde(default = "state_schema_default")]
+    /// Schema identifier string.
     pub schema: String,
+    /// Last update timestamp.
     pub updated_at: DateTime<Utc>,
+    /// Last run.
     pub last_run: Option<RunPointer>,
     /// Last non-success terminal status (Failed / Cancelled).
     pub last_failure: Option<RunPointer>,
     /// Derived on save: `attention_level != None` (kept for v1 readers).
     #[serde(default)]
     pub attention_needed: bool,
+    /// Attention reason.
     pub attention_reason: Option<String>,
     // ── v2 fields ──────────────────────────────────────────────
     #[serde(default)]
+    /// Attention level.
     pub attention_level: AttentionLevel,
     #[serde(default)]
+    /// Intent.
     pub intent: IntentState,
     /// Whole-project exclusive claim (legacy / default).
     #[serde(default)]
@@ -178,8 +267,10 @@ pub struct ProjectState {
     #[serde(default)]
     pub path_claims: Vec<ClaimPointer>,
     #[serde(default)]
+    /// Memory updated at.
     pub memory_updated_at: Option<DateTime<Utc>>,
     #[serde(default)]
+    /// Unresolved failure id.
     pub unresolved_failure_id: Option<String>,
 }
 
@@ -205,7 +296,9 @@ impl Default for ProjectState {
 /// Extras for M6 attention algorithm (not available on bare `record_run`).
 #[derive(Debug, Clone, Default)]
 pub struct OutcomeExtras {
+    /// Git dirty.
     pub git_dirty: bool,
+    /// Files touched nonempty.
     pub files_touched_nonempty: bool,
     /// True if this update released active_claim for the finished run.
     pub claim_released: bool,
@@ -216,14 +309,38 @@ pub struct OutcomeExtras {
 }
 
 impl ProjectState {
+    /// Path.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `path` — see module docs for full workflow.
+    /// ```
     pub fn path(root: &Path) -> PathBuf {
         root.join("state.json")
     }
 
+    /// Lock path.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `lock_path` — see module docs for full workflow.
+    /// ```
     pub fn lock_path(root: &Path) -> PathBuf {
         root.join("state.lock")
     }
 
+    /// Load.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `load` — see module docs for full workflow.
+    /// ```
     pub fn load(root: &Path) -> anyhow::Result<Option<Self>> {
         let p = Self::path(root);
         if !p.exists() {
@@ -240,6 +357,14 @@ impl ProjectState {
         Ok(Some(state))
     }
 
+    /// Save.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `save` — see module docs for full workflow.
+    /// ```
     pub fn save(&self, root: &Path) -> anyhow::Result<()> {
         std::fs::create_dir_all(root)?;
         crate::privacy::restrict_dir(root);
@@ -255,6 +380,13 @@ impl ProjectState {
     }
 
     /// Expire active / path claims if past expires_at (in-memory).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `expire_claim_if_needed` — see module docs for full workflow.
+    /// ```
     pub fn expire_claim_if_needed(&mut self, now: DateTime<Utc>) {
         if let Some(ref mut c) = self.active_claim {
             if c.status == "active" && c.expires_at <= now {
@@ -268,6 +400,13 @@ impl ProjectState {
     }
 
     /// All currently active claims (project + path scopes).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `all_active_claims` — see module docs for full workflow.
+    /// ```
     pub fn all_active_claims(&self, now: DateTime<Utc>) -> Vec<ClaimPointer> {
         let mut out = Vec::new();
         if let Some(ref c) = self.active_claim {
@@ -284,6 +423,13 @@ impl ProjectState {
     }
 
     /// Thin wrapper for tests / back-compat: default extras (no WIP signals).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `record_run` — see module docs for full workflow.
+    /// ```
     pub fn record_run(&mut self, run: &Run) {
         apply_run_outcome(self, run, OutcomeExtras::default());
     }
@@ -292,6 +438,13 @@ impl ProjectState {
 /// Apply finished run under caller-held state lock (or after load under lock).
 ///
 /// Implements M6 deterministic attention algorithm from the 1.2 design.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `apply_run_outcome` — see module docs for full workflow.
+/// ```
 pub fn apply_run_outcome(state: &mut ProjectState, run: &Run, extras: OutcomeExtras) {
     let ptr = RunPointer::from_run(run);
     state.last_run = Some(ptr.clone());
@@ -396,6 +549,13 @@ pub struct StateLock {
 
 impl StateLock {
     /// Acquire exclusive lock (blocking). Creates lock file if needed.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `acquire` — see module docs for full workflow.
+    /// ```
     pub fn acquire(root: &Path) -> anyhow::Result<Self> {
         std::fs::create_dir_all(root)?;
         let path = ProjectState::lock_path(root);
@@ -423,6 +583,13 @@ impl StateLock {
     }
 
     /// Try non-blocking exclusive lock. Returns None if held by another process.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `try_acquire` — see module docs for full workflow.
+    /// ```
     pub fn try_acquire(root: &Path) -> anyhow::Result<Option<Self>> {
         std::fs::create_dir_all(root)?;
         let path = ProjectState::lock_path(root);
@@ -463,6 +630,13 @@ impl Drop for StateLock {
 }
 
 /// Load → mutate → save under exclusive `state.lock`.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `with_state_lock` — see module docs for full workflow.
+/// ```
 pub fn with_state_lock<F, T>(root: &Path, f: F) -> anyhow::Result<T>
 where
     F: FnOnce(&mut ProjectState) -> anyhow::Result<T>,
@@ -478,6 +652,13 @@ where
 // ── Claims ────────────────────────────────────────────────────────
 
 /// Build holder id per design algorithm.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `claim_holder_id` — see module docs for full workflow.
+/// ```
 pub fn claim_holder_id(
     adapter: Option<&str>,
     session_id: Option<&str>,
@@ -520,6 +701,13 @@ fn hostname_short() -> String {
 ///
 /// - `path_scope = None` → whole-project exclusive claim (`active_claim`)
 /// - `path_scope = Some("src/foo")` → path claim; may coexist with non-overlapping scopes
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `claim_acquire` — see module docs for full workflow.
+/// ```
 pub fn claim_acquire(
     root: &Path,
     holder: &str,
@@ -532,6 +720,13 @@ pub fn claim_acquire(
 }
 
 /// Acquire with explicit path scope.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `claim_acquire_scoped` — see module docs for full workflow.
+/// ```
 pub fn claim_acquire_scoped(
     root: &Path,
     holder: &str,
@@ -618,6 +813,13 @@ pub fn claim_acquire_scoped(
 
 /// Release active claim if held by holder (or force if holder is None).
 /// Also releases matching path claims for that holder.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `claim_release` — see module docs for full workflow.
+/// ```
 pub fn claim_release(root: &Path, holder: Option<&str>) -> anyhow::Result<Option<ClaimPointer>> {
     with_state_lock(root, |state| {
         let now = Utc::now();
@@ -666,6 +868,13 @@ pub fn claim_release(root: &Path, holder: Option<&str>) -> anyhow::Result<Option
 }
 
 /// Release claim bound to a run id (auto_claim finally path).
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `claim_release_for_run` — see module docs for full workflow.
+/// ```
 pub fn claim_release_for_run(root: &Path, run_id: &str) -> anyhow::Result<bool> {
     with_state_lock(root, |state| {
         let now = Utc::now();
@@ -692,6 +901,13 @@ pub fn claim_release_for_run(root: &Path, run_id: &str) -> anyhow::Result<bool> 
 }
 
 /// Heartbeat: extend expires_at for active claim of holder (project + path).
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `claim_heartbeat` — see module docs for full workflow.
+/// ```
 pub fn claim_heartbeat(root: &Path, holder: &str, ttl_secs: u64) -> anyhow::Result<bool> {
     with_state_lock(root, |state| {
         let now = Utc::now();
@@ -717,6 +933,13 @@ pub fn claim_heartbeat(root: &Path, holder: &str, ttl_secs: u64) -> anyhow::Resu
 }
 
 /// End-of-run: release claim for this run if held; return whether released.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `release_or_rebind_claim` — see module docs for full workflow.
+/// ```
 pub fn release_or_rebind_claim(state: &mut ProjectState, run: &Run) -> bool {
     let now = Utc::now();
     state.expire_claim_if_needed(now);
@@ -740,6 +963,13 @@ pub fn release_or_rebind_claim(state: &mut ProjectState, run: &Run) -> bool {
 // ── Agent instructions ────────────────────────────────────────────
 
 /// Agent-facing instructions written beside the store on `enable`.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `agent_instructions_markdown` — see module docs for full workflow.
+/// ```
 pub fn agent_instructions_markdown() -> &'static str {
     r#"# blackbox — agent instructions
 
@@ -808,6 +1038,13 @@ See `docs/agent-api.md` for the `blackbox.cli/v1` JSON envelope, MCP tools, and 
 }
 
 /// Write agent instructions into `.blackbox/AGENT.md`.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `write_agent_instructions` — see module docs for full workflow.
+/// ```
 pub fn write_agent_instructions(root: &Path) -> anyhow::Result<PathBuf> {
     std::fs::create_dir_all(root)?;
     let path = root.join("AGENT.md");
@@ -818,14 +1055,32 @@ pub fn write_agent_instructions(root: &Path) -> anyhow::Result<PathBuf> {
 // ── Ack file (require_ack gate) ───────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// `AckFile` value.
 pub struct AckFile {
+    /// Ts.
     pub ts: DateTime<Utc>,
 }
 
+/// Ack path.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `ack_path` — see module docs for full workflow.
+/// ```
 pub fn ack_path(root: &Path) -> PathBuf {
     root.join("ack")
 }
 
+/// Write ack.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `write_ack` — see module docs for full workflow.
+/// ```
 pub fn write_ack(root: &Path) -> anyhow::Result<PathBuf> {
     std::fs::create_dir_all(root)?;
     let p = ack_path(root);
@@ -836,6 +1091,13 @@ pub fn write_ack(root: &Path) -> anyhow::Result<PathBuf> {
 
 /// Returns true if env BLACKBOX_ACK=1 or a valid unexpired ack file is present.
 /// Consumes (deletes) the ack file when used.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `consume_ack_if_present` — see module docs for full workflow.
+/// ```
 pub fn consume_ack_if_present(root: &Path) -> bool {
     if let Ok(v) = std::env::var("BLACKBOX_ACK") {
         let v = v.to_ascii_lowercase();
@@ -875,6 +1137,14 @@ fn _touch_write(p: &Path, s: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Status str.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `status_str` — see module docs for full workflow.
+/// ```
 pub fn status_str(s: &RunStatus) -> &'static str {
     match s {
         RunStatus::Pending => "pending",

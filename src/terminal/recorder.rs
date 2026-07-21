@@ -28,6 +28,14 @@ pub struct RawRecorder {
 }
 
 impl RawRecorder {
+    /// Create a new instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use blackbox as _;
+    /// // `new` — see module docs for full workflow.
+    /// ```
     pub fn new() -> Self {
         Self {
             run_id: None,
@@ -40,6 +48,13 @@ impl RawRecorder {
     }
 
     /// Enable tiny sample retention (debug only; still capped).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `with_samples` — see module docs for full workflow.
+    /// ```
     pub fn with_samples(mut self) -> Self {
         self.retain_samples = true;
         self
@@ -62,11 +77,25 @@ impl RawRecorder {
     }
 
     /// Number of recorded segments (logical count, not retained samples).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `segment_count` — see module docs for full workflow.
+    /// ```
     pub fn segment_count(&self) -> usize {
         self.segment_count as usize
     }
 
     /// Total raw bytes observed.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `total_bytes` — see module docs for full workflow.
+    /// ```
     pub fn total_bytes(&self) -> usize {
         self.total_bytes as usize
     }

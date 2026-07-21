@@ -1,4 +1,6 @@
+/// Html module.
 pub mod html;
+/// Jsonl module.
 pub mod jsonl;
 pub mod portable;
 
@@ -17,6 +19,13 @@ use crate::storage::TraceStore;
 /// free-form content still secret-scanned). Portable format embeds blobs and
 /// requires a store handle; the top-level `blobs` map keys are restored around
 /// the JSON walk so content-addressed refs stay importable.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `export_run` — see module docs for full workflow.
+/// ```
 pub async fn export_run(
     store: &dyn TraceStore,
     run: &Run,
@@ -47,6 +56,13 @@ pub async fn export_run(
 ///
 /// Prefer this over bare [`portable::export_portable`] for sync / serve so
 /// secrets that only live inside embedded blobs are still redacted.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `export_portable_secure` — see module docs for full workflow.
+/// ```
 pub async fn export_portable_secure(
     store: &dyn TraceStore,
     run: &Run,
@@ -61,6 +77,13 @@ pub async fn export_portable_secure(
 }
 
 /// HTML export + ExportRedactor second pass (matches CLI `export --format html`).
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `export_html_secure` — see module docs for full workflow.
+/// ```
 pub fn export_html_secure(
     run: &Run,
     events: &[TraceEvent],
@@ -99,6 +122,13 @@ fn apply_html_redaction(output: &str) -> anyhow::Result<String> {
 ///
 /// After redacting blob plaintext, recompute content keys so `key ==
 /// sha256(data)` still holds for import (A1). Event `*_blob` refs are rewritten.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `apply_portable_blob_redaction` — see module docs for full workflow.
+/// ```
 pub fn apply_portable_blob_redaction(output: &str) -> anyhow::Result<String> {
     let redactor = ExportRedactor::new(RedactionConfig::default());
     let mut v: serde_json::Value = serde_json::from_str(output)?;

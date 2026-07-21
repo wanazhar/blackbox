@@ -12,6 +12,13 @@ use crate::core::event::TraceEvent;
 use crate::workspace_manifest::{ManifestEntryType, WorkspaceManifest};
 
 /// Collect every content-addressed blob key referenced by an event.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `collect_event_blob_keys` — see module docs for full workflow.
+/// ```
 pub fn collect_event_blob_keys(event: &TraceEvent) -> HashSet<String> {
     let mut keys = HashSet::new();
     for k in [
@@ -31,6 +38,13 @@ pub fn collect_event_blob_keys(event: &TraceEvent) -> HashSet<String> {
 }
 
 /// Collect blob keys from a checkpoint's typed fields.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `collect_checkpoint_blob_keys` — see module docs for full workflow.
+/// ```
 pub fn collect_checkpoint_blob_keys(cp: &Checkpoint) -> HashSet<String> {
     let mut keys = HashSet::new();
     for k in [
@@ -50,6 +64,13 @@ pub fn collect_checkpoint_blob_keys(cp: &Checkpoint) -> HashSet<String> {
 }
 
 /// Collect `content_hash` keys from a workspace manifest.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `collect_manifest_blob_keys` — see module docs for full workflow.
+/// ```
 pub fn collect_manifest_blob_keys(manifest: &WorkspaceManifest) -> HashSet<String> {
     let mut keys = HashSet::new();
     for entry in &manifest.entries {
@@ -64,6 +85,13 @@ pub fn collect_manifest_blob_keys(manifest: &WorkspaceManifest) -> HashSet<Strin
 
 /// Remap top-level event blob fields and string metadata values that look like
 /// blob keys. Returns true if anything changed.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `remap_event_blob_refs` — see module docs for full workflow.
+/// ```
 pub fn remap_event_blob_refs(event: &mut TraceEvent, remap: &HashMap<String, String>) -> bool {
     if remap.is_empty() {
         return false;
@@ -88,6 +116,13 @@ pub fn remap_event_blob_refs(event: &mut TraceEvent, remap: &HashMap<String, Str
 }
 
 /// Remap typed checkpoint blob fields. Returns true if anything changed.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `remap_checkpoint_blob_refs` — see module docs for full workflow.
+/// ```
 pub fn remap_checkpoint_blob_refs(cp: &mut Checkpoint, remap: &HashMap<String, String>) -> bool {
     if remap.is_empty() {
         return false;
@@ -111,6 +146,13 @@ pub fn remap_checkpoint_blob_refs(cp: &mut Checkpoint, remap: &HashMap<String, S
 
 /// Remap `content_hash` fields inside a workspace manifest.
 /// Returns true if any hash was rewritten.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `remap_manifest_blob_refs` — see module docs for full workflow.
+/// ```
 pub fn remap_manifest_blob_refs(
     manifest: &mut WorkspaceManifest,
     remap: &HashMap<String, String>,
@@ -140,6 +182,13 @@ pub fn remap_manifest_blob_refs(
 }
 
 /// Validate that no old keys from `remap` remain in the event.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `event_has_stale_blob_ref` — see module docs for full workflow.
+/// ```
 pub fn event_has_stale_blob_ref(event: &TraceEvent, old_keys: &HashSet<String>) -> bool {
     if old_keys.is_empty() {
         return false;

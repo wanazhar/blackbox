@@ -15,10 +15,13 @@ pub struct Anomaly {
     pub kind: String,
     /// Severity: `info` | `warn` | `high`.
     pub severity: String,
+    /// Detail.
     pub detail: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Event id.
     pub event_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Monotonic sequence number within the run.
     pub sequence: Option<u64>,
     /// How many times / magnitude when relevant.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -26,6 +29,13 @@ pub struct Anomaly {
 }
 
 /// Detect anomalies from a run event stream (deterministic, no LLM).
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `detect_anomalies` — see module docs for full workflow.
+/// ```
 pub fn detect_anomalies(events: &[TraceEvent]) -> Vec<Anomaly> {
     let mut out = Vec::new();
     out.extend(detect_tool_loops(events));

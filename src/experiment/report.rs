@@ -11,59 +11,101 @@ use crate::verification::{
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// `ReportVerdict` classification.
 pub enum ReportVerdict {
+    /// `Improvement` variant.
     Improvement,
+    /// `Regression` variant.
     Regression,
+    /// `NoMaterialChange` variant.
     NoMaterialChange,
+    /// `Mixed` variant.
     Mixed,
+    /// `InsufficientEvidence` variant.
     InsufficientEvidence,
+    /// `InvalidExperiment` variant.
     InvalidExperiment,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// `VariantMetrics` value.
 pub struct VariantMetrics {
+    /// Key.
     pub key: String,
+    /// Run count.
     pub run_count: usize,
+    /// Execution success.
     pub execution_success: usize,
+    /// Verified success.
     pub verified_success: usize,
     /// Passed receipts with Confirmed confidence (domain-matched).
     #[serde(default)]
     pub domain_confirmed: usize,
+    /// Unverified.
     pub unverified: usize,
+    /// Capture complete.
     pub capture_complete: usize,
+    /// Excluded incomplete.
     pub excluded_incomplete: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Duration median ms.
     pub duration_median_ms: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Duration p95 ms.
     pub duration_p95_ms: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Verified rate.
     pub verified_rate: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Domain confirmed rate.
     pub domain_confirmed_rate: Option<f64>,
+    /// Denominator note.
     pub denominator_note: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// `ExperimentReport` value.
 pub struct ExperimentReport {
+    /// Schema identifier string.
     pub schema: String,
+    /// Experiment id.
     pub experiment_id: String,
+    /// Group by.
     pub group_by: String,
+    /// Variants.
     pub variants: Vec<VariantMetrics>,
+    /// Verdict.
     pub verdict: ReportVerdict,
+    /// Sample size total.
     pub sample_size_total: usize,
+    /// Statistical notes.
     pub statistical_notes: Vec<StatisticalNote>,
+    /// Limitations.
     pub limitations: Vec<String>,
 }
 
+/// `RunReportInput` value.
 pub struct RunReportInput {
+    /// Run.
     pub run: Run,
+    /// Meta.
     pub meta: RunExperimentMeta,
+    /// Receipts.
     pub receipts: Vec<VerificationReceipt>,
+    /// Capture complete.
     pub capture_complete: bool,
+    /// Duration in milliseconds.
     pub duration_ms: Option<u64>,
 }
 
 /// Build a cohort report. Never declares a winner from n=1 without insufficient_evidence.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `build_experiment_report` — see module docs for full workflow.
+/// ```
 pub fn build_experiment_report(
     experiment_id: &str,
     group_by: &str,

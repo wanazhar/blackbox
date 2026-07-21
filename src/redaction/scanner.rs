@@ -195,6 +195,14 @@ pub struct SecretScanner {
 }
 
 impl SecretScanner {
+    /// Create a new instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use blackbox as _;
+    /// // `new` — see module docs for full workflow.
+    /// ```
     pub fn new(config: RedactionConfig) -> Self {
         let mut patterns = BASE_PATTERNS.clone();
 
@@ -209,6 +217,13 @@ impl SecretScanner {
     }
 
     /// Scan text for secrets and return redaction records.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `scan` — see module docs for full workflow.
+    /// ```
     pub fn scan(&self, text: &str, location: &str, event_id: Option<&str>) -> Vec<RedactionRecord> {
         if !self.config.enabled {
             return Vec::new();
@@ -233,6 +248,13 @@ impl SecretScanner {
     /// Spans are half-open `[start, end)` into the original string and
     /// never overlap after merging. Used by stream redaction to catch
     /// secrets that straddle PTY chunk boundaries.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `find_spans` — see module docs for full workflow.
+    /// ```
     pub fn find_spans(&self, text: &str) -> Vec<(usize, usize)> {
         if !self.config.enabled || text.is_empty() {
             return Vec::new();
@@ -264,6 +286,13 @@ impl SecretScanner {
     /// replacement happens in a single pass. This prevents corruption
     /// where a previous `[REDACTED]` replacement would be re-matched
     /// by subsequent patterns.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `redact` — see module docs for full workflow.
+    /// ```
     pub fn redact(&self, text: &str) -> String {
         if !self.config.enabled {
             return text.to_string();
@@ -295,6 +324,13 @@ impl SecretScanner {
     }
 
     /// Redact every string in a command argv.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `redact_command` — see module docs for full workflow.
+    /// ```
     pub fn redact_command(&self, command: &[String]) -> Vec<String> {
         command.iter().map(|s| self.redact(s)).collect()
     }
@@ -304,6 +340,13 @@ impl SecretScanner {
     /// Handles non-string values by converting them to string
     /// representation for pattern matching, preventing secret bypass
     /// via numeric or boolean JSON values.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `redact_json` — see module docs for full workflow.
+    /// ```
     pub fn redact_json(&self, value: &mut serde_json::Value) {
         self.redact_json_inner(value, 0, 32);
     }

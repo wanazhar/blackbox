@@ -16,14 +16,25 @@ use crate::crypto::{self, BlobCrypto};
 const BACKUP_FORMAT: &str = "blackbox.store.backup/v1";
 
 #[derive(Debug, Clone, Default)]
+/// `BackupOptions` value.
 pub struct BackupOptions {
+    /// Include db.
     pub include_db: bool,
+    /// Include blobs.
     pub include_blobs: bool,
     /// Max total blob bytes to embed (default 64 MiB).
     pub max_blob_bytes: u64,
 }
 
 impl BackupOptions {
+    /// Default safe.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `default_safe` — see module docs for full workflow.
+    /// ```
     pub fn default_safe() -> Self {
         Self {
             include_db: true,
@@ -51,6 +62,13 @@ struct BackupFile {
 }
 
 /// Build a sealed backup JSON string.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `create_sealed_backup` — see module docs for full workflow.
+/// ```
 pub fn create_sealed_backup(
     store_root: &Path,
     db_path: &Path,
@@ -145,6 +163,13 @@ pub fn create_sealed_backup(
 }
 
 /// Restore a sealed backup into `store_root` (writes files under root / blobs / db).
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `restore_sealed_backup` — see module docs for full workflow.
+/// ```
 pub fn restore_sealed_backup(
     sealed: &str,
     store_root: &Path,
@@ -203,9 +228,13 @@ pub fn restore_sealed_backup(
 }
 
 #[derive(Debug, Default, Clone)]
+/// `RestoreReport` value.
 pub struct RestoreReport {
+    /// Files written.
     pub files_written: usize,
+    /// Bytes written.
     pub bytes_written: u64,
+    /// Optional notes.
     pub notes: Vec<String>,
 }
 

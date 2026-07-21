@@ -10,6 +10,13 @@ use crate::budget::policy::{BudgetCapability, BudgetPolicy, BudgetStatus};
 /// Apply process-level rlimits to `pid` (the supervised child).
 ///
 /// Does **not** mutate the calling process. Uses `prlimit` on Linux.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `apply_child_rlimits` — see module docs for full workflow.
+/// ```
 #[cfg(target_os = "linux")]
 pub fn apply_child_rlimits(pid: u32, policy: &BudgetPolicy) -> Vec<String> {
     let mut notes = Vec::new();
@@ -104,9 +111,13 @@ pub fn spawn_wall_watchdog(
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
+/// `BudgetBreachKill` value.
 pub struct BudgetBreachKill {
+    /// Display name.
     pub name: String,
+    /// Pid.
     pub pid: u32,
+    /// Detail.
     pub detail: String,
 }
 

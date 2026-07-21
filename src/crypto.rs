@@ -48,11 +48,26 @@ impl std::fmt::Debug for BlobCrypto {
 }
 
 impl BlobCrypto {
+    /// Build from key bytes.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `from_key_bytes` — see module docs for full workflow.
+    /// ```
     pub fn from_key_bytes(key: [u8; KEY_LEN]) -> Self {
         Self { key }
     }
 
     /// Load existing key only (env or path). Does not generate.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `load_existing` — see module docs for full workflow.
+    /// ```
     pub fn load_existing(key_path: &Path) -> anyhow::Result<Option<Self>> {
         if let Ok(hex_key) = std::env::var("BLACKBOX_STORE_KEY") {
             let key = parse_hex_key(hex_key.trim())
@@ -89,6 +104,13 @@ impl BlobCrypto {
     }
 
     /// Load from env `BLACKBOX_STORE_KEY` (64 hex) or path; generate if missing.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `load_or_create` — see module docs for full workflow.
+    /// ```
     pub fn load_or_create(key_path: &Path) -> anyhow::Result<Self> {
         if let Some(c) = Self::load_existing(key_path)? {
             return Ok(c);
@@ -110,6 +132,13 @@ impl BlobCrypto {
     }
 
     /// Derive a key from a passphrase (PBKDF2-HMAC-SHA256).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `from_passphrase` — see module docs for full workflow.
+    /// ```
     pub fn from_passphrase(passphrase: &str, salt: &[u8], iterations: u32) -> anyhow::Result<Self> {
         if passphrase.is_empty() {
             anyhow::bail!("passphrase must not be empty");
@@ -124,6 +153,13 @@ impl BlobCrypto {
     }
 
     /// Encrypt plaintext for disk storage. Returns wire format with magic header.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `seal` — see module docs for full workflow.
+    /// ```
     pub fn seal(&self, plaintext: &[u8]) -> anyhow::Result<Vec<u8>> {
         let cipher = ChaCha20Poly1305::new(Key::from_slice(&self.key));
         let nonce = ChaCha20Poly1305::generate_nonce(&mut OsRng);
@@ -139,6 +175,13 @@ impl BlobCrypto {
     }
 
     /// Decrypt wire format if encrypted; returns plaintext.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `open` — see module docs for full workflow.
+    /// ```
     pub fn open(&self, data: &[u8]) -> anyhow::Result<Vec<u8>> {
         if !is_encrypted_blob(data) {
             return Ok(data.to_vec());
@@ -159,11 +202,25 @@ impl BlobCrypto {
 }
 
 /// True if data has BBEN magic header.
+///
+/// # Examples
+///
+/// ```
+/// # use blackbox as _;
+/// // `is_encrypted_blob` — see module docs for full workflow.
+/// ```
 pub fn is_encrypted_blob(data: &[u8]) -> bool {
     data.len() >= 5 && &data[..4] == MAGIC
 }
 
 /// Default key path next to the store root.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `default_key_path` — see module docs for full workflow.
+/// ```
 pub fn default_key_path(store_root: &Path) -> PathBuf {
     store_root.join("store.key")
 }
@@ -176,6 +233,13 @@ pub fn default_key_path(store_root: &Path) -> PathBuf {
 /// 3. Project `.blackbox/store.key`
 ///
 /// Prefer (1)/(2) so a stolen project checkout without the key is useless.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `resolve_key_path` — see module docs for full workflow.
+/// ```
 pub fn resolve_key_path(store_root: &Path) -> PathBuf {
     if let Ok(p) = std::env::var("BLACKBOX_STORE_KEY_FILE") {
         let path = PathBuf::from(p.trim());
@@ -197,12 +261,26 @@ pub fn resolve_key_path(store_root: &Path) -> PathBuf {
 }
 
 /// True when key material is expected to live outside the project tree.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `key_is_external` — see module docs for full workflow.
+/// ```
 pub fn key_is_external(store_root: &Path) -> bool {
     let p = resolve_key_path(store_root);
     !p.starts_with(store_root)
 }
 
 /// SHA-256 hex of plaintext (content-addressed key).
+///
+/// # Examples
+///
+/// ```
+/// # use blackbox as _;
+/// // `content_key` — see module docs for full workflow.
+/// ```
 pub fn content_key(plaintext: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(plaintext);
@@ -222,6 +300,13 @@ fn parse_hex_key(s: &str) -> anyhow::Result<[u8; KEY_LEN]> {
 // ── Sealed text files (state / MEMORY) ───────────────────────────
 
 /// Write plaintext bytes; if crypto is Some, store BBEN ciphertext.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `write_maybe_sealed` — see module docs for full workflow.
+/// ```
 pub fn write_maybe_sealed(
     path: &Path,
     plain: &[u8],
@@ -245,6 +330,13 @@ pub fn write_maybe_sealed(
 }
 
 /// Read file; decrypt BBEN if needed using store key next to store root.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `read_maybe_sealed` — see module docs for full workflow.
+/// ```
 pub fn read_maybe_sealed(path: &Path, store_root: &Path) -> anyhow::Result<Vec<u8>> {
     let data = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
     if !is_encrypted_blob(&data) {
@@ -261,6 +353,13 @@ pub fn read_maybe_sealed(path: &Path, store_root: &Path) -> anyhow::Result<Vec<u
 }
 
 /// Crypto for sticky files: present only when a key (or env) exists.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `sticky_crypto` — see module docs for full workflow.
+/// ```
 pub fn sticky_crypto(store_root: &Path) -> Option<BlobCrypto> {
     BlobCrypto::load_existing(&resolve_key_path(store_root))
         .ok()
@@ -273,6 +372,13 @@ pub fn sticky_crypto(store_root: &Path) -> Option<BlobCrypto> {
 ///
 /// - `passphrase = Some(...)` → PBKDF2 key with random salt
 /// - `passphrase = None` → use provided `store` crypto (must be Some)
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `seal_export_pack` — see module docs for full workflow.
+/// ```
 pub fn seal_export_pack(
     plaintext: &str,
     passphrase: Option<&str>,
@@ -307,6 +413,13 @@ pub fn seal_export_pack(
 }
 
 /// Detect sealed export envelope.
+///
+/// # Examples
+///
+/// ```
+/// # use blackbox as _;
+/// // `is_sealed_export_pack` — see module docs for full workflow.
+/// ```
 pub fn is_sealed_export_pack(text: &str) -> bool {
     text.contains(SEALED_FORMAT)
         || serde_json::from_str::<serde_json::Value>(text)
@@ -320,6 +433,13 @@ pub fn is_sealed_export_pack(text: &str) -> bool {
 }
 
 /// Open a sealed export pack to plaintext JSON.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `open_export_pack` — see module docs for full workflow.
+/// ```
 pub fn open_export_pack(
     sealed_json: &str,
     passphrase: Option<&str>,

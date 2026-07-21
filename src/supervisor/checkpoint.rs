@@ -7,18 +7,32 @@ use crate::workspace_manifest::{capture_workspace_manifest, ManifestLimits};
 
 /// Inputs for building the end-of-run checkpoint.
 pub struct CheckpointInputs<'a> {
+    /// Run.
     pub run: &'a Run,
+    /// End event id.
     pub end_event_id: &'a str,
+    /// Environment blob key.
     pub environment_blob_key: Option<String>,
+    /// Git commit.
     pub git_commit: Option<String>,
+    /// Git diff blob.
     pub git_diff_blob: Option<String>,
+    /// Harness session id.
     pub harness_session_id: Option<String>,
+    /// Capture workspace.
     pub capture_workspace: bool,
 }
 
 /// Build (and optionally enrich with workspace manifest) the end checkpoint.
 ///
 /// Does not insert the checkpoint — caller persists via [`TraceStore::insert_checkpoint`].
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `build_end_checkpoint` — see module docs for full workflow.
+/// ```
 pub async fn build_end_checkpoint(
     store: &dyn TraceStore,
     input: CheckpointInputs<'_>,

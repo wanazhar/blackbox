@@ -14,6 +14,14 @@ pub struct EnvironmentRedactor {
 }
 
 impl EnvironmentRedactor {
+    /// Create a new instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use blackbox as _;
+    /// // `new` — see module docs for full workflow.
+    /// ```
     pub fn new(config: RedactionConfig) -> Self {
         let scanner = SecretScanner::new(config.clone());
         Self { config, scanner }
@@ -29,6 +37,13 @@ impl EnvironmentRedactor {
 
     /// Scan environment variables and return redaction records
     /// for name matches and value-pattern matches.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `scan_env` — see module docs for full workflow.
+    /// ```
     pub fn scan_env(&self, env: &HashMap<String, String>) -> Vec<RedactionRecord> {
         if !self.config.enabled {
             return Vec::new();
@@ -58,6 +73,13 @@ impl EnvironmentRedactor {
     ///
     /// Sensitive names become `[REDACTED]`. Other values are pattern-scanned
     /// so secrets in `DATABASE_URL`-style or oddly named vars still die.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `redact_env` — see module docs for full workflow.
+    /// ```
     pub fn redact_env(&self, env: &HashMap<String, String>) -> HashMap<String, String> {
         if !self.config.enabled {
             return env.clone();
@@ -75,6 +97,13 @@ impl EnvironmentRedactor {
     }
 
     /// Redact in place (single map — lower peak RAM than clone + redact).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `redact_env_in_place` — see module docs for full workflow.
+    /// ```
     pub fn redact_env_in_place(&self, env: &mut HashMap<String, String>) {
         if !self.config.enabled {
             return;

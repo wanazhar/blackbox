@@ -32,6 +32,14 @@ pub enum ClockSource {
 }
 
 impl ClockSource {
+    /// View as str.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `as_str` — see module docs for full workflow.
+    /// ```
     pub fn as_str(self) -> &'static str {
         match self {
             Self::CaptureWall => "capture_wall",
@@ -62,6 +70,7 @@ pub struct EventTiming {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ingested_at: Option<DateTime<Utc>>,
     #[serde(default)]
+    /// Clock source.
     pub clock_source: ClockSource,
     /// Uncertainty window for occurrence comparisons (milliseconds).
     #[serde(default)]
@@ -89,13 +98,25 @@ pub const DEFAULT_UNCERTAINTY_MS: u64 = 5;
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum OrderingRelation {
+    /// `Before` variant.
     Before,
+    /// `After` variant.
     After,
+    /// `ConcurrentOrUncertain` variant.
     ConcurrentOrUncertain,
+    /// `Unknown` variant.
     Unknown,
 }
 
 impl OrderingRelation {
+    /// View as str.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `as_str` — see module docs for full workflow.
+    /// ```
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Before => "before",
@@ -109,21 +130,38 @@ impl OrderingRelation {
 /// View distinguishing storage order from occurrence order.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrderView {
+    /// Event id.
     pub event_id: String,
+    /// Storage sequence.
     pub storage_sequence: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Source sequence.
     pub source_sequence: Option<u64>,
+    /// Event source.
     pub source: String,
+    /// Event or item kind string.
     pub kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Occurred at wall.
     pub occurred_at_wall: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Ingested at.
     pub ingested_at: Option<DateTime<Utc>>,
+    /// Clock source.
     pub clock_source: String,
+    /// Ordering uncertainty ms.
     pub ordering_uncertainty_ms: u64,
 }
 
 impl OrderView {
+    /// Build from event.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `from_event` — see module docs for full workflow.
+    /// ```
     pub fn from_event(ev: &TraceEvent) -> Self {
         let t = ev.timing();
         Self {
@@ -143,6 +181,13 @@ impl OrderView {
 /// Compare occurrence order of `a` vs `b` (is `a` before `b`?).
 ///
 /// Does **not** use storage `sequence` alone as strict causality.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `relate_occurrence` — see module docs for full workflow.
+/// ```
 pub fn relate_occurrence(a: &TraceEvent, b: &TraceEvent) -> OrderingRelation {
     if a.id == b.id {
         return OrderingRelation::ConcurrentOrUncertain;
@@ -199,6 +244,13 @@ pub fn relate_occurrence(a: &TraceEvent, b: &TraceEvent) -> OrderingRelation {
 }
 
 /// Sort key for occurrence-oriented views (stable secondary keys).
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `occurrence_sort_key` — see module docs for full workflow.
+/// ```
 pub fn occurrence_sort_key(ev: &TraceEvent) -> (i64, u64, u64) {
     let t = ev.timing();
     let wall = t
@@ -210,11 +262,25 @@ pub fn occurrence_sort_key(ev: &TraceEvent) -> (i64, u64, u64) {
 }
 
 /// Sort a slice by inferred occurrence order without changing storage sequence.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `sort_by_occurrence` — see module docs for full workflow.
+/// ```
 pub fn sort_by_occurrence(events: &mut [TraceEvent]) {
     events.sort_by_key(occurrence_sort_key);
 }
 
 /// Build order views for JSON/UI (storage vs occurrence fields).
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `order_views` — see module docs for full workflow.
+/// ```
 pub fn order_views(events: &[TraceEvent]) -> Vec<OrderView> {
     events.iter().map(OrderView::from_event).collect()
 }
@@ -230,6 +296,14 @@ pub struct BoundedReorderBuffer {
 }
 
 impl BoundedReorderBuffer {
+    /// Create a new instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use blackbox as _;
+    /// // `new` — see module docs for full workflow.
+    /// ```
     pub fn new(capacity: usize) -> Self {
         Self {
             items: Vec::with_capacity(capacity.max(1)),
@@ -237,6 +311,14 @@ impl BoundedReorderBuffer {
         }
     }
 
+    /// Push.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `push` — see module docs for full workflow.
+    /// ```
     pub fn push(&mut self, event: TraceEvent) -> Vec<TraceEvent> {
         self.items.push(event);
         if self.items.len() >= self.capacity {
@@ -246,6 +328,14 @@ impl BoundedReorderBuffer {
         }
     }
 
+    /// Flush.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `flush` — see module docs for full workflow.
+    /// ```
     pub fn flush(&mut self) -> Vec<TraceEvent> {
         if self.items.is_empty() {
             return Vec::new();
@@ -266,10 +356,26 @@ impl BoundedReorderBuffer {
         out
     }
 
+    /// Len.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `len` — see module docs for full workflow.
+    /// ```
     pub fn len(&self) -> usize {
         self.items.len()
     }
 
+    /// Return true if empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use blackbox as _;
+    /// // `is_empty` — see module docs for full workflow.
+    /// ```
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()
     }

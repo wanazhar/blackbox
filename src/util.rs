@@ -5,6 +5,13 @@ use std::path::{Component, Path, PathBuf};
 /// Truncate a string to `max` bytes, appending `…` if shortened.
 ///
 /// The cut point is rounded down to a valid char boundary.
+///
+/// # Examples
+///
+/// ```
+/// # use blackbox as _;
+/// // `truncate` — see module docs for full workflow.
+/// ```
 pub fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
         s.to_string()
@@ -16,6 +23,13 @@ pub fn truncate(s: &str, max: usize) -> String {
 /// Safe run / event id for use as a filesystem or object key component.
 ///
 /// Allows UUID-like and short hex prefixes; rejects empty, separators, and `..`.
+///
+/// # Examples
+///
+/// ```
+/// # use blackbox as _;
+/// // `is_safe_id` — see module docs for full workflow.
+/// ```
 pub fn is_safe_id(id: &str) -> bool {
     let b = id.as_bytes();
     if b.is_empty() || b.len() > 128 {
@@ -29,6 +43,13 @@ pub fn is_safe_id(id: &str) -> bool {
 ///
 /// Used before writing ambient wrappers into the user's rc file so a
 /// project `config.toml` cannot inject shell metacharacters.
+///
+/// # Examples
+///
+/// ```
+/// # use blackbox as _;
+/// // `is_safe_wrap_name` — see module docs for full workflow.
+/// ```
 pub fn is_safe_wrap_name(name: &str) -> bool {
     let b = name.as_bytes();
     if b.is_empty() || b.len() > 64 {
@@ -43,6 +64,13 @@ pub fn is_safe_wrap_name(name: &str) -> bool {
 }
 
 /// Reject absolute paths and `..` / prefix components in a relative path string.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `validate_relative_path` — see module docs for full workflow.
+/// ```
 pub fn validate_relative_path(relative: &str) -> anyhow::Result<&Path> {
     if relative.is_empty() {
         anyhow::bail!("empty relative path refused");
@@ -69,6 +97,13 @@ pub fn validate_relative_path(relative: &str) -> anyhow::Result<&Path> {
 }
 
 /// Join `base` / `relative` after validating that `relative` cannot escape `base`.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `confined_join` — see module docs for full workflow.
+/// ```
 pub fn confined_join(base: &Path, relative: &str) -> anyhow::Result<PathBuf> {
     let rel = validate_relative_path(relative)?;
     let mut out = base.to_path_buf();
@@ -81,6 +116,13 @@ pub fn confined_join(base: &Path, relative: &str) -> anyhow::Result<PathBuf> {
 }
 
 /// Sync-manifest file entry: must be `runs/<safe-id>.json` only.
+///
+/// # Examples
+///
+/// ```
+/// # use blackbox as _;
+/// // `is_safe_sync_run_file` — see module docs for full workflow.
+/// ```
 pub fn is_safe_sync_run_file(file: &str) -> bool {
     let Some(name) = file.strip_prefix("runs/") else {
         return false;
@@ -95,6 +137,13 @@ pub fn is_safe_sync_run_file(file: &str) -> bool {
 }
 
 /// HTML-escape the five standard entities.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `html_escape` — see module docs for full workflow.
+/// ```
 pub fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -104,6 +153,13 @@ pub fn html_escape(s: &str) -> String {
 }
 
 /// Redact sensitive fields in a run JSON value (cwd → basename only).
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `redact_run` — see module docs for full workflow.
+/// ```
 pub fn redact_run(val: &mut serde_json::Value) {
     if let Some(obj) = val.as_object_mut() {
         if let Some(cwd) = obj.get("cwd").and_then(|v| v.as_str()) {
@@ -117,6 +173,13 @@ pub fn redact_run(val: &mut serde_json::Value) {
 }
 
 /// Redact sensitive fields in an event JSON value (raw terminal, diff_preview).
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `redact_event` — see module docs for full workflow.
+/// ```
 pub fn redact_event(val: &mut serde_json::Value) {
     if let Some(obj) = val.as_object_mut() {
         if let Some(meta) = obj.get_mut("metadata").and_then(|v| v.as_object_mut()) {
@@ -129,6 +192,13 @@ pub fn redact_event(val: &mut serde_json::Value) {
 }
 
 /// Bookkeeping event kinds that carry no semantic signal for users.
+///
+/// # Examples
+///
+/// ```
+/// # use blackbox as _;
+/// // `is_bookkeeping` — see module docs for full workflow.
+/// ```
 pub fn is_bookkeeping(kind: &str) -> bool {
     matches!(
         kind,
@@ -147,6 +217,13 @@ pub fn is_bookkeeping(kind: &str) -> bool {
 }
 
 /// Return the first 8 characters of an id (or the whole string if shorter).
+///
+/// # Examples
+///
+/// ```
+/// # use blackbox as _;
+/// // `short_id` — see module docs for full workflow.
+/// ```
 pub fn short_id(id: &str) -> &str {
     &id[..8.min(id.len())]
 }
@@ -155,6 +232,13 @@ pub fn short_id(id: &str) -> &str {
 ///
 /// Segments are joined with `"; "`. Empty parts are skipped. Duplicate exact
 /// segments already present in `existing` are not re-appended.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `merge_run_notes` — see module docs for full workflow.
+/// ```
 pub fn merge_run_notes(existing: Option<String>, parts: &[&str]) -> String {
     let mut segments: Vec<String> = existing
         .unwrap_or_default()

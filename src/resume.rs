@@ -8,6 +8,13 @@ use crate::core::event::TraceEvent;
 use crate::core::run::Run;
 
 /// Resolve harness adapter id from run notes (`adapter:claude`, etc.).
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `adapter_id_from_run` — see module docs for full workflow.
+/// ```
 pub fn adapter_id_from_run(run: &Run) -> Option<&str> {
     let notes = run.notes.as_deref()?;
     for part in notes.split(';') {
@@ -20,6 +27,13 @@ pub fn adapter_id_from_run(run: &Run) -> Option<&str> {
 }
 
 /// Session id from notes (`session:…`) or checkpoints / events.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `discover_session` — see module docs for full workflow.
+/// ```
 pub fn discover_session(
     run: &Run,
     events: &[TraceEvent],
@@ -60,6 +74,13 @@ pub fn discover_session(
 }
 
 /// Build a resume command if we know the harness + session.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `resume_command` — see module docs for full workflow.
+/// ```
 pub fn resume_command(
     run: &Run,
     events: &[TraceEvent],
@@ -93,6 +114,13 @@ pub fn resume_command(
 }
 
 /// Pretty-print a resume command line.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `format_command` — see module docs for full workflow.
+/// ```
 pub fn format_command(cmd: &[String]) -> String {
     cmd.iter()
         .map(|a| {

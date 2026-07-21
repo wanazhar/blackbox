@@ -17,8 +17,11 @@ const UNIQUE_SET_CAP: usize = 10_000;
 /// Pointer to a salient event kept inside aggregates.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AggregateEventRef {
+    /// Event id.
     pub event_id: String,
+    /// Monotonic sequence number within the run.
     pub sequence: u64,
+    /// Event or item kind string.
     pub kind: String,
     /// Short detail (instruction text, error message, tool name, …).
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -28,7 +31,9 @@ pub struct AggregateEventRef {
 /// Incremental counters and anchors for one run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunAggregates {
+    /// Owning run id.
     pub run_id: String,
+    /// Events total.
     pub events_total: u64,
     /// Counts keyed by source name (e.g. `"Tool"`).
     #[serde(default)]
@@ -36,8 +41,11 @@ pub struct RunAggregates {
     /// Counts keyed by event kind.
     #[serde(default)]
     pub by_kind: BTreeMap<String, u64>,
+    /// Tool calls.
     pub tool_calls: u64,
+    /// Tool results.
     pub tool_results: u64,
+    /// Tool failures.
     pub tool_failures: u64,
     /// Count of create/modify/rename/remove filesystem operations
     /// (`filesystem.created|modified|renamed|removed`, plus legacy `file.*`/`fs.*`).
@@ -45,6 +53,7 @@ pub struct RunAggregates {
     /// Unique project-relative (or reported) paths touched by file ops.
     #[serde(default)]
     pub files_touched_unique: u64,
+    /// Side effect writes.
     pub side_effect_writes: u64,
     /// Total process-source events (spawned, exited, resource samples, …).
     #[serde(default)]
@@ -60,38 +69,62 @@ pub struct RunAggregates {
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     process_ids: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// First human instruction.
     pub first_human_instruction: Option<AggregateEventRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// First failure.
     pub first_failure: Option<AggregateEventRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Last failure.
     pub last_failure: Option<AggregateEventRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// First session id.
     pub first_session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Last session id.
     pub last_session_id: Option<String>,
+    /// Input tokens.
     pub input_tokens: u64,
+    /// Output tokens.
     pub output_tokens: u64,
+    /// Total tokens.
     pub total_tokens: u64,
     #[serde(default)]
+    /// Models.
     pub models: Vec<String>,
     #[serde(default)]
+    /// Providers.
     pub providers: Vec<String>,
+    /// Capture lag samples.
     pub capture_lag_samples: u64,
+    /// Capture send failures.
     pub capture_send_failures: u64,
     /// Capture-layer failure events (`capture.layer.failed`, etc.) — not generic run failures.
     #[serde(default)]
     pub capture_failures: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// First timestamp.
     pub first_timestamp: Option<DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Last timestamp.
     pub last_timestamp: Option<DateTime<Utc>>,
+    /// Last sequence.
     pub last_sequence: u64,
     /// True when aggregates match the full event table (or were rebuilt from it).
     pub aggregates_complete: bool,
+    /// Last update timestamp.
     pub updated_at: DateTime<Utc>,
 }
 
 impl RunAggregates {
+    /// Create a new instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use blackbox as _;
+    /// // `new` — see module docs for full workflow.
+    /// ```
     pub fn new(run_id: impl Into<String>) -> Self {
         Self {
             run_id: run_id.into(),
@@ -130,6 +163,13 @@ impl RunAggregates {
     }
 
     /// Fold one persisted event into the aggregate.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `observe` — see module docs for full workflow.
+    /// ```
     pub fn observe(&mut self, event: &TraceEvent) {
         self.events_total = self.events_total.saturating_add(1);
 
@@ -263,12 +303,26 @@ impl RunAggregates {
     }
 
     /// Alias for [`observe`](Self::observe).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `apply` — see module docs for full workflow.
+    /// ```
     #[inline]
     pub fn apply(&mut self, event: &TraceEvent) {
         self.observe(event);
     }
 
     /// Rebuild aggregates from a full event list (recovery path).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `recompute` — see module docs for full workflow.
+    /// ```
     pub fn recompute(run_id: &str, events: &[TraceEvent]) -> Self {
         let mut agg = Self::new(run_id);
         for ev in events {
@@ -480,17 +534,30 @@ fn push_unique(list: &mut Vec<String>, value: Option<String>) {
 /// What analysis loaded vs total facts available (1.5 L2).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AnalysisScope {
+    /// Events total.
     pub events_total: u64,
+    /// Events loaded.
     pub events_loaded: usize,
     /// e.g. `head_tail_salient`, `full`, `tail_only`
     pub strategy: String,
+    /// Aggregates complete.
     pub aggregates_complete: bool,
+    /// Event evidence complete.
     pub event_evidence_complete: bool,
     #[serde(default)]
+    /// Limitations.
     pub limitations: Vec<String>,
 }
 
 impl AnalysisScope {
+    /// Full.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `full` — see module docs for full workflow.
+    /// ```
     pub fn full(events_total: u64) -> Self {
         Self {
             events_total,

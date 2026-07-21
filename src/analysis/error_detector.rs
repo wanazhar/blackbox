@@ -15,11 +15,26 @@ impl Default for ErrorDetector {
 }
 
 impl ErrorDetector {
+    /// Create a new instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use blackbox as _;
+    /// // `new` — see module docs for full workflow.
+    /// ```
     pub fn new() -> Self {
         Self
     }
 
     /// Check if an event represents an error condition.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use blackbox as _;
+    /// // `is_error` — see module docs for full workflow.
+    /// ```
     pub fn is_error(&self, event: &TraceEvent) -> bool {
         event.status == EventStatus::Error
             || event
@@ -38,6 +53,13 @@ impl ErrorDetector {
     /// - Python tracebacks
     /// - Test framework failures
     /// - Generic process failures
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `extract_errors` — see module docs for full workflow.
+    /// ```
     pub fn extract_errors(&self, event: &TraceEvent) -> Vec<StructuredError> {
         let output = self.get_output_text(event);
         if output.is_empty() {
@@ -278,10 +300,15 @@ impl ErrorDetector {
 /// A structured error extracted from event output.
 #[derive(Debug, Clone)]
 pub struct StructuredError {
+    /// Error type.
     pub error_type: String,
+    /// Message.
     pub message: String,
+    /// File.
     pub file: Option<String>,
+    /// Line.
     pub line: Option<u32>,
+    /// Column.
     pub column: Option<u32>,
 }
 

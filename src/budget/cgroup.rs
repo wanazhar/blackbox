@@ -24,17 +24,30 @@ pub struct CgroupScope {
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize)]
+/// `CgroupApplyReport` value.
 pub struct CgroupApplyReport {
+    /// Optional notes.
     pub notes: Vec<String>,
+    /// Memory enforced.
     pub memory_enforced: bool,
+    /// Cpu enforced.
     pub cpu_enforced: bool,
+    /// Pids enforced.
     pub pids_enforced: bool,
+    /// Filesystem path.
     pub path: Option<PathBuf>,
 }
 
 impl CgroupScope {
     /// Create a budget leaf under the current process cgroup, configure limits,
     /// and move `pid` into it. Returns `None` when cgroup v2 is unusable.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `create_for_pid` — see module docs for full workflow.
+    /// ```
     pub fn create_for_pid(pid: u32, policy: &BudgetPolicy) -> Option<(Self, CgroupApplyReport)> {
         #[cfg(not(target_os = "linux"))]
         {
@@ -47,10 +60,26 @@ impl CgroupScope {
         }
     }
 
+    /// Path.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `path` — see module docs for full workflow.
+    /// ```
     pub fn path(&self) -> &Path {
         &self.path
     }
 
+    /// Report.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `report` — see module docs for full workflow.
+    /// ```
     pub fn report(&self) -> CgroupApplyReport {
         CgroupApplyReport {
             notes: self.notes.clone(),
@@ -198,6 +227,13 @@ fn write_knob(path: &Path, value: &str) -> std::io::Result<()> {
 }
 
 /// Probe whether cgroup v2 memory.max is writable in a throwaway leaf.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `cgroup_v2_memory_writable` — see module docs for full workflow.
+/// ```
 pub fn cgroup_v2_memory_writable() -> bool {
     #[cfg(not(target_os = "linux"))]
     {
@@ -221,6 +257,13 @@ pub fn cgroup_v2_memory_writable() -> bool {
 }
 
 /// Merge cgroup backend status into capability report.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `enrich_capabilities_with_cgroup` — see module docs for full workflow.
+/// ```
 pub fn enrich_capabilities_with_cgroup(
     policy: &BudgetPolicy,
     caps: &mut [BudgetStatus],

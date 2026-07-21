@@ -37,6 +37,14 @@ pub struct TerminalCoalescer {
 }
 
 impl TerminalCoalescer {
+    /// Create a new instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use blackbox as _;
+    /// // `new` — see module docs for full workflow.
+    /// ```
     pub fn new(policy: CoalescePolicy, store_raw: bool) -> Self {
         Self {
             policy,
@@ -50,6 +58,13 @@ impl TerminalCoalescer {
     }
 
     /// Push a processed chunk. Returns a flushed segment when ready.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `push` — see module docs for full workflow.
+    /// ```
     pub fn push(
         &mut self,
         safe_text: &str,
@@ -84,6 +99,13 @@ impl TerminalCoalescer {
     }
 
     /// Flush remaining buffer (end of stream).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `finish` — see module docs for full workflow.
+    /// ```
     pub fn finish(&mut self) -> Option<CoalescedSegment> {
         if self.text.is_empty() && self.raw_bytes == 0 {
             None
@@ -114,11 +136,17 @@ impl TerminalCoalescer {
 /// One coalesced terminal segment ready to persist.
 #[derive(Debug)]
 pub struct CoalescedSegment {
+    /// Text.
     pub text: String,
+    /// Preview.
     pub preview: String,
+    /// Raw bytes.
     pub raw_bytes: usize,
+    /// Chunks.
     pub chunks: u32,
+    /// Redactions.
     pub redactions: u64,
+    /// Insecure raw.
     pub insecure_raw: Vec<u8>,
 }
 

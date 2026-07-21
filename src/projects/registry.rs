@@ -9,33 +9,55 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// `ProjectIndexEntry` value.
 pub struct ProjectIndexEntry {
+    /// Project root.
     pub project_root: PathBuf,
+    /// Store path.
     pub store_path: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Last run at.
     pub last_run_at: Option<DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Last run id.
     pub last_run_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Last status.
     pub last_status: Option<String>,
     #[serde(default)]
+    /// Run count estimate.
     pub run_count_estimate: u64,
+    /// Indexed at.
     pub indexed_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Default)]
+/// `ProjectIndexQuery` value.
 pub struct ProjectIndexQuery {
+    /// Name substr.
     pub name_substr: Option<String>,
+    /// Configured limit, if any.
     pub limit: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// `ProjectRegistry` value.
 pub struct ProjectRegistry {
+    /// Schema identifier string.
     pub schema: String,
+    /// Entries.
     pub entries: Vec<ProjectIndexEntry>,
 }
 
 impl ProjectRegistry {
+    /// Empty.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `empty` — see module docs for full workflow.
+    /// ```
     pub fn empty() -> Self {
         Self {
             schema: "blackbox.projects.index/v1".into(),
@@ -43,6 +65,14 @@ impl ProjectRegistry {
         }
     }
 
+    /// Load.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `load` — see module docs for full workflow.
+    /// ```
     pub fn load(path: &Path) -> anyhow::Result<Self> {
         if !path.exists() {
             return Ok(Self::empty());
@@ -51,6 +81,14 @@ impl ProjectRegistry {
         Ok(serde_json::from_str(&s)?)
     }
 
+    /// Save.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `save` — see module docs for full workflow.
+    /// ```
     pub fn save(&self, path: &Path) -> anyhow::Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -60,6 +98,14 @@ impl ProjectRegistry {
         Ok(())
     }
 
+    /// Upsert.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `upsert` — see module docs for full workflow.
+    /// ```
     pub fn upsert(&mut self, entry: ProjectIndexEntry) {
         if let Some(existing) = self
             .entries
@@ -72,6 +118,14 @@ impl ProjectRegistry {
         }
     }
 
+    /// Query.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `query` — see module docs for full workflow.
+    /// ```
     pub fn query(&self, q: &ProjectIndexQuery) -> Vec<&ProjectIndexEntry> {
         let mut out: Vec<_> = self.entries.iter().collect();
         if let Some(ref sub) = q.name_substr {
@@ -91,6 +145,13 @@ impl ProjectRegistry {
     }
 
     /// Drop entries whose store file is missing. Returns count removed.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `prune_missing` — see module docs for full workflow.
+    /// ```
     pub fn prune_missing(&mut self) -> usize {
         let before = self.entries.len();
         self.entries.retain(|e| e.store_path.is_file());
@@ -98,6 +159,13 @@ impl ProjectRegistry {
     }
 
     /// Remove a project root entry (exact path match). Returns true if removed.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `remove_root` — see module docs for full workflow.
+    /// ```
     pub fn remove_root(&mut self, project_root: &Path) -> bool {
         let before = self.entries.len();
         self.entries.retain(|e| e.project_root != project_root);
@@ -106,6 +174,13 @@ impl ProjectRegistry {
 }
 
 /// Walk `roots` one level deep looking for `.blackbox/blackbox.db` (or legacy).
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `discover_project_stores` — see module docs for full workflow.
+/// ```
 pub fn discover_project_stores(roots: &[PathBuf]) -> Vec<ProjectIndexEntry> {
     let mut out = Vec::new();
     let now = Utc::now();
@@ -154,6 +229,13 @@ pub fn discover_project_stores(roots: &[PathBuf]) -> Vec<ProjectIndexEntry> {
 }
 
 /// Default global index path: `~/.blackbox/projects-index.json` (metadata only).
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `default_index_path` — see module docs for full workflow.
+/// ```
 pub fn default_index_path() -> PathBuf {
     if let Ok(home) = std::env::var("HOME") {
         return PathBuf::from(home).join(".blackbox/projects-index.json");

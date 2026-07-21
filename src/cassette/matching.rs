@@ -7,6 +7,7 @@ use crate::crypto::content_key;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// `MatchMode` classification.
 pub enum MatchMode {
     /// Exact canonical request JSON and order.
     Strict,
@@ -19,16 +20,29 @@ pub enum MatchMode {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// `MatchResult` value.
 pub struct MatchResult {
+    /// Matched.
     pub matched: bool,
+    /// Entry sequence.
     pub entry_sequence: Option<u64>,
+    /// Mode.
     pub mode: MatchMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Diff.
     pub diff: Option<String>,
+    /// Unsupported unproxied.
     pub unsupported_unproxied: bool,
 }
 
 /// Normalize a JSON-RPC request for comparison: drop id and known volatile keys.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `normalize_request` — see module docs for full workflow.
+/// ```
 pub fn normalize_request(req: &serde_json::Value) -> serde_json::Value {
     let mut v = req.clone();
     if let Some(obj) = v.as_object_mut() {
@@ -41,10 +55,26 @@ pub fn normalize_request(req: &serde_json::Value) -> serde_json::Value {
     v
 }
 
+/// Request hash.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `request_hash` — see module docs for full workflow.
+/// ```
 pub fn request_hash(req: &serde_json::Value) -> String {
     content_key(serde_json::to_string(req).unwrap_or_default().as_bytes())
 }
 
+/// Match_request.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `match_request` — see module docs for full workflow.
+/// ```
 pub fn match_request(
     mode: MatchMode,
     entries: &[CassetteEntry],

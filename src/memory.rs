@@ -20,53 +20,93 @@ use crate::storage::TraceStore;
 use crate::summary::{build_summary, SummaryOptions, SummaryView};
 use crate::util::{short_id, truncate};
 
+/// `MEMORY_SCHEMA` constant.
 pub const MEMORY_SCHEMA: &str = "blackbox.memory/v1";
+/// `MAX_RUNS_SCANNED` constant.
 pub const MAX_RUNS_SCANNED: usize = 3;
+/// `MAX_EVENTS_PER_RUN` constant.
 pub const MAX_EVENTS_PER_RUN: usize = 2000;
 const PORCELAIN_TIMEOUT_MS: u64 = 500;
 const HARD_DEGRADE_MS: u64 = 2000;
 
 #[derive(Debug, Clone, Serialize)]
+/// `ProjectMemoryPack` value.
 pub struct ProjectMemoryPack {
+    /// Schema identifier string.
     pub schema: String,
+    /// Purpose.
     pub purpose: String,
+    /// Degraded.
     pub degraded: bool,
+    /// Project root.
     pub project_root: String,
+    /// Store db.
     pub store_db: String,
+    /// Generated at.
     pub generated_at: DateTime<Utc>,
+    /// Continuity mode.
     pub continuity_mode: String,
+    /// Headline.
     pub headline: String,
+    /// Next action.
     pub next_action: String,
+    /// Attention reason.
     pub attention_reason: String,
+    /// Attention level.
     pub attention_level: String,
+    /// Intent.
     pub intent: IntentView,
+    /// Claims.
     pub claims: ClaimsSummaryView,
+    /// Last run.
     pub last_run: Option<RunPointer>,
+    /// Predecessor run.
     pub predecessor_run: Option<RunPointer>,
+    /// Focus run id.
     pub focus_run_id: Option<String>,
+    /// Files touched.
     pub files_touched: Vec<String>,
+    /// Destructive paths.
     pub destructive_paths: Vec<String>,
+    /// Side effects top.
     pub side_effects_top: Vec<SideEffectSample>,
+    /// Secret redaction events.
     pub secret_redaction_events: u32,
+    /// Git.
     pub git: GitMemoryView,
+    /// Failed tools.
     pub failed_tools: Vec<FailedTool>,
+    /// Errors top.
     pub errors_top: Vec<ErrorTop>,
+    /// Summary.
     pub summary: Option<SummaryView>,
+    /// Last tools.
     pub last_tools: Vec<String>,
+    /// Transcript tail.
     pub transcript_tail: Option<String>,
+    /// Resume command.
     pub resume_command: Option<Vec<String>>,
+    /// Approx tokens.
     pub approx_tokens: usize,
+    /// Truncated.
     pub truncated: bool,
+    /// Build ms.
     pub build_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
+/// `IntentView` value.
 pub struct IntentView {
+    /// Goal.
     pub goal: Option<String>,
+    /// Plan summary.
     pub plan_summary: Option<String>,
+    /// Open items.
     pub open_items: Vec<String>,
+    /// Do not retry.
     pub do_not_retry: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Optional notes.
     pub notes: Option<String>,
 }
 
@@ -83,41 +123,62 @@ impl From<&IntentState> for IntentView {
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
+/// `ClaimsSummaryView` value.
 pub struct ClaimsSummaryView {
     /// Whole-project exclusive claim.
     pub active: Option<ClaimPointer>,
     /// Non-overlapping path-scoped claims.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub path_claims: Vec<ClaimPointer>,
+    /// Conflicts.
     pub conflicts: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
+/// `GitMemoryView` value.
 pub struct GitMemoryView {
+    /// Dirty.
     pub dirty: bool,
+    /// Branch.
     pub branch: Option<String>,
+    /// Head.
     pub head: Option<String>,
+    /// Summary.
     pub summary: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Porcelain hash.
     pub porcelain_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// `SideEffectSample` value.
 pub struct SideEffectSample {
+    /// Rank.
     pub rank: u8,
+    /// Side effect.
     pub side_effect: String,
+    /// Event or item kind string.
     pub kind: String,
+    /// Detail.
     pub detail: String,
+    /// Monotonic sequence number within the run.
     pub sequence: u64,
+    /// Owning run id.
     pub run_id: String,
 }
 
 #[derive(Debug, Clone)]
+/// `MemoryBuildOptions` value.
 pub struct MemoryBuildOptions {
+    /// Max tokens.
     pub max_tokens: usize,
+    /// Purpose.
     pub purpose: String,
+    /// Continuity mode.
     pub continuity_mode: String,
+    /// Project root.
     pub project_root: PathBuf,
+    /// Store db.
     pub store_db: PathBuf,
     /// Skip porcelain when attention is none (micro-opt for tiny ok packs).
     pub skip_porcelain_if_none: bool,
@@ -178,6 +239,13 @@ fn porcelain_line_is_blackbox_only(line: &str) -> bool {
 }
 
 /// Live git status --porcelain with timeout (500ms). dirty=false on fail.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `live_git_status` — see module docs for full workflow.
+/// ```
 pub fn live_git_status(project_root: &Path) -> GitMemoryView {
     let mut view = GitMemoryView::default();
     let start = Instant::now();
@@ -293,6 +361,13 @@ fn tool_failure_detail(ev: &TraceEvent) -> String {
 }
 
 /// Build project memory pack from sticky + store (or degraded sticky-only).
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `build_project_memory` — see module docs for full workflow.
+/// ```
 pub async fn build_project_memory(
     store: Option<&dyn TraceStore>,
     sticky: &ProjectState,
@@ -762,6 +837,13 @@ fn command_from_event(ev: &TraceEvent) -> Option<String> {
 }
 
 /// Budget shrink order per design (transcript first → … → never drop headline/intent core).
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `shrink_pack` — see module docs for full workflow.
+/// ```
 pub fn shrink_pack(pack: &mut ProjectMemoryPack, max_tokens: usize) {
     loop {
         let json = serde_json::to_string(pack).unwrap_or_default();
@@ -863,6 +945,13 @@ pub fn shrink_pack(pack: &mut ProjectMemoryPack, max_tokens: usize) {
 }
 
 /// Format MEMORY.md human text from pack.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `format_memory_markdown` — see module docs for full workflow.
+/// ```
 pub fn format_memory_markdown(pack: &ProjectMemoryPack) -> String {
     let mut out = String::new();
     out.push_str("# blackbox project memory\n\n");
@@ -972,6 +1061,13 @@ pub fn format_memory_markdown(pack: &ProjectMemoryPack) -> String {
 }
 
 /// Write MEMORY.md + MEMORY.json (+ optional RESUME identical copies).
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `write_memory_files` — see module docs for full workflow.
+/// ```
 pub fn write_memory_files(
     blackbox_root: &Path,
     pack: &ProjectMemoryPack,
@@ -1008,6 +1104,13 @@ pub fn write_memory_files(
 }
 
 /// Compact preamble for argv injection (untrusted delimiters).
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `compact_memory_preamble` — see module docs for full workflow.
+/// ```
 pub fn compact_memory_preamble(pack: &ProjectMemoryPack, memory_file: &Path) -> String {
     let claim = pack
         .claims

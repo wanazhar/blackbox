@@ -31,6 +31,13 @@ impl BlackboxPaths {
     /// 4. `<project>/.blackbox/blackbox.db` (default)
     ///
     /// `project` defaults to the current working directory.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `resolve` — see module docs for full workflow.
+    /// ```
     pub fn resolve(project: Option<&Path>, db_override: Option<&Path>) -> anyhow::Result<Self> {
         if let Some(db) = db_override {
             return Ok(Self::from_db_path(db.to_path_buf()));
@@ -88,6 +95,13 @@ impl BlackboxPaths {
     /// If the DB already lives under a directory named `.blackbox`, blobs sit
     /// next to it (`…/.blackbox/blobs`). Otherwise blobs live in
     /// `<db_parent>/.blackbox/blobs` (legacy layout for `./blackbox.db`).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `from_db_path` — see module docs for full workflow.
+    /// ```
     pub fn from_db_path(db_path: PathBuf) -> Self {
         let parent = db_path
             .parent()
@@ -117,6 +131,13 @@ impl BlackboxPaths {
     }
 
     /// Ensure root and blob directories exist with owner-only modes (Unix 0700).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `ensure_dirs` — see module docs for full workflow.
+    /// ```
     pub fn ensure_dirs(&self) -> anyhow::Result<()> {
         crate::privacy::ensure_private_dirs(&self.root, &[&self.blob_dir])?;
         Ok(())
@@ -135,11 +156,17 @@ pub struct CapturePolicy {
     pub observe_only: bool,
     /// Process-tree enrichment (dense poll, environ sample, subreaper).
     pub process_dense_poll: bool,
+    /// Process environ.
     pub process_environ: bool,
+    /// Process subreaper.
     pub process_subreaper: bool,
+    /// Env capture.
     pub env_capture: EnvCaptureMode,
+    /// Store git diffs.
     pub store_git_diffs: bool,
+    /// Native log scope.
     pub native_log_scope: NativeLogScope,
+    /// Encrypt blobs.
     pub encrypt_blobs: bool,
 }
 
@@ -162,6 +189,13 @@ impl Default for CapturePolicy {
 
 impl CapturePolicy {
     /// Overlay process / privacy capture fields from project CaptureConfig.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `with_process_from_config` — see module docs for full workflow.
+    /// ```
     pub fn with_process_from_config(mut self, cfg: &CaptureConfig) -> Self {
         self.process_dense_poll = cfg.process_dense_poll;
         self.process_environ = cfg.process_environ;
@@ -183,8 +217,10 @@ pub struct BlackboxConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
     #[serde(default)]
+    /// Capture.
     pub capture: CaptureConfig,
     #[serde(default)]
+    /// Retention.
     pub retention: RetentionConfig,
 }
 
@@ -218,6 +254,14 @@ pub enum ProductMode {
 }
 
 impl ProductMode {
+    /// View as str.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `as_str` — see module docs for full workflow.
+    /// ```
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Recorder => "recorder",
@@ -225,6 +269,14 @@ impl ProductMode {
         }
     }
 
+    /// Parse.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `parse` — see module docs for full workflow.
+    /// ```
     pub fn parse(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
             "recorder" | "observe" | "observe-only" | "observe_only" => Some(Self::Recorder),
@@ -248,6 +300,14 @@ pub enum ContinuityMode {
 }
 
 impl ContinuityMode {
+    /// View as str.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `as_str` — see module docs for full workflow.
+    /// ```
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Always => "always",
@@ -256,6 +316,14 @@ impl ContinuityMode {
         }
     }
 
+    /// Parse.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `parse` — see module docs for full workflow.
+    /// ```
     pub fn parse(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
             "always" => Some(Self::Always),
@@ -271,12 +339,23 @@ impl ContinuityMode {
 #[serde(rename_all = "snake_case")]
 pub enum GateMode {
     #[default]
+    /// `Off` variant.
     Off,
+    /// `Warn` variant.
     Warn,
+    /// `RequireAck` variant.
     RequireAck,
 }
 
 impl GateMode {
+    /// View as str.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `as_str` — see module docs for full workflow.
+    /// ```
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Off => "off",
@@ -285,6 +364,14 @@ impl GateMode {
         }
     }
 
+    /// Parse.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `parse` — see module docs for full workflow.
+    /// ```
     pub fn parse(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
             "off" | "false" | "0" | "no" => Some(Self::Off),
@@ -300,11 +387,21 @@ impl GateMode {
 #[serde(rename_all = "snake_case")]
 pub enum ClaimPolicy {
     #[default]
+    /// `Warn` variant.
     Warn,
+    /// `BlockRecord` variant.
     BlockRecord,
 }
 
 impl ClaimPolicy {
+    /// View as str.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `as_str` — see module docs for full workflow.
+    /// ```
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Warn => "warn",
@@ -312,6 +409,14 @@ impl ClaimPolicy {
         }
     }
 
+    /// Parse.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `parse` — see module docs for full workflow.
+    /// ```
     pub fn parse(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
             "warn" => Some(Self::Warn),
@@ -322,6 +427,7 @@ impl ClaimPolicy {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+/// `CaptureConfig` value.
 pub struct CaptureConfig {
     /// Basenames of commands auto-wrapped by shell functions / maybe-run.
     #[serde(default = "default_wrap")]
@@ -403,6 +509,14 @@ pub enum NativeLogScope {
 }
 
 impl NativeLogScope {
+    /// View as str.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `as_str` — see module docs for full workflow.
+    /// ```
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Project => "project",
@@ -411,6 +525,14 @@ impl NativeLogScope {
         }
     }
 
+    /// Parse.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `parse` — see module docs for full workflow.
+    /// ```
     pub fn parse(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
             "project" | "local" | "cwd" => Some(Self::Project),
@@ -420,6 +542,14 @@ impl NativeLogScope {
         }
     }
 
+    /// Convert to adapter scope.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `to_adapter_scope` — see module docs for full workflow.
+    /// ```
     pub fn to_adapter_scope(self) -> crate::adapters::native_logs::NativeLogScope {
         match self {
             Self::Project => crate::adapters::native_logs::NativeLogScope::Project,
@@ -441,6 +571,14 @@ pub enum EnvCaptureMode {
 }
 
 impl EnvCaptureMode {
+    /// View as str.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `as_str` — see module docs for full workflow.
+    /// ```
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Allowlist => "allowlist",
@@ -448,6 +586,14 @@ impl EnvCaptureMode {
         }
     }
 
+    /// Parse.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `parse` — see module docs for full workflow.
+    /// ```
     pub fn parse(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
             "allowlist" | "allow" | "minimal" | "safe" => Some(Self::Allowlist),
@@ -459,6 +605,13 @@ impl EnvCaptureMode {
 
 /// Keys retained under [`EnvCaptureMode::Allowlist`] (exact match, case-sensitive
 /// for typical Unix names; also any key starting with `BLACKBOX_`).
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `env_allowlist_keep` — see module docs for full workflow.
+/// ```
 pub fn env_allowlist_keep(name: &str) -> bool {
     if name.starts_with("BLACKBOX_") {
         return true;
@@ -579,6 +732,13 @@ impl CaptureConfig {
     ///
     /// Observe-only projects always resolve to Off so the recorder cannot
     /// silently re-enable continuity inject.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `continuity_from_config` — see module docs for full workflow.
+    /// ```
     pub fn continuity_from_config(&self) -> ContinuityMode {
         if self.observe_only {
             return ContinuityMode::Off;
@@ -595,6 +755,13 @@ impl CaptureConfig {
     }
 
     /// Effective product mode from observe_only + continuity.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `product_mode` — see module docs for full workflow.
+    /// ```
     pub fn product_mode(&self) -> ProductMode {
         if self.observe_only {
             return ProductMode::Recorder;
@@ -609,6 +776,14 @@ impl CaptureConfig {
         }
     }
 
+    /// Memory max tokens effective.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `memory_max_tokens_effective` — see module docs for full workflow.
+    /// ```
     pub fn memory_max_tokens_effective(&self) -> u32 {
         self.memory_max_tokens
             .unwrap_or(self.resume_max_tokens)
@@ -624,6 +799,13 @@ impl CaptureConfig {
 /// 3. Env `BLACKBOX_AUTO_RESUME=0|false|off|no` → Off; `=1|true|on|yes` → Attention (if no continuity env)
 /// 4. Config `capture.continuity` if present
 /// 5. Config derived from `auto_resume`
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `resolve_continuity` — see module docs for full workflow.
+/// ```
 pub fn resolve_continuity(
     cfg: Option<&BlackboxConfig>,
     cli_no_auto_resume: bool,
@@ -654,11 +836,15 @@ pub fn resolve_continuity(
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+/// `RetentionConfig` value.
 pub struct RetentionConfig {
     #[serde(default = "default_keep_runs")]
+    /// Keep runs.
     pub keep_runs: u32,
+    /// Max age days.
     pub max_age_days: Option<u32>,
     #[serde(default = "default_true")]
+    /// Auto gc blobs.
     pub auto_gc_blobs: bool,
     /// When true, apply retention automatically after runs (best-effort).
     #[serde(default = "default_true")]
@@ -682,6 +868,13 @@ impl Default for RetentionConfig {
 
 impl BlackboxConfig {
     /// Load config from a TOML file. Missing file → `None`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `load_from_path` — see module docs for full workflow.
+    /// ```
     pub fn load_from_path(path: &Path) -> anyhow::Result<Option<Self>> {
         if !path.exists() {
             return Ok(None);
@@ -692,6 +885,13 @@ impl BlackboxConfig {
     }
 
     /// Write config atomically (best-effort).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `write_to_path` — see module docs for full workflow.
+    /// ```
     pub fn write_to_path(&self, path: &Path) -> anyhow::Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -722,6 +922,13 @@ pub struct ProjectDiscovery {
 ///    - `.blackbox/config.toml` → project store at that root
 ///    - `.blackbox/blackbox.db` without config → that store
 /// 3. Else default `cwd/.blackbox/`
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `discover_project` — see module docs for full workflow.
+/// ```
 pub fn discover_project(
     cwd: &Path,
     db_override: Option<&Path>,

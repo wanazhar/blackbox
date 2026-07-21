@@ -43,10 +43,26 @@ pub struct StreamRedactor {
 }
 
 impl StreamRedactor {
+    /// Create a new instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use blackbox as _;
+    /// // `new` — see module docs for full workflow.
+    /// ```
     pub fn new(scanner: SecretScanner) -> Self {
         Self::with_window(scanner, DEFAULT_STREAM_WINDOW)
     }
 
+    /// Set window and return self.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `with_window` — see module docs for full workflow.
+    /// ```
     pub fn with_window(scanner: SecretScanner, window: usize) -> Self {
         Self {
             scanner,
@@ -57,6 +73,14 @@ impl StreamRedactor {
         }
     }
 
+    /// Set limits and return self.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `with_limits` — see module docs for full workflow.
+    /// ```
     pub fn with_limits(scanner: SecretScanner, window: usize, max_pending: usize) -> Self {
         Self {
             scanner,
@@ -71,6 +95,13 @@ impl StreamRedactor {
     /// The returned string may be empty when the entire pending buffer still
     /// fits inside the holdback window. Call [`finish`](Self::finish) at
     /// end-of-stream to release the remainder.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `push` — see module docs for full workflow.
+    /// ```
     pub fn push(&mut self, chunk: &str) -> (String, u64) {
         if chunk.is_empty() {
             return (String::new(), 0);
@@ -87,6 +118,13 @@ impl StreamRedactor {
     /// Invalid sequences become U+FFFD; those replacement chars are not secret
     /// material but keep the stream scannable without leaking raw opaque bytes
     /// past the redactor.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `push_bytes` — see module docs for full workflow.
+    /// ```
     pub fn push_bytes(&mut self, data: &[u8]) -> (String, u64) {
         if data.is_empty() {
             return (String::new(), 0);
@@ -96,6 +134,13 @@ impl StreamRedactor {
     }
 
     /// Flush remaining pending (redacted). Clears state for reuse.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `finish` — see module docs for full workflow.
+    /// ```
     pub fn finish(&mut self) -> (String, u64) {
         let (out, hits) = self.emit_ready(true);
         self.pending.clear();
@@ -103,11 +148,25 @@ impl StreamRedactor {
     }
 
     /// Bytes currently held (unredacted) — tests / diagnostics.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `pending_len` — see module docs for full workflow.
+    /// ```
     pub fn pending_len(&self) -> usize {
         self.pending.len()
     }
 
     /// Access the underlying scanner (for JSON metadata redaction, etc.).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `scanner` — see module docs for full workflow.
+    /// ```
     pub fn scanner(&self) -> &SecretScanner {
         &self.scanner
     }

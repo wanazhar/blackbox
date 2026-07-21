@@ -19,20 +19,29 @@ pub const SCORE_SCHEMA: &str = "blackbox.score/v1";
 pub struct EvalScore {
     /// Always `blackbox.score/v1`.
     pub schema: String,
+    /// Owning run id.
     pub run_id: String,
+    /// Short id.
     pub short_id: String,
     /// Lowercase status debug name (e.g. `succeeded`, `failed`).
     pub status: String,
+    /// Process exit code, if known.
     pub exit_code: Option<i32>,
     /// True when status is Failed/Cancelled or exit_code != 0.
     pub failed: bool,
+    /// Duration in milliseconds.
     pub duration_ms: Option<u64>,
+    /// Adapter.
     pub adapter: Option<String>,
+    /// Associated tags.
     pub tags: Vec<String>,
+    /// Display name.
     pub name: Option<String>,
+    /// Command argv.
     pub command: Vec<String>,
     /// Postmortem headline (may be empty on trivial success).
     pub headline: String,
+    /// Next action.
     pub next_action: String,
     /// Total anomaly markers.
     pub anomaly_count: usize,
@@ -59,6 +68,13 @@ pub struct EvalScore {
 
 impl EvalScore {
     /// Build a score document from a finished run + its postmortem summary.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `from_run_summary` — see module docs for full workflow.
+    /// ```
     pub fn from_run_summary(run: &Run, summary: &SummaryView) -> Self {
         let failed = matches!(
             run.status,
@@ -101,6 +117,13 @@ impl EvalScore {
     }
 
     /// Serialize as pretty JSON for `score.json`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `to_pretty_json` — see module docs for full workflow.
+    /// ```
     pub fn to_pretty_json(&self) -> anyhow::Result<String> {
         Ok(serde_json::to_string_pretty(self)?)
     }

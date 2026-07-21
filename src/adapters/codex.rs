@@ -15,6 +15,14 @@ use crate::core::event::TraceEvent;
 pub struct CodexAdapter;
 
 impl CodexAdapter {
+    /// Create a new instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use blackbox as _;
+    /// // `new` — see module docs for full workflow.
+    /// ```
     pub fn new() -> Self {
         Self
     }

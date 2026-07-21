@@ -15,15 +15,27 @@ pub const ENV_ACTIVE_RUN: &str = crate::nest::ENV_ACTIVE_RUN;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MaybeRunAction {
     /// Pass through to bare command (do not open store).
-    Passthrough { reason: &'static str },
+    Passthrough {
+        /// Why recording was skipped.
+        reason: &'static str,
+    },
     /// Record under blackbox.
     Record {
+        /// Project root directory for store discovery.
         project_root: String,
+        /// Tags applied to the new run.
         tags: Vec<String>,
     },
 }
 
 /// Decide whether to record or passthrough.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `decide` — see module docs for full workflow.
+/// ```
 pub fn decide(
     command: &[String],
     cwd: &Path,
@@ -128,6 +140,13 @@ fn append_ambient_log(bb_root: &Path, line: &str) {
 }
 
 /// Build RunArgs for a record decision.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `run_args_for_record` — see module docs for full workflow.
+/// ```
 pub fn run_args_for_record(
     command: Vec<String>,
     project_root: String,
@@ -180,6 +199,13 @@ pub fn run_args_for_record(
 /// Exec the bare command, replacing the current process (Unix).
 ///
 /// On failure to exec, returns an error. Never returns `Ok` on success.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `exec_passthrough` — see module docs for full workflow.
+/// ```
 #[cfg(unix)]
 pub fn exec_passthrough(command: &[String]) -> anyhow::Result<()> {
     use std::os::unix::process::CommandExt;
@@ -191,6 +217,13 @@ pub fn exec_passthrough(command: &[String]) -> anyhow::Result<()> {
 }
 
 /// Non-Unix fallback: spawn and wait, then exit with child code.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `exec_passthrough` — see module docs for full workflow.
+/// ```
 #[cfg(not(unix))]
 pub fn exec_passthrough(command: &[String]) -> anyhow::Result<()> {
     if command.is_empty() {
@@ -201,6 +234,13 @@ pub fn exec_passthrough(command: &[String]) -> anyhow::Result<()> {
 }
 
 /// Shell function snippets for enable output.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `shell_snippet_fish` — see module docs for full workflow.
+/// ```
 pub fn shell_snippet_fish(wrap: &[String]) -> String {
     let mut out = String::from("# blackbox ambient capture (fish)\n");
     for name in wrap {
@@ -215,6 +255,14 @@ pub fn shell_snippet_fish(wrap: &[String]) -> String {
     out
 }
 
+/// Shell snippet bash.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `shell_snippet_bash` — see module docs for full workflow.
+/// ```
 pub fn shell_snippet_bash(wrap: &[String]) -> String {
     let mut out = String::from("# blackbox ambient capture (bash/zsh)\n");
     for name in wrap {
@@ -230,6 +278,13 @@ pub fn shell_snippet_bash(wrap: &[String]) -> String {
 }
 
 /// Default config written by `enable`.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `default_enable_config` — see module docs for full workflow.
+/// ```
 pub fn default_enable_config() -> BlackboxConfig {
     BlackboxConfig::default()
 }

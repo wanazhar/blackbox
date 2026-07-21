@@ -1,7 +1,10 @@
 pub mod anomalies;
 pub mod causal;
+/// Classifier module.
 pub mod classifier;
+/// Correlator module.
 pub mod correlator;
+/// Error detector module.
 pub mod error_detector;
 pub mod failure_fix;
 pub mod ordering;
@@ -19,6 +22,7 @@ use crate::core::event::TraceEvent;
 /// derived events or enriches existing ones.
 #[async_trait::async_trait]
 pub trait AnalysisPass: Send + 'static {
+    /// Return the name.
     fn name(&self) -> &'static str;
 
     /// Analyze a batch of events and return any derived events.

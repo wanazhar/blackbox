@@ -69,56 +69,111 @@
 //!
 //! MIT OR Apache-2.0.
 
+#![warn(missing_docs)]
+
+/// External process adapter protocol (`blackbox.adapter/v1`).
 pub mod adapter_protocol;
+/// Built-in harness adapters (Claude, Codex, generic, …).
 pub mod adapters;
+/// Incremental per-run aggregate counters.
 pub mod aggregates;
+/// Post-hoc analysis passes (errors, anomalies, causal links).
 pub mod analysis;
+/// Sealed offline store backup / restore.
 pub mod backup;
+/// Execution budget policy and Linux enforcement.
 pub mod budget;
+/// Capture layers: PTY, git, filesystem, process.
 pub mod capture;
+/// Reproducibility capsules.
 pub mod capsule;
+/// Experimental MCP cassette record / replay.
 pub mod cassette;
+/// Clap CLI definition and command dispatch.
 pub mod cli;
+/// 1.6 CLI handlers (fsck, verify, experiment, …).
 pub mod cli_ext;
+/// Store paths, capture policy, continuity mode.
 pub mod config;
+/// Resume / context packing helpers.
 pub mod context;
+/// Core data model: runs, events, blobs, checkpoints.
 pub mod core;
+/// Content hashing and sealed-export crypto.
 pub mod crypto;
+/// Experiments, multi-run reports, and CI gates.
 pub mod experiment;
+/// Export formats: portable JSON, JSONL, HTML.
 pub mod export;
+/// Durable ingest spool and crash recovery.
 pub mod ingest;
+/// Store integrity checks (`fsck`) and repair.
 pub mod integrity;
+/// Ambient wrap decision table (`maybe-run`).
 pub mod maybe_run;
+/// MCP stdio server.
 pub mod mcp;
+/// Project memory pack build and shrink.
 pub mod memory;
+/// Nest guard without child-visible control env.
 pub mod nest;
+/// Human and JSON CLI output helpers.
 pub mod output;
+/// Event writer and batch ingest pipeline.
 pub mod pipeline;
+/// Token / cost estimation helpers.
 pub mod pricing;
+/// File permission hardening helpers.
 pub mod privacy;
+/// Multi-project metadata index.
 pub mod projects;
+/// Secret scanning and redaction.
 pub mod redaction;
+/// Replay engines: timeline, mock, sandbox, fork.
 pub mod replay;
+/// Resume pack construction.
 pub mod resume;
+/// Continuity launch injection.
 pub mod resume_inject;
+/// Retention policies.
 pub mod retention;
+/// PTY supervision orchestrator ([`run::RunSupervisor`]).
 pub mod run;
+/// Eval score.json builder.
 pub mod score;
+/// Historical re-redaction and blob GC.
 pub mod scrub;
+/// FTS search runner.
 pub mod search;
+/// Local web dashboard (Axum).
 pub mod serve;
+/// Shell ambient-wrapper install.
 pub mod shell_install;
+/// Sticky project state.
 pub mod state;
+/// Status and handoff builders.
 pub mod status;
+/// Trace store trait and SQLite backend.
 pub mod storage;
+/// Run summary / postmortem text and JSON.
 pub mod summary;
+/// Supervisor lifecycle, rollup, shutdown.
 pub mod supervisor;
+/// Dir / HTTP / S3 sync.
 pub mod sync;
+/// PTY terminal recording, ANSI, coalescing.
 pub mod terminal;
+/// Run trajectory comparison (LCP / divergence).
 pub mod trajectory;
+/// Transcript rebuild from store blobs.
 pub mod transcript;
+/// Ratatui TUI views.
 pub mod ui;
+/// Shared string / path helpers.
 pub mod util;
+/// Verification receipts and outcomes.
 pub mod verification;
+/// JSON view types for `--json` envelopes.
 pub mod views;
+/// Workspace checkpoint manifests and restore.
 pub mod workspace_manifest;

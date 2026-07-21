@@ -18,6 +18,14 @@ pub struct ForkManager {
 }
 
 impl ForkManager {
+    /// Create a new instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use blackbox as _;
+    /// // `new` — see module docs for full workflow.
+    /// ```
     pub fn new() -> Self {
         Self {
             store: None,
@@ -25,11 +33,27 @@ impl ForkManager {
         }
     }
 
+    /// Set store and return self.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `with_store` — see module docs for full workflow.
+    /// ```
     pub fn with_store(mut self, store: Arc<dyn TraceStore>) -> Self {
         self.store = Some(store);
         self
     }
 
+    /// Set name and return self.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `with_name` — see module docs for full workflow.
+    /// ```
     pub fn with_name(mut self, name: Option<String>) -> Self {
         self.name = name;
         self

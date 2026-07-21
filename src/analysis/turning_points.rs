@@ -7,13 +7,24 @@ use crate::core::event::{EventSource, EventStatus, SideEffect, TraceEvent};
 /// A meaningful turning point in a run's execution story.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct TurningPoint {
+    /// Event or item kind string.
     pub kind: String,
+    /// Detail.
     pub detail: String,
+    /// Event id.
     pub event_id: Option<String>,
+    /// Monotonic sequence number within the run.
     pub sequence: Option<u64>,
 }
 
 /// Detect deterministic turning points from an event stream.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `detect_turning_points` — see module docs for full workflow.
+/// ```
 pub fn detect_turning_points(events: &[TraceEvent]) -> Vec<TurningPoint> {
     let mut points = Vec::new();
     let mut first_tool = false;

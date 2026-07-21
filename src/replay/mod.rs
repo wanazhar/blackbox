@@ -1,6 +1,10 @@
+/// Fork module.
 pub mod fork;
+/// Mock module.
 pub mod mock;
+/// Sandbox module.
 pub mod sandbox;
+/// Timeline module.
 pub mod timeline;
 
 use crate::core::event::TraceEvent;
@@ -9,23 +13,40 @@ use crate::core::run::Run;
 /// Outcome of a replay operation.
 #[derive(Debug, Clone)]
 pub enum ReplayOutcome {
-    /// Timeline or generic successful completion
-    Completed { summary: String },
-    /// User cancelled mid-replay
-    Cancelled,
-    /// Engine failed
-    Errored(String),
-    /// Mock tool replay finished
-    Mocked { tool_count: usize, summary: String },
-    /// Sandbox re-execution finished
-    Sandboxed {
-        executed: usize,
-        skipped: usize,
-        workspace: String,
+    /// Timeline or generic successful completion.
+    Completed {
+        /// Human-readable completion summary.
         summary: String,
     },
-    /// A new forked run was created
-    Forked { new_run_id: String, summary: String },
+    /// User cancelled mid-replay.
+    Cancelled,
+    /// Engine failed.
+    Errored(String),
+    /// Mock tool replay finished.
+    Mocked {
+        /// Number of tool calls mocked.
+        tool_count: usize,
+        /// Human-readable summary.
+        summary: String,
+    },
+    /// Sandbox re-execution finished.
+    Sandboxed {
+        /// Commands executed in the sandbox.
+        executed: usize,
+        /// Commands skipped.
+        skipped: usize,
+        /// Workspace path used for the sandbox.
+        workspace: String,
+        /// Human-readable summary.
+        summary: String,
+    },
+    /// A new forked run was created.
+    Forked {
+        /// Id of the newly forked run.
+        new_run_id: String,
+        /// Human-readable summary.
+        summary: String,
+    },
 }
 
 impl std::fmt::Display for ReplayOutcome {
@@ -62,6 +83,13 @@ impl std::fmt::Display for ReplayOutcome {
 }
 impl ReplayOutcome {
     /// Returns `true` when the replay completed without error.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `success` — see module docs for full workflow.
+    /// ```
     pub fn success(&self) -> bool {
         !matches!(self, ReplayOutcome::Errored(_))
     }
@@ -82,6 +110,7 @@ pub enum ReplayPolicy {
 /// simulate a previous run.
 #[async_trait::async_trait]
 pub trait ReplayEngine: Send + 'static {
+    /// Return the name.
     fn name(&self) -> &'static str;
 
     /// Begin replaying a run from an optional starting event.
@@ -94,6 +123,13 @@ pub trait ReplayEngine: Send + 'static {
 }
 
 /// Slice events from an optional starting event id.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `events_from` — see module docs for full workflow.
+/// ```
 pub fn events_from<'a>(events: &'a [TraceEvent], from_event_id: Option<&str>) -> &'a [TraceEvent] {
     let start_idx = from_event_id
         .and_then(|id| {

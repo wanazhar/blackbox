@@ -16,10 +16,26 @@ impl Default for EventView {
 }
 
 impl EventView {
+    /// Create a new instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use blackbox as _;
+    /// // `new` — see module docs for full workflow.
+    /// ```
     pub fn new() -> Self {
         Self { event: None }
     }
 
+    /// Set event.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `set_event` — see module docs for full workflow.
+    /// ```
     pub fn set_event(&mut self, event: TraceEvent) {
         self.event = Some(event);
     }

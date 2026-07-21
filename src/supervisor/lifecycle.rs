@@ -21,12 +21,23 @@ pub enum RunStage {
     RollingUp,
     /// End checkpoint + workspace manifest.
     Checkpointing,
+    /// `Completed` variant.
     Completed,
+    /// `Failed` variant.
     Failed,
+    /// `Cancelled` variant.
     Cancelled,
 }
 
 impl RunStage {
+    /// View as str.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `as_str` — see module docs for full workflow.
+    /// ```
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Planned => "planned",
@@ -47,15 +58,38 @@ impl RunStage {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ShutdownReason {
-    ChildExit { code: u32 },
+    /// Supervised child process exited.
+    ChildExit {
+        /// Child exit code.
+        code: u32,
+    },
+    /// Shutdown was requested by a signal.
     Signal,
+    /// Wall-clock or budget timeout ended the run.
     Timeout,
-    WriterFailure { message: String },
+    /// Event writer failed durably.
+    WriterFailure {
+        /// Failure message.
+        message: String,
+    },
+    /// Capture collectors timed out during drain.
     CollectorTimeout,
-    Error { message: String },
+    /// Unclassified shutdown error.
+    Error {
+        /// Error message.
+        message: String,
+    },
 }
 
 impl ShutdownReason {
+    /// View as label.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `as_label` — see module docs for full workflow.
+    /// ```
     pub fn as_label(&self) -> &'static str {
         match self {
             Self::ChildExit { .. } => "child_exit",

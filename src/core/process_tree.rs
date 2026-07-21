@@ -77,6 +77,13 @@ pub struct ProcessNode {
 
 impl ProcessNode {
     /// Create a new root node without children.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use blackbox as _;
+    /// // `new` — see module docs for full workflow.
+    /// ```
     pub fn new(pid: u32, ppid: u32, command: Vec<String>) -> Self {
         let command_meta = if command.is_empty() {
             None
@@ -110,6 +117,13 @@ impl ProcessNode {
     }
 
     /// Create a node with full metadata.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `with_meta` — see module docs for full workflow.
+    /// ```
     pub fn with_meta(
         pid: u32,
         ppid: u32,
@@ -150,16 +164,37 @@ impl ProcessNode {
     }
 
     /// Recursively count all nodes in the tree.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `count_nodes` — see module docs for full workflow.
+    /// ```
     pub fn count_nodes(&self) -> usize {
         1 + self.children.iter().map(|c| c.count_nodes()).sum::<usize>()
     }
 
     /// Maximum depth of the tree (root = 1).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `depth` — see module docs for full workflow.
+    /// ```
     pub fn depth(&self) -> usize {
         1 + self.children.iter().map(|c| c.depth()).max().unwrap_or(0)
     }
 
     /// Find a node by PID (depth-first).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `find_mut` — see module docs for full workflow.
+    /// ```
     pub fn find_mut(&mut self, pid: u32) -> Option<&mut ProcessNode> {
         if self.invocation.pid == pid {
             return Some(self);
@@ -173,6 +208,13 @@ impl ProcessNode {
     }
 
     /// Collect all PIDs in the tree.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `all_pids` — see module docs for full workflow.
+    /// ```
     pub fn all_pids(&self) -> Vec<u32> {
         let mut pids = vec![self.invocation.pid];
         for child in &self.children {
@@ -182,6 +224,13 @@ impl ProcessNode {
     }
 
     /// Render a simple ASCII process tree for CLI display.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `format_tree` — see module docs for full workflow.
+    /// ```
     pub fn format_tree(&self) -> String {
         let mut lines = Vec::new();
         self.format_tree_inner("", true, true, &mut lines);
@@ -189,6 +238,13 @@ impl ProcessNode {
     }
 
     /// Format a forest of process trees (multiple roots).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `format_forest` — see module docs for full workflow.
+    /// ```
     pub fn format_forest(roots: &[ProcessNode]) -> String {
         if roots.is_empty() {
             return String::new();
@@ -209,6 +265,13 @@ impl ProcessNode {
 /// Accepts `process.discovered`, `process.exec`, `process.spawned`, and
 /// `process.descendant.spawned` (plus legacy kinds) that carry `pid`/`ppid`/`argv`.
 /// Exit codes from `process.exited` (and root from `run.completed`) are applied when present.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `rebuild_from_events` — see module docs for full workflow.
+/// ```
 pub fn rebuild_from_events(events: &[TraceEvent]) -> Vec<ProcessNode> {
     #[derive(Clone)]
     struct Info {

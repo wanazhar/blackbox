@@ -43,9 +43,13 @@ const DEFAULT_MAX_DEPTH: usize = 8;
 /// Capture bounds for a workspace walk.
 #[derive(Debug, Clone)]
 pub struct ManifestLimits {
+    /// Max files.
     pub max_files: usize,
+    /// Max total bytes.
     pub max_total_bytes: u64,
+    /// Max file bytes.
     pub max_file_bytes: u64,
+    /// Max depth.
     pub max_depth: usize,
     /// When true, store file contents as blobs (required for full restore).
     pub store_blobs: bool,
@@ -67,8 +71,11 @@ impl Default for ManifestLimits {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ManifestEntryType {
+    /// `File` variant.
     File,
+    /// `Dir` variant.
     Dir,
+    /// `Symlink` variant.
     Symlink,
 }
 
@@ -96,6 +103,7 @@ pub enum SymlinkTargetScope {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ContentTransformation {
+    /// `SecretRedaction` variant.
     SecretRedaction,
 }
 
@@ -122,15 +130,21 @@ pub enum RestoreCompleteness {
 /// One path in the workspace snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ManifestEntry {
+    /// Filesystem path.
     pub path: String,
+    /// Entry type.
     pub entry_type: ManifestEntryType,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Content hash.
     pub content_hash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Size.
     pub size: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Mode.
     pub mode: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Symlink target.
     pub symlink_target: Option<String>,
     /// Scope of symlink target relative to capture root.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -144,6 +158,7 @@ pub struct ManifestEntry {
     /// Whether content was fully captured (false if skipped for size/limit).
     pub complete: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Skip reason.
     pub skip_reason: Option<String>,
     /// Transformation applied to content before hashing (if any).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -160,23 +175,35 @@ fn default_true() -> bool {
 /// Versioned workspace manifest.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceManifest {
+    /// Version string or number.
     pub version: u32,
+    /// Root.
     pub root: String,
+    /// Captured at.
     pub captured_at: DateTime<Utc>,
+    /// Entries.
     pub entries: Vec<ManifestEntry>,
+    /// Files total.
     pub files_total: u64,
+    /// Bytes total.
     pub bytes_total: u64,
+    /// Capture complete.
     pub capture_complete: bool,
     #[serde(default)]
+    /// Limitations.
     pub limitations: Vec<String>,
 }
 
 /// Result of restoring a workspace from a manifest.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RestoreReport {
+    /// Expected.
     pub expected: usize,
+    /// Restored.
     pub restored: usize,
+    /// Missing.
     pub missing: usize,
+    /// Skipped.
     pub skipped: usize,
     /// Entries restored with transformed (non-original) content.
     #[serde(default)]
@@ -184,7 +211,9 @@ pub struct RestoreReport {
     /// Entries excluded at capture (oversized, unreadable, etc.).
     #[serde(default)]
     pub excluded: usize,
+    /// Error messages.
     pub errors: Vec<String>,
+    /// Limitations.
     pub limitations: Vec<String>,
     /// True when every expected entry restored without error (does not imply byte-exact).
     pub complete: bool,
@@ -204,21 +233,51 @@ fn default_partial() -> RestoreCompleteness {
 }
 
 impl WorkspaceManifest {
+    /// Convert to json.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `to_json` — see module docs for full workflow.
+    /// ```
     pub fn to_json(&self) -> anyhow::Result<String> {
         Ok(serde_json::to_string_pretty(self)?)
     }
 
+    /// Build from json.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use blackbox as _;
+    /// // `from_json` — see module docs for full workflow.
+    /// ```
     pub fn from_json(s: &str) -> anyhow::Result<Self> {
         Ok(serde_json::from_str(s)?)
     }
 }
 
 /// Return true when a path component should be ignored.
+///
+/// # Examples
+///
+/// ```
+/// # use blackbox as _;
+/// // `is_ignored_component` — see module docs for full workflow.
+/// ```
 pub fn is_ignored_component(name: &str) -> bool {
     IGNORE_DIR_NAMES.contains(&name) || name == "blackbox.db" || name.starts_with("blackbox.db-")
 }
 
 /// Capture a bounded workspace manifest. Optionally store file blobs.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `capture_workspace_manifest` — see module docs for full workflow.
+/// ```
 pub async fn capture_workspace_manifest(
     root: &Path,
     store: Option<&dyn TraceStore>,
@@ -536,6 +595,13 @@ fn rel_display(root: &Path, path: &Path) -> String {
 /// Completeness distinguishes original-byte fidelity from sanitized-state
 /// fidelity. Absolute, traversal, and outside-root symlink targets are never
 /// recreated.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `restore_workspace_manifest` — see module docs for full workflow.
+/// ```
 pub async fn restore_workspace_manifest(
     manifest: &WorkspaceManifest,
     dest: &Path,
@@ -791,6 +857,13 @@ fn classify_restore_completeness(
 }
 
 /// Classify a symlink target relative to `root` without following the link.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `classify_symlink_target` — see module docs for full workflow.
+/// ```
 pub fn classify_symlink_target(
     root: &Path,
     link_path: &Path,
@@ -917,6 +990,13 @@ fn read_regular_file_no_follow(path: &Path) -> anyhow::Result<Vec<u8>> {
 }
 
 /// Reject absolute / traversal relative paths.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `validate_rel_path` — see module docs for full workflow.
+/// ```
 pub fn validate_rel_path(path: &str) -> anyhow::Result<()> {
     let path = path.trim();
     if path.is_empty() {
@@ -938,6 +1018,13 @@ pub fn validate_rel_path(path: &str) -> anyhow::Result<()> {
 }
 
 /// Index entries by path for quick lookup.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `index_by_path` — see module docs for full workflow.
+/// ```
 pub fn index_by_path(m: &WorkspaceManifest) -> BTreeMap<&str, &ManifestEntry> {
     m.entries.iter().map(|e| (e.path.as_str(), e)).collect()
 }

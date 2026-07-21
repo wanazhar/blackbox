@@ -1,5 +1,7 @@
+/// Ansi module.
 pub mod ansi;
 pub mod coalesce;
+/// Recorder module.
 pub mod recorder;
 
 use crate::core::event::TraceEvent;
@@ -12,7 +14,9 @@ use crate::core::event::TraceEvent;
 /// resemble what the user saw.
 #[derive(Debug, Clone)]
 pub struct TerminalDimensions {
+    /// Rows.
     pub rows: u16,
+    /// Cols.
     pub cols: u16,
 }
 

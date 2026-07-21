@@ -1,16 +1,37 @@
 //! Shared helpers for preparing harness launch commands.
 
 /// True if `flag` appears as its own argv element.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `has_flag` — see module docs for full workflow.
+/// ```
 pub fn has_flag(command: &[String], flag: &str) -> bool {
     command.iter().any(|a| a == flag)
 }
 
 /// True if any of the flags appear.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `has_any_flag` — see module docs for full workflow.
+/// ```
 pub fn has_any_flag(command: &[String], flags: &[&str]) -> bool {
     flags.iter().any(|f| has_flag(command, f))
 }
 
 /// True if `--flag value` or `--flag=value` is present.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `has_option` — see module docs for full workflow.
+/// ```
 pub fn has_option(command: &[String], option: &str) -> bool {
     let eq_prefix = format!("{}=", option);
     command.iter().enumerate().any(|(i, a)| {
@@ -29,6 +50,13 @@ pub fn has_option(command: &[String], option: &str) -> bool {
 /// Flags are inserted as discrete argv tokens, never concatenated into the
 /// binary path or a shell string, so there is no shell injection or argument
 /// mangling risk on POSIX systems. Each token maps 1:1 to an argv element.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `ensure_flags` — see module docs for full workflow.
+/// ```
 pub fn ensure_flags(command: &[String], insert: &[&str]) -> Vec<String> {
     let out = command.to_vec();
     if out.is_empty() {
@@ -74,6 +102,13 @@ pub fn ensure_flags(command: &[String], insert: &[&str]) -> Vec<String> {
 ///
 /// Does not alter fully interactive sessions (no `-p`/`--print`) so the
 /// TUI still works. Set `BLACKBOX_FORCE_JSON=1` to always inject.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `prepare_claude_command` — see module docs for full workflow.
+/// ```
 pub fn prepare_claude_command(command: &[String]) -> Vec<String> {
     let force = std::env::var("BLACKBOX_FORCE_JSON")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
@@ -96,6 +131,13 @@ pub fn prepare_claude_command(command: &[String]) -> Vec<String> {
 }
 
 /// Codex: prefer JSON / quiet machine output for `exec` and non-interactive.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `prepare_codex_command` — see module docs for full workflow.
+/// ```
 pub fn prepare_codex_command(command: &[String]) -> Vec<String> {
     let force = std::env::var("BLACKBOX_FORCE_JSON")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))

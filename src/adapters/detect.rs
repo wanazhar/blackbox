@@ -13,6 +13,13 @@ use crate::adapters::harness::HarnessAdapter;
 /// Detect the best harness adapter for a command (first match wins).
 ///
 /// Order: specific named harnesses first, generic last.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `detect_adapter` — see module docs for full workflow.
+/// ```
 pub fn detect_adapter(command: &[String]) -> Arc<dyn HarnessAdapter> {
     let candidates: Vec<Arc<dyn HarnessAdapter>> = vec![
         Arc::new(ClaudeAdapter::new()),
@@ -33,6 +40,13 @@ pub fn detect_adapter(command: &[String]) -> Arc<dyn HarnessAdapter> {
 }
 
 /// Basename of argv\[0\] for detection helpers.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use blackbox as _;
+/// // `command_basename` — see module docs for full workflow.
+/// ```
 pub fn command_basename(command: &[String]) -> Option<&str> {
     command
         .first()

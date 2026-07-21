@@ -14,8 +14,16 @@ use crate::budget::policy::{BudgetCapability, BudgetPolicy, BudgetStatus};
 /// # Examples
 ///
 /// ```no_run
-/// # use blackbox as _;
-/// // `apply_child_rlimits` — see module docs for full workflow.
+/// use blackbox::budget::{apply_child_rlimits, BudgetPolicy};
+///
+/// let policy = BudgetPolicy {
+///     max_processes: Some(64),
+///     max_memory_bytes: Some(8 * 1024 * 1024 * 1024),
+///     ..Default::default()
+/// };
+/// // Pass the supervised child pid — never the blackbox supervisor.
+/// let notes = apply_child_rlimits(12345, &policy);
+/// let _ = notes;
 /// ```
 #[cfg(target_os = "linux")]
 pub fn apply_child_rlimits(pid: u32, policy: &BudgetPolicy) -> Vec<String> {
@@ -57,6 +65,16 @@ pub fn apply_child_rlimits(pid: u32, policy: &BudgetPolicy) -> Vec<String> {
     notes
 }
 
+/// Non-Linux stub: returns a note that child `prlimit` is unavailable.
+///
+/// # Examples
+///
+/// ```
+/// use blackbox::budget::{apply_child_rlimits, BudgetPolicy};
+///
+/// let notes = apply_child_rlimits(1, &BudgetPolicy::default());
+/// assert!(notes.iter().any(|n| n.contains("not available")));
+/// ```
 #[cfg(not(target_os = "linux"))]
 pub fn apply_child_rlimits(_pid: u32, _policy: &BudgetPolicy) -> Vec<String> {
     vec!["child prlimit not available on this OS".into()]
@@ -64,6 +82,13 @@ pub fn apply_child_rlimits(_pid: u32, _policy: &BudgetPolicy) -> Vec<String> {
 
 /// Deprecated name kept for tests — redirects to child-targeted API with pid=self
 /// only for unit probing; production code must call [`apply_child_rlimits`].
+///
+/// # Examples
+///
+/// ```ignore
+/// // `cfg(test)` only — unit tests call:
+/// // apply_process_rlimits(&BudgetPolicy::default())
+/// ```
 #[cfg(test)]
 pub fn apply_process_rlimits(policy: &BudgetPolicy) -> Vec<String> {
     apply_child_rlimits(std::process::id(), policy)
@@ -90,6 +115,17 @@ fn set_prlimit(
 }
 
 /// Wall-time watchdog: spawn a task that kills `pid` after `timeout`.
+///
+/// # Examples
+///
+/// ```no_run
+/// use std::time::Duration;
+/// use blackbox::budget::spawn_wall_watchdog;
+///
+/// // In the supervisor select loop, await this handle alongside the child.
+/// let handle = spawn_wall_watchdog(12345, Duration::from_secs(30));
+/// let _ = handle;
+/// ```
 pub fn spawn_wall_watchdog(
     pid: u32,
     timeout: Duration,
@@ -122,6 +158,19 @@ pub struct BudgetBreachKill {
 }
 
 /// Public budget kill entrypoint (tool/output ceilings in the capture path).
+///
+/// Refuses pid 0/1 and the caller's own PID.
+///
+/// # Examples
+///
+/// ```
+/// use blackbox::budget::kill_budget_pid;
+///
+/// // Safe refuse: never kill self / init.
+/// assert!(kill_budget_pid(0).is_err());
+/// assert!(kill_budget_pid(1).is_err());
+/// assert!(kill_budget_pid(std::process::id()).is_err());
+/// ```
 pub fn kill_budget_pid(pid: u32) -> std::io::Result<()> {
     kill_supervised(pid)
 }
@@ -163,6 +212,15 @@ fn kill_supervised(pid: u32) -> std::io::Result<()> {
 }
 
 /// Count processes in the same process group / descendants (best-effort via /proc).
+///
+/// # Examples
+///
+/// ```no_run
+/// use blackbox::budget::count_descendant_processes;
+///
+/// let n = count_descendant_processes(std::process::id());
+/// assert!(n >= 1);
+/// ```
 #[cfg(target_os = "linux")]
 pub fn count_descendant_processes(root_pid: u32) -> u64 {
     let mut pids = std::collections::HashSet::from([root_pid]);
@@ -202,6 +260,15 @@ pub fn count_descendant_processes(root_pid: u32) -> u64 {
     pids.len() as u64
 }
 
+/// Non-Linux stub: reports a single process (the root).
+///
+/// # Examples
+///
+/// ```
+/// use blackbox::budget::count_descendant_processes;
+///
+/// assert_eq!(count_descendant_processes(1), 1);
+/// ```
 #[cfg(not(target_os = "linux"))]
 pub fn count_descendant_processes(_root_pid: u32) -> u64 {
     1
@@ -217,6 +284,16 @@ fn parse_ppid(stat: &str) -> Option<u32> {
 }
 
 /// Process-count watchdog: poll descendants and kill if over limit.
+///
+/// # Examples
+///
+/// ```no_run
+/// use std::time::Duration;
+/// use blackbox::budget::spawn_process_count_watchdog;
+///
+/// let handle = spawn_process_count_watchdog(12345, 64, Duration::from_millis(200));
+/// let _ = handle;
+/// ```
 pub fn spawn_process_count_watchdog(
     root_pid: u32,
     max_processes: u64,
@@ -245,11 +322,41 @@ pub fn spawn_process_count_watchdog(
 }
 
 /// Enrich capability notes after applying Linux backends.
+///
+/// # Examples
+///
+/// ```
+/// use blackbox::budget::{linux_enforcement_status, BudgetCapability, BudgetPolicy};
+///
+/// let policy = BudgetPolicy {
+///     max_wall_secs: Some(30),
+///     ..Default::default()
+/// };
+/// let caps = linux_enforcement_status(&policy);
+/// let wall = caps.iter().find(|c| c.name == "wall_time").unwrap();
+/// assert!(matches!(wall.capability, BudgetCapability::Enforced));
+/// ```
 pub fn linux_enforcement_status(policy: &BudgetPolicy) -> Vec<BudgetStatus> {
     linux_enforcement_status_with_cgroup(policy, None)
 }
 
 /// Same as [`linux_enforcement_status`] but folds an applied cgroup report.
+///
+/// # Examples
+///
+/// ```
+/// use blackbox::budget::{
+///     linux_enforcement_status_with_cgroup, BudgetPolicy, CgroupApplyReport,
+/// };
+///
+/// let policy = BudgetPolicy {
+///     max_processes: Some(32),
+///     ..Default::default()
+/// };
+/// let report = CgroupApplyReport::default();
+/// let caps = linux_enforcement_status_with_cgroup(&policy, Some(&report));
+/// assert!(caps.iter().any(|c| c.name == "process_count"));
+/// ```
 pub fn linux_enforcement_status_with_cgroup(
     policy: &BudgetPolicy,
     cgroup: Option<&crate::budget::cgroup::CgroupApplyReport>,

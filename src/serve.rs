@@ -1701,6 +1701,14 @@ mod testing {
     use tower::ServiceExt;
 
     impl AppState {
+        /// Build a test [`AppState`] with no auth token.
+        ///
+        /// # Examples
+        ///
+        /// ```ignore
+        /// // `cfg(test)` helper used by dashboard unit tests:
+        /// // let state = AppState::new(Arc::new(SqliteStore::open_memory()?));
+        /// ```
         pub fn new(store: Arc<SqliteStore>) -> Self {
             Self {
                 store,
@@ -1713,6 +1721,14 @@ mod testing {
         }
     }
 
+    /// Minimal dashboard router for unit tests (subset of production routes).
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // `cfg(test)` helper:
+    /// // let router = build_router(AppState::new(store));
+    /// ```
     pub fn build_router(state: AppState) -> Router {
         Router::new()
             .route("/api/runs", get(api_runs))

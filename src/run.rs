@@ -67,6 +67,21 @@ pub struct RunSupervisor {
 
 impl RunSupervisor {
     /// Create a supervisor that writes into `store`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use blackbox::run::RunSupervisor;
+    /// use blackbox::storage::sqlite::SqliteStore;
+    /// use blackbox::storage::TraceStore;
+    ///
+    /// # fn demo() -> anyhow::Result<()> {
+    /// let store = Arc::new(SqliteStore::open_memory()?) as Arc<dyn TraceStore>;
+    /// let _supervisor = RunSupervisor::new(store);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn new(store: Arc<dyn TraceStore>) -> Self {
         Self {
             store,
@@ -76,6 +91,26 @@ impl RunSupervisor {
     }
 
     /// Override capture policy (redaction, layers, observe-only, …).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use blackbox::config::CapturePolicy;
+    /// use blackbox::run::RunSupervisor;
+    /// use blackbox::storage::sqlite::SqliteStore;
+    /// use blackbox::storage::TraceStore;
+    ///
+    /// # fn demo() -> anyhow::Result<()> {
+    /// let store = Arc::new(SqliteStore::open_memory()?) as Arc<dyn TraceStore>;
+    /// let policy = CapturePolicy {
+    ///     redact: true,
+    ///     ..Default::default()
+    /// };
+    /// let _supervisor = RunSupervisor::new(store).with_policy(policy);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn with_policy(mut self, policy: CapturePolicy) -> Self {
         self.policy = policy;
         self
@@ -85,9 +120,23 @@ impl RunSupervisor {
     ///
     /// # Examples
     ///
-    /// ```no_run
-    /// # use blackbox as _;
-    /// // `with_budget` — see module docs for full workflow.
+    /// ```
+    /// use std::sync::Arc;
+    /// use blackbox::budget::BudgetPolicy;
+    /// use blackbox::run::RunSupervisor;
+    /// use blackbox::storage::sqlite::SqliteStore;
+    /// use blackbox::storage::TraceStore;
+    ///
+    /// # fn demo() -> anyhow::Result<()> {
+    /// let store = Arc::new(SqliteStore::open_memory()?) as Arc<dyn TraceStore>;
+    /// let budget = BudgetPolicy {
+    ///     max_wall_secs: Some(30),
+    ///     max_tool_calls: Some(100),
+    ///     ..Default::default()
+    /// };
+    /// let _supervisor = RunSupervisor::new(store).with_budget(budget);
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn with_budget(mut self, budget: crate::budget::BudgetPolicy) -> Self {
         self.budget = budget;

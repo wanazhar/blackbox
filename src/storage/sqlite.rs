@@ -851,48 +851,53 @@ impl TraceStore for SqliteStore {
         // Fetch limit+1 to detect has_more without a second query.
         let fetch = limit + 1;
         let cur = cursor.and_then(decode_run_cursor);
-        let status_pat = filters
+        // Filters must be applied in SQL before LIMIT so sparse matches still
+        // paginate to exhaustion (1.6 pagination correctness).
+        let status_substr = filters
             .status
             .as_ref()
-            .map(|s| format!("%{}%", s.to_lowercase()));
+            .map(|s| s.to_lowercase())
+            .filter(|s| !s.is_empty());
+        let tag_filter = filters.tag.clone().filter(|t| !t.is_empty());
 
         let result = {
             let conn = self.lock();
-            // Cursor: (started_at, id) lexicographic for stable DESC order.
-            let sql = if cur.is_some() {
+            // Status is stored as JSON string e.g. `"Failed"`; match case-insensitively.
+            // Tags are a JSON array; use json_each for exact membership when present.
+            let mut sql = String::from(
                 "SELECT id, name, command, cwd, project_dir, tags, notes, status, started_at, ended_at, exit_code, parent_run_id, next_sequence,
                  duration_ms, adapter, session_id, input_tokens, output_tokens, total_tokens, estimated_cost_usd, model
-                 FROM runs
-                 WHERE (started_at < ?1 OR (started_at = ?1 AND id < ?2))
-                 ORDER BY started_at DESC, id DESC
-                 LIMIT ?3"
-            } else {
-                "SELECT id, name, command, cwd, project_dir, tags, notes, status, started_at, ended_at, exit_code, parent_run_id, next_sequence,
-                 duration_ms, adapter, session_id, input_tokens, output_tokens, total_tokens, estimated_cost_usd, model
-                 FROM runs
-                 ORDER BY started_at DESC, id DESC
-                 LIMIT ?1"
-            };
-            let mut stmt = conn.prepare(sql)?;
-            let mut runs = if let Some(ref c) = cur {
-                stmt.query_map(
-                    params![c.started_at.to_rfc3339(), c.id, fetch as i64],
-                    run_from_row,
-                )?
-                .collect::<Result<Vec<_>, _>>()?
-            } else {
-                stmt.query_map(params![fetch as i64], run_from_row)?
-                    .collect::<Result<Vec<_>, _>>()?
-            };
+                 FROM runs WHERE 1=1",
+            );
+            let mut bind: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
 
-            // Optional status filter (status stored as JSON string e.g. "\"Failed\"").
-            if let Some(ref pat) = status_pat {
-                let p = pat.trim_matches('%').to_lowercase();
-                runs.retain(|r| format!("{:?}", r.status).to_lowercase().contains(&p));
+            if let Some(ref c) = cur {
+                sql.push_str(" AND (started_at < ? OR (started_at = ? AND id < ?))");
+                bind.push(Box::new(c.started_at.to_rfc3339()));
+                bind.push(Box::new(c.started_at.to_rfc3339()));
+                bind.push(Box::new(c.id.clone()));
             }
-            if let Some(ref tag) = filters.tag {
-                runs.retain(|r| r.tags.iter().any(|t| t == tag));
+            if let Some(ref s) = status_substr {
+                sql.push_str(" AND lower(status) LIKE ?");
+                bind.push(Box::new(format!("%{s}%")));
             }
+            if let Some(ref tag) = tag_filter {
+                // Exact tag membership via JSON1. Fallback LIKE is not used —
+                // false positives would break cursor pagination invariants.
+                sql.push_str(
+                    " AND EXISTS (SELECT 1 FROM json_each(tags) WHERE json_each.value = ?)",
+                );
+                bind.push(Box::new(tag.clone()));
+            }
+            sql.push_str(" ORDER BY started_at DESC, id DESC LIMIT ?");
+            bind.push(Box::new(fetch as i64));
+
+            let mut stmt = conn.prepare(&sql)?;
+            let params_refs: Vec<&dyn rusqlite::types::ToSql> =
+                bind.iter().map(|v| v.as_ref()).collect();
+            let mut runs = stmt
+                .query_map(params_refs.as_slice(), run_from_row)?
+                .collect::<Result<Vec<_>, _>>()?;
 
             let has_more = runs.len() > limit;
             runs.truncate(limit);
@@ -1159,32 +1164,63 @@ impl TraceStore for SqliteStore {
                 has_more: false,
             });
         }
+        let limit = limit.max(1);
+        let fetch = limit + 1;
         let after = cursor
             .and_then(decode_event_cursor)
             .map(|c| c.sequence)
             .unwrap_or(0);
-        // Reuse range + filter by kind in SQL via get_events_by_kinds + manual page.
-        let fetch = limit.max(1) + 1;
-        let batch = self
-            .get_events_by_kinds(run_id, kinds, fetch.saturating_mul(4).max(fetch))
-            .await?;
-        let mut events: Vec<_> = batch.into_iter().filter(|e| e.sequence > after).collect();
-        let has_more = events.len() > limit.max(1);
-        events.truncate(limit.max(1));
-        let next_cursor = if has_more {
-            events.last().map(|e| {
-                encode_event_cursor(&EventPageCursor {
-                    sequence: e.sequence,
+        // Kind filter + sequence cursor applied in SQL before LIMIT so sparse
+        // kinds after a late cursor still page correctly (1.6 pagination).
+        let run_id = run_id.to_string();
+        let kinds_owned: Vec<String> = kinds.iter().map(|s| (*s).to_string()).collect();
+        let result = {
+            let conn = self.lock();
+            let placeholders: String = (0..kinds_owned.len())
+                .map(|i| format!("?{}", i + 3))
+                .collect::<Vec<_>>()
+                .join(", ");
+            // ?1 = run_id, ?2 = after_sequence, ?3.. = kinds, last = limit
+            let lim_idx = kinds_owned.len() + 3;
+            let sql = format!(
+                "SELECT id, run_id, parent_event_id, sequence, source, kind, started_at, ended_at, duration_ms, status, side_effect, input_blob, output_blob, error_blob, metadata
+                 FROM events
+                 WHERE run_id = ?1 AND sequence > ?2 AND kind IN ({placeholders})
+                 ORDER BY sequence ASC
+                 LIMIT ?{lim_idx}"
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            let mut values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+            values.push(Box::new(run_id));
+            values.push(Box::new(after as i64));
+            for k in &kinds_owned {
+                values.push(Box::new(k.clone()));
+            }
+            values.push(Box::new(fetch as i64));
+            let params_refs: Vec<&dyn rusqlite::types::ToSql> =
+                values.iter().map(|v| v.as_ref()).collect();
+            let mut events = stmt
+                .query_map(params_refs.as_slice(), event_from_row)?
+                .collect::<Result<Vec<_>, _>>()?;
+            let has_more = events.len() > limit;
+            events.truncate(limit);
+            let next_cursor = if has_more {
+                events.last().map(|e| {
+                    encode_event_cursor(&EventPageCursor {
+                        sequence: e.sequence,
+                    })
                 })
+            } else {
+                None
+            };
+            Ok(EventPage {
+                events,
+                next_cursor,
+                has_more,
             })
-        } else {
-            None
         };
-        Ok(EventPage {
-            events,
-            next_cursor,
-            has_more,
-        })
+        tokio::task::yield_now().await;
+        result
     }
 
     async fn get_event(&self, event_id: &str) -> anyhow::Result<Option<TraceEvent>> {

@@ -16,9 +16,9 @@ pub struct RunPageCursor {
 /// Filters applied when listing runs.
 #[derive(Debug, Clone, Default)]
 pub struct RunFilters {
-    /// Substring match on status debug name (e.g. "failed").
+    /// Substring match on status (e.g. "failed"); applied in SQL before LIMIT.
     pub status: Option<String>,
-    /// Tag that must be present (applied after SQL when tags are JSON).
+    /// Tag that must be present (exact match via `json_each`); applied in SQL before LIMIT.
     pub tag: Option<String>,
 }
 

@@ -60,6 +60,7 @@ pub async fn fsck_store(
     check_aggregates(store.as_ref(), &mut report).await?;
     check_checkpoints(store.as_ref(), &mut report).await?;
     check_blob_references(store.as_ref(), &opts, &mut report).await?;
+    check_fts(store.as_ref(), &opts, &mut report).await?;
     check_spool(opts.spool_dir.as_deref(), &mut report)?;
 
     if opts.repair {
@@ -421,6 +422,75 @@ async fn check_blob_references(
                     }
                 }
             }
+        }
+    }
+    Ok(())
+}
+
+/// Probe FTS availability / staleness (deep mode does a sample query).
+async fn check_fts(
+    store: &dyn TraceStore,
+    opts: &FsckOptions,
+    report: &mut FsckReport,
+) -> anyhow::Result<()> {
+    report.sections_checked.push("fts".into());
+    match store.fts_event_ids("a OR b OR c OR the OR run", 1).await {
+        Ok(None) => {
+            report.push(FsckFinding {
+                section: "fts".into(),
+                severity: FsckSeverity::Info,
+                code: "fts_unavailable".into(),
+                message: "FTS5 index not available on this store backend".into(),
+                run_id: None,
+                event_id: None,
+                checkpoint_id: None,
+                field: None,
+                blob_key: None,
+                repairable: false,
+            });
+        }
+        Ok(Some(_)) => {
+            // Deep: compare approximate coverage by counting events with empty FTS hits
+            // is expensive; instead flag repairable rebuild when events exist.
+            if matches!(opts.mode, FsckMode::Deep) {
+                let runs = store.list_runs().await?;
+                let mut total_events = 0u64;
+                for run in runs.iter().take(50) {
+                    total_events += store.count_events(&run.id).await? as u64;
+                }
+                if total_events > 0 {
+                    // Always offer rebuild as a safe repair for deep mode when
+                    // the operator requested repair (idempotent full rebuild).
+                    report.push(FsckFinding {
+                        section: "fts".into(),
+                        severity: FsckSeverity::Info,
+                        code: "fts_stale".into(),
+                        message: format!(
+                            "FTS present; deep mode offers rebuild ({total_events}+ events sampled)"
+                        ),
+                        run_id: None,
+                        event_id: None,
+                        checkpoint_id: None,
+                        field: None,
+                        blob_key: None,
+                        repairable: true,
+                    });
+                }
+            }
+        }
+        Err(e) => {
+            report.push(FsckFinding {
+                section: "fts".into(),
+                severity: FsckSeverity::Warning,
+                code: "fts_missing".into(),
+                message: format!("FTS probe failed ({e}); rebuild recommended"),
+                run_id: None,
+                event_id: None,
+                checkpoint_id: None,
+                field: None,
+                blob_key: None,
+                repairable: true,
+            });
         }
     }
     Ok(())

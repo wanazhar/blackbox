@@ -18,7 +18,9 @@ async fn fsck_flags_missing_aggregates_and_repairs() {
     ev.sequence = 1;
     store.insert_event(&ev).await.unwrap();
     // Aggregates may be auto-updated on insert — recompute path still works.
-    let _ = store.put_run_aggregates(&blackbox::aggregates::RunAggregates::new(&run.id));
+    let _ = store
+        .put_run_aggregates(&blackbox::aggregates::RunAggregates::new(&run.id))
+        .await;
 
     let report = fsck_store(
         store.clone(),

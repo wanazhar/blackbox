@@ -418,4 +418,10 @@ pub trait TraceStore: Send + Sync + 'static {
     ) -> anyhow::Result<Vec<String>> {
         Ok(Vec::new())
     }
+
+    /// Rebuild the full-text search index from events (1.6 fsck repair).
+    /// Default is a no-op for backends without FTS.
+    async fn reindex_fts(&self) -> anyhow::Result<usize> {
+        Ok(0)
+    }
 }

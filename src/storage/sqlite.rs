@@ -396,7 +396,7 @@ impl SqliteStore {
     }
 
     /// Rebuild the full-text index from scratch (e.g. after bulk import).
-    pub fn reindex_fts(&self) -> anyhow::Result<usize> {
+    pub fn reindex_fts_blocking(&self) -> anyhow::Result<usize> {
         let conn = self.lock();
         // Clear existing FTS data and rebuild from events table.
         conn.execute("DELETE FROM events_fts", [])?;
@@ -425,6 +425,11 @@ impl SqliteStore {
             offset += BATCH;
         }
         Ok(total)
+    }
+
+    /// Compatibility alias for callers expecting `reindex_fts`.
+    pub fn reindex_fts(&self) -> anyhow::Result<usize> {
+        self.reindex_fts_blocking()
     }
     /// V4: Composite index on events, checkpoints FK, contentless FTS5.
     fn migrate_v4(conn: &Connection) -> anyhow::Result<()> {
@@ -2032,6 +2037,12 @@ impl TraceStore for SqliteStore {
         };
         tokio::task::yield_now().await;
         result
+    }
+
+    async fn reindex_fts(&self) -> anyhow::Result<usize> {
+        let n = self.reindex_fts_blocking()?;
+        tokio::task::yield_now().await;
+        Ok(n)
     }
 }
 

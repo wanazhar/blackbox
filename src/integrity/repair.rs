@@ -48,16 +48,25 @@ pub fn plan_repairs(report: &FsckReport) -> RepairPlan {
                 });
             }
             "orphan_blob_file" => {
-                // Orphan GC is intentional but not auto by default (grace policy).
+                // Orphan GC under --repair deletes unreferenced blob files.
                 actions.push(RepairAction {
-                    kind: "note_orphan_blob".into(),
+                    kind: "gc_orphan_blob".into(),
                     description: format!(
-                        "orphan blob {} — use scrub --gc after grace policy",
+                        "delete orphan blob file {}",
                         f.blob_key.as_deref().unwrap_or("?")
                     ),
                     run_id: None,
                     blob_key: f.blob_key.clone(),
-                    auto_safe: false,
+                    auto_safe: true,
+                });
+            }
+            "fts_stale" | "fts_missing" => {
+                actions.push(RepairAction {
+                    kind: "rebuild_fts".into(),
+                    description: "rebuild events_fts full-text index from events table".into(),
+                    run_id: None,
+                    blob_key: None,
+                    auto_safe: true,
                 });
             }
             _ => {}
@@ -115,6 +124,19 @@ pub async fn apply_repair_plan(
                 // Spool replay is triggered by the CLI with a spool path;
                 // store-level repair only counts the planned action.
                 applied += 1;
+            }
+            "rebuild_fts" => {
+                let n = store.reindex_fts().await?;
+                tracing::info!(indexed = n, "fsck repair: rebuilt FTS index");
+                applied += 1;
+            }
+            "gc_orphan_blob" => {
+                if let Some(ref key) = action.blob_key {
+                    let n = store.delete_blob_keys(std::slice::from_ref(key)).await?;
+                    if n > 0 {
+                        applied += 1;
+                    }
+                }
             }
             _ => {}
         }

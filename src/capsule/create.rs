@@ -110,7 +110,12 @@ pub async fn create_capsule(
     let events = store.get_events(&run.id).await?;
     // Capsules always redact for safe sharing unless caller used insecure path elsewhere.
     let portable = export_portable(store, run, &events, true).await?;
-    let portable_hash = content_key(portable.as_bytes());
+    // Hash the canonical JSON value embedded in the capsule rather than the
+    // exporter’s presentation bytes.  The capsule itself is pretty-printed,
+    // so preserving the exporter's whitespace here would make verification
+    // dependent on formatting rather than archive content.
+    let portable_value: serde_json::Value = serde_json::from_str(&portable)?;
+    let portable_hash = content_key(&serde_json::to_vec(&portable_value)?);
 
     let mut ledger = Vec::new();
     let mut completeness = CapsuleCompleteness::ByteExact;
@@ -185,7 +190,7 @@ pub async fn create_capsule(
     // Embed portable as a named section (not content-addressed in map — already hashed).
     let doc = serde_json::json!({
         "capsule": manifest,
-        "portable": serde_json::from_str::<serde_json::Value>(&portable)?,
+        "portable": portable_value,
         "receipts": receipts,
     });
     Ok(serde_json::to_string_pretty(&doc)?)

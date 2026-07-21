@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use blackbox::capsule::{create_capsule, inspect_capsule, CapsuleCreateOpts, CapsuleCompleteness};
+use blackbox::capsule::{create_capsule, inspect_capsule, CapsuleCompleteness, CapsuleCreateOpts};
 use blackbox::core::event::{EventSource, TraceEvent};
 use blackbox::core::run::{Run, RunStatus};
 use blackbox::storage::sqlite::SqliteStore;
@@ -42,4 +42,24 @@ async fn capsule_is_sanitized_not_byte_exact() {
             | CapsuleCompleteness::Partial
             | CapsuleCompleteness::MetadataOnly
     ));
+}
+
+#[tokio::test]
+async fn capsule_verify_rejects_tampered_portable_archive() {
+    let store = SqliteStore::open_memory().unwrap();
+    let run = Run::new(vec!["echo".into(), "original".into()], "/tmp".into());
+    store.insert_run(&run).await.unwrap();
+
+    let json = create_capsule(&store, &run, &[], None, CapsuleCreateOpts::default())
+        .await
+        .unwrap();
+    let mut capsule: serde_json::Value = serde_json::from_str(&json).unwrap();
+    capsule["portable"]["run"]["command"] = serde_json::json!(["tampered"]);
+
+    let report = inspect_capsule(&serde_json::to_string(&capsule).unwrap()).unwrap();
+    assert!(!report.integrity_ok);
+    assert!(report
+        .issues
+        .iter()
+        .any(|issue| issue.contains("portable_archive_sha256 mismatch")));
 }

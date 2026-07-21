@@ -2,8 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::crypto::content_key;
 use crate::capsule::create::{CapsuleCompleteness, CapsuleManifest};
+use crate::crypto::content_key;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// `CapsuleInspectReport` value.
@@ -40,13 +40,16 @@ pub fn inspect_capsule(json: &str) -> anyhow::Result<CapsuleInspectReport> {
     let mut issues = Vec::new();
     let mut integrity_ok = true;
 
-    // Verify portable hash when present.
-    if let Some(portable) = root.get("portable") {
-        let portable_str = serde_json::to_string(portable)?;
-        // Export used pretty JSON; re-serialize may differ. Prefer embedded string form.
-        // If portable is object, hash the compact form and the original pretty via checksum field only.
-        let _ = portable_str;
-        // Trust declared hash; verify manifest self-hash.
+    let portable = root
+        .get("portable")
+        .ok_or_else(|| anyhow::anyhow!("missing portable archive"))?;
+    let portable_hash = content_key(&serde_json::to_vec(portable)?);
+    if portable_hash != manifest.portable_archive_sha256 {
+        integrity_ok = false;
+        issues.push(format!(
+            "portable_archive_sha256 mismatch (declared {}, recomputed {portable_hash})",
+            manifest.portable_archive_sha256
+        ));
     }
 
     let mut m = manifest.clone();
@@ -54,20 +57,17 @@ pub fn inspect_capsule(json: &str) -> anyhow::Result<CapsuleInspectReport> {
     m.manifest_sha256 = String::new();
     let recomputed = content_key(&serde_json::to_vec(&m)?);
     if recomputed != declared && !declared.is_empty() {
-        // Allow mismatch when serde key order differs slightly — still report.
+        integrity_ok = false;
         issues.push(format!(
             "manifest_sha256 mismatch (declared {declared}, recomputed {recomputed})"
         ));
-        // Soft: do not fail hard on pretty-print variance for v1.
     }
 
     if matches!(manifest.completeness, CapsuleCompleteness::ByteExact)
         && !manifest.transformation_ledger.is_empty()
     {
         integrity_ok = false;
-        issues.push(
-            "capsule claims byte_exact but transformation_ledger is non-empty".into(),
-        );
+        issues.push("capsule claims byte_exact but transformation_ledger is non-empty".into());
     }
 
     if manifest.model_replay_deterministic {
@@ -95,5 +95,5 @@ pub fn inspect_capsule(json: &str) -> anyhow::Result<CapsuleInspectReport> {
 /// ```
 pub fn verify_capsule_integrity(json: &str) -> anyhow::Result<bool> {
     let report = inspect_capsule(json)?;
-    Ok(report.integrity_ok && report.issues.iter().all(|i| !i.contains("byte_exact")))
+    Ok(report.integrity_ok)
 }

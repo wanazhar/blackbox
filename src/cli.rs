@@ -1406,7 +1406,7 @@ async fn cmd_run(cli: &Cli, args: &RunArgs) -> anyhow::Result<()> {
                 let _ = store.upsert_experiment(&m).await;
             }
         }
-        let meta = RunExperimentMeta {
+        let mut meta = RunExperimentMeta {
             experiment_id: args.experiment.clone(),
             task_id: args.task.clone(),
             variant: args.variant.clone(),
@@ -1421,6 +1421,29 @@ async fn cmd_run(cli: &Cli, args: &RunArgs) -> anyhow::Result<()> {
             git_commit: None,
             config_fingerprint: None,
         };
+        // Auto-number attempts when omitted; always stamp config fingerprint.
+        if meta.attempt.is_none() {
+            if let Some(ref exp_id) = meta.experiment_id {
+                let run_ids = store
+                    .list_runs_for_experiment(exp_id)
+                    .await
+                    .unwrap_or_default();
+                let mut existing = Vec::new();
+                for rid in run_ids {
+                    if rid == run.id {
+                        continue;
+                    }
+                    if let Ok(Some(m)) = store.get_run_experiment_meta(&rid).await {
+                        existing.push(m);
+                    }
+                }
+                meta.attempt =
+                    Some(crate::experiment::next_attempt_number(&existing, &meta));
+            } else {
+                meta.attempt = Some(1);
+            }
+        }
+        meta = meta.with_fingerprint();
         if let Err(e) = store.put_run_experiment_meta(&run.id, &meta).await {
             tracing::warn!(error = %e, "failed to store experiment metadata");
         } else if !cli.json {

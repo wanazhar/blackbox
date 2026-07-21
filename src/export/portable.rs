@@ -86,11 +86,34 @@ pub async fn export_portable(
         }
     }
 
+    // 1.6: typed experiment metadata (optional; survives export/import).
+    let experiment_meta = store
+        .get_run_experiment_meta(&run.id)
+        .await
+        .ok()
+        .flatten();
+    let experiment_manifest = if let Some(ref meta) = experiment_meta {
+        if let Some(ref eid) = meta.experiment_id {
+            store.get_experiment(eid).await.ok().flatten()
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let verification_receipts = store
+        .list_verification_receipts(&run.id)
+        .await
+        .unwrap_or_default();
+
     let output = serde_json::json!({
         "version": PORTABLE_VERSION,
         "run": run_val,
         "events": events_val,
         "blobs": blobs,
+        "experiment_meta": experiment_meta,
+        "experiment": experiment_manifest,
+        "verification_receipts": verification_receipts,
         "exported_at": chrono::Utc::now().to_rfc3339(),
     });
 
@@ -498,9 +521,46 @@ pub async fn import_portable(
         *tag = scanner.redact(tag);
     }
 
+    // ── Parse optional 1.6 experiment + receipt payloads (before permanent writes) ──
+    let experiment_meta: Option<crate::experiment::RunExperimentMeta> = root
+        .get("experiment_meta")
+        .filter(|v| !v.is_null())
+        .and_then(|v| serde_json::from_value(v.clone()).ok());
+    let experiment_manifest: Option<crate::experiment::ExperimentManifest> = root
+        .get("experiment")
+        .filter(|v| !v.is_null())
+        .and_then(|v| serde_json::from_value(v.clone()).ok());
+    let mut verification_receipts: Vec<crate::verification::VerificationReceipt> = root
+        .get("verification_receipts")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+
+    // Remap receipt run_ids (and parent refs are left as-is — receipt ids stay stable).
+    for r in &mut verification_receipts {
+        r.run_id = run.id.clone();
+        if new_ids {
+            // Avoid collisions if the same archive is imported twice with new run ids.
+            r.id = format!("verify-{}", uuid::Uuid::new_v4());
+            r.parent_receipt_id = None;
+        }
+    }
+
     // ── Permanent writes with rollback journal ──
     let mut journal = ImportJournal::default();
-    match promote_import(store, &run, &events, &verified_blobs, &mut journal).await {
+    match promote_import(
+        store,
+        &run,
+        &events,
+        &verified_blobs,
+        PromoteExtras {
+            experiment_manifest: experiment_manifest.as_ref(),
+            experiment_meta: experiment_meta.as_ref(),
+            verification_receipts: &verification_receipts,
+        },
+        &mut journal,
+    )
+    .await
+    {
         Ok(blobs_restored) => Ok(ImportResult {
             run_id: run.id,
             events: events.len(),
@@ -537,11 +597,18 @@ impl ImportJournal {
     }
 }
 
+struct PromoteExtras<'a> {
+    experiment_manifest: Option<&'a crate::experiment::ExperimentManifest>,
+    experiment_meta: Option<&'a crate::experiment::RunExperimentMeta>,
+    verification_receipts: &'a [crate::verification::VerificationReceipt],
+}
+
 async fn promote_import(
     store: &dyn TraceStore,
     run: &Run,
     events: &[TraceEvent],
     verified_blobs: &[(String, Vec<u8>)],
+    extras: PromoteExtras<'_>,
     journal: &mut ImportJournal,
 ) -> anyhow::Result<usize> {
     // Persist verified blobs under their content keys only.
@@ -567,6 +634,25 @@ async fn promote_import(
     journal.run_id = Some(run.id.clone());
 
     store.insert_events_batch(events).await?;
+
+    // 1.6: restore experiment manifest/meta and verification receipts.
+    if let Some(m) = extras.experiment_manifest {
+        if let Err(e) = store.upsert_experiment(m).await {
+            tracing::warn!(error = %e, "portable import: experiment upsert skipped");
+        }
+    }
+    if let Some(meta) = extras.experiment_meta {
+        // Keep experiment_id pointer; attempt/fingerprint survive import.
+        if let Err(e) = store.put_run_experiment_meta(&run.id, meta).await {
+            tracing::warn!(error = %e, "portable import: experiment meta skipped");
+        }
+    }
+    for receipt in extras.verification_receipts {
+        if let Err(e) = store.insert_verification_receipt(receipt).await {
+            tracing::warn!(error = %e, receipt_id = %receipt.id, "portable import: receipt skipped");
+        }
+    }
+
     Ok(blobs_restored)
 }
 
@@ -666,15 +752,13 @@ fn validate_event_blob_refs(
                 if !is_valid_blob_key(k) {
                     anyhow::bail!("event {} has invalid {field} key: {k}", ev.id);
                 }
-                if !known.contains(k) {
-                    if version >= 2 {
-                        // Empty blobs does not waive reference validation for v2+.
-                        anyhow::bail!(
-                            "event {} references {field}={k} not present in archive blobs",
-                            ev.id
-                        );
-                    }
-                    // v1: unresolved refs accepted under reduced compatibility guarantees.
+                // v2+: empty blobs does not waive reference validation.
+                // v1: unresolved refs accepted under reduced compatibility guarantees.
+                if !known.contains(k) && version >= 2 {
+                    anyhow::bail!(
+                        "event {} references {field}={k} not present in archive blobs",
+                        ev.id
+                    );
                 }
             }
         }
@@ -932,6 +1016,59 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(data, b"payload-bytes");
+    }
+
+    #[tokio::test]
+    async fn portable_round_trip_restores_experiment_and_receipts() {
+        let store = Arc::new(SqliteStore::open_memory().unwrap());
+        let run = make_run();
+        store.insert_run(&run).await.unwrap();
+        let mut exp = crate::experiment::ExperimentManifest::new("exp-1", "demo");
+        store.upsert_experiment(&exp).await.unwrap();
+        let meta = crate::experiment::RunExperimentMeta {
+            experiment_id: Some("exp-1".into()),
+            variant: Some("baseline".into()),
+            attempt: Some(2),
+            ..Default::default()
+        }
+        .with_fingerprint();
+        store
+            .put_run_experiment_meta(&run.id, &meta)
+            .await
+            .unwrap();
+        let mut receipt = crate::verification::VerificationReceipt::new(
+            &run.id,
+            crate::verification::VerifierType::CommandExit,
+        );
+        receipt.status = crate::verification::VerificationStatus::Passed;
+        receipt.confidence = crate::verification::VerificationConfidence::Confirmed;
+        store.insert_verification_receipt(&receipt).await.unwrap();
+
+        let events = store.get_events(&run.id).await.unwrap();
+        let json = export_portable(store.as_ref(), &run, &events, false)
+            .await
+            .unwrap();
+        let store2 = Arc::new(SqliteStore::open_memory().unwrap());
+        let result = import_portable(store2.as_ref(), &json, true).await.unwrap();
+        let meta2 = store2
+            .get_run_experiment_meta(&result.run_id)
+            .await
+            .unwrap()
+            .expect("experiment meta restored");
+        assert_eq!(meta2.experiment_id.as_deref(), Some("exp-1"));
+        assert_eq!(meta2.attempt, Some(2));
+        assert!(meta2.config_fingerprint.is_some());
+        let receipts = store2
+            .list_verification_receipts(&result.run_id)
+            .await
+            .unwrap();
+        assert_eq!(receipts.len(), 1);
+        assert!(matches!(
+            receipts[0].status,
+            crate::verification::VerificationStatus::Passed
+        ));
+        assert!(store2.get_experiment("exp-1").await.unwrap().is_some());
+        let _ = &mut exp;
     }
 
     #[tokio::test]

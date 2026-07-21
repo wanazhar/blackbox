@@ -254,5 +254,7 @@ No Makefile or justfile -- use cargo directly. Stable Rust, edition 2021.
 - **1.2** = Agent Memory Bus (project memory on launch)
 - **1.3** = trust & explain (shipped)
 - **1.4** = Trust Proof (Unix neutrality, causal proof, security) — **1.4.0**
+- **1.5** = Trace integrity & scale — **1.5.0**
+- **1.6** = Verified runs & reproducibility — **1.6.0**
 
-Qualify before tag: `./scripts/release-qualify-unix.sh`. See `docs/ROADMAP.md` and `docs/plan/trust-proof-1.4.md`.
+Qualify before tag: `./scripts/release-qualify-unix.sh`. See `docs/ROADMAP.md`.

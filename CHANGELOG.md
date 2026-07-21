@@ -4,6 +4,62 @@ All notable changes to **blackbox** are documented here.
 
 ## [Unreleased]
 
+## [1.6.0] — 2026-07-21
+
+**Verified runs & reproducibility** — prove what was captured, separate process success from task verification, compare repeated runs without overstating confidence, package reproduction within declared limits, and recover acknowledged evidence after crashes or storage failures.
+
+Epic: [issue #4](https://github.com/wanazhar/blackbox/issues/4). Bar: [docs/ROADMAP.md](docs/ROADMAP.md#16-bar-must-pass-before-tag).
+
+### Integrity finish (post-1.5)
+
+- Symlink-safe workspace manifests; restore fidelity classes (byte-exact vs sanitized vs partial)
+- Nested typed blob reference remap after content redaction (`blob_reference_rewrite`)
+- Portable v2 imports reject unresolved blob refs even when the blob map is empty
+- Run/kind filters applied in SQL before `LIMIT` (correct pagination under filters)
+- Aggregate semantics: filesystem ops and unique process counts match docs
+- Nest markers preserved across runtime fallbacks; capsule embedded archive integrity checks
+
+### Store integrity & durable ingest
+
+- `blackbox fsck` / `--deep` / `--repair` / `--json` — references, sequences, aggregates, blobs, FTS, checkpoints, migrations, WAL, stale runs, spool
+- `--repair` rebuilds FTS and GCs orphan blobs when safe
+- Durable ingest spool + idempotent batch commits; producer-visible success is recoverable after crash
+- Batch writer on a dedicated OS thread; fault fixtures for spool recovery
+
+### Verification receipts
+
+- Separate `execution_status`, `verification_status`, and `capture_status`
+- Immutable verification receipts (later checks append; they do not rewrite prior evidence)
+- Domain matching for confirmed-only gates
+
+### Experiments, reports, gates
+
+- Typed experiment metadata (`experiment_id`, `task_id`, `variant`, `attempt`, baseline/candidate, seed, model, …)
+- Multi-run reports with sample size, exclusions, dispersion, and insufficient-evidence outcomes
+- CI-friendly regression gates that fail closed on unsupported conclusions
+- Portable experiment/receipt export and attempt fingerprints
+
+### Capsules & MCP cassette
+
+- Reproducibility capsules with completeness classes (byte-exact / sanitized / partial / metadata-only)
+- Capsule execute/import paths; no claim of deterministic model replay
+- Experimental MCP stdio proxy for cassette record/replay (strict/normalized/ordered matching)
+- Secret redaction fixtures for cassette traffic; mock vs live adapter marking
+
+### Budgets, adapters, multi-project
+
+- Execution budgets: wall time, tool calls, output bytes; cgroup enforcement on Linux where available
+- Budget capability honesty: enforced vs observed-only vs unavailable
+- Versioned external adapter protocol (process/NDJSON) with conformance suite (live + fixtures)
+- Metadata-only multi-project index; `projects prune` / remove without centralizing transcripts
+
+### Qualification & docs
+
+- Release workflow fail-closed: every Tier-1 matrix target must succeed before GitHub release assets
+- PR endurance gate + optional `endurance_100k` for full qualify
+- Operator guides: fsck, verification, experiments, capsules/cassettes, budgets/adapters
+- Platform-ready README (absolute GitHub deep links), crates.io package naming, full public rustdoc for docs.rs
+
 ## [1.5.0] — 2026-07-20
 
 ### Security hardening

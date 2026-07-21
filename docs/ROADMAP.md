@@ -1,10 +1,10 @@
 # Roadmap and quality bar
 
-What “good” means for blackbox, what each major version promised, what **1.4–1.5** shipped, and what **1.6** targets.
+What “good” means for blackbox, what each major version promised, what **1.4–1.6** shipped, and what comes next.
 
 This is **product direction**, not a how-to. Operators: [guide/README.md](guide/README.md).
-**1.6 epic (active):** [issue #4](https://github.com/wanazhar/blackbox/issues/4) — verified runs, experiments, reproducibility, durable evidence.
-**1.5 plan:** [plan/trace-integrity-1.5.md](plan/trace-integrity-1.5.md). Epic: [issue #3](https://github.com/wanazhar/blackbox/issues/3).
+**1.6 (shipped 1.6.0):** [issue #4](https://github.com/wanazhar/blackbox/issues/4) — verified runs, experiments, reproducibility, durable evidence.
+**1.5 plan (shipped):** [plan/trace-integrity-1.5.md](plan/trace-integrity-1.5.md). Epic: [issue #3](https://github.com/wanazhar/blackbox/issues/3).
 **1.4 plan (shipped):** [plan/trust-proof-1.4.md](plan/trust-proof-1.4.md).
 **1.3 plan (shipped):** [plan/trust-explain-1.3.md](plan/trust-explain-1.3.md).
 
@@ -40,8 +40,8 @@ If a change weakens a bar, it needs an explicit docs + test story.
 | **1.2** | Continuity / project memory | Shipped **1.2.0** |
 | **1.3** | Trust, explain, agent-native depth | Shipped **1.3.0** |
 | **1.4** | **Trust Proof (Unix 10/10)** | Shipped **1.4.0** |
-| **1.5** | **Trace integrity & scale** | Shipped core — [issue #3](https://github.com/wanazhar/blackbox/issues/3) |
-| **1.6** | **Verified runs & reproducibility** | In progress — [issue #4](https://github.com/wanazhar/blackbox/issues/4) |
+| **1.5** | **Trace integrity & scale** | Shipped **1.5.0** — [issue #3](https://github.com/wanazhar/blackbox/issues/3) |
+| **1.6** | **Verified runs & reproducibility** | Shipped **1.6.0** — [issue #4](https://github.com/wanazhar/blackbox/issues/4) |
 
 ### 1.1 adoption bar (permanent)
 
@@ -173,7 +173,7 @@ Full plan: [plan/trace-integrity-1.5.md](plan/trace-integrity-1.5.md). Epic: [is
 
 ---
 
-## 1.6 bar (must pass before tag)
+## 1.6 bar (shipped in 1.6.0)
 
 Epic: [issue #4](https://github.com/wanazhar/blackbox/issues/4).
 

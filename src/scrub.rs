@@ -1,14 +1,19 @@
 //! Re-redact historical traces that may contain secrets at rest.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Context;
 
 use crate::core::blob::BlobReference;
+use crate::core::blob_refs::{
+    remap_checkpoint_blob_refs, remap_event_blob_refs, remap_manifest_blob_refs,
+};
 use crate::core::event::TraceEvent;
 use crate::redaction::scanner::SecretScanner;
 use crate::redaction::RedactionConfig;
 use crate::storage::TraceStore;
+use crate::workspace_manifest::WorkspaceManifest;
 
 /// Result of a scrub pass.
 #[derive(Debug, Default, Clone)]
@@ -65,11 +70,22 @@ pub async fn scrub_store(
             }
         }
 
+        // Per-run key remaps so nested workspace-manifest content hashes stay
+        // consistent after plaintext redaction changes content keys.
+        let mut key_remap: HashMap<String, String> = HashMap::new();
+
         let events = store.get_events(&run.id).await?;
         for event in events {
             report.events_scanned += 1;
-            if let Some(updated) =
-                scrub_event(store.as_ref(), &scanner, event, dry_run, &mut report).await?
+            if let Some(updated) = scrub_event(
+                store.as_ref(),
+                &scanner,
+                event,
+                dry_run,
+                &mut report,
+                &mut key_remap,
+            )
+            .await?
             {
                 report.events_updated += 1;
                 if !dry_run {
@@ -78,13 +94,14 @@ pub async fn scrub_store(
             }
         }
 
-        // Checkpoints: rewrite environment/diff/transcript blob refs
+        // Checkpoints: rewrite environment/diff/transcript blob refs, and
+        // recursively remap nested content_hash keys inside workspace manifests.
         for mut cp in store.get_checkpoints(&run.id).await? {
             report.checkpoints_scanned += 1;
             let mut dirty = false;
+            // Plain-text scrub for non-manifest blobs.
             for slot in [
                 &mut cp.git_diff_blob,
-                &mut cp.filesystem_manifest_blob,
                 &mut cp.environment_blob,
                 &mut cp.transcript_blob,
             ] {
@@ -94,12 +111,34 @@ pub async fn scrub_store(
                     slot.as_deref(),
                     dry_run,
                     &mut report,
+                    &mut key_remap,
                 )
                 .await?
                 {
                     *slot = Some(new_key);
                     dirty = true;
                 }
+            }
+            // Nested rewrite for workspace manifest JSON blobs (never plain-text
+            // scrub first — that would leave stale content_hash references).
+            if let Some(ref manifest_key) = cp.filesystem_manifest_blob.clone() {
+                if let Some(new_manifest_key) = scrub_workspace_manifest_blob(
+                    store.as_ref(),
+                    &scanner,
+                    manifest_key,
+                    dry_run,
+                    &mut report,
+                    &mut key_remap,
+                )
+                .await?
+                {
+                    cp.filesystem_manifest_blob = Some(new_manifest_key);
+                    dirty = true;
+                }
+            }
+            // Apply any remaps collected from nested content rewrites.
+            if remap_checkpoint_blob_refs(&mut cp, &key_remap) {
+                dirty = true;
             }
             if dirty && !dry_run {
                 if let Err(e) = store.update_checkpoint(&cp).await {
@@ -113,16 +152,22 @@ pub async fn scrub_store(
 }
 
 /// If `key` is a content-addressed blob containing secrets, rewrite and return new key.
+/// Records old→new mappings in `key_remap` for nested reference rewrites.
 async fn scrub_blob_key(
     store: &dyn TraceStore,
     scanner: &SecretScanner,
     key: Option<&str>,
     dry_run: bool,
     report: &mut ScrubReport,
+    key_remap: &mut HashMap<String, String>,
 ) -> anyhow::Result<Option<String>> {
     let Some(key) = key else {
         return Ok(None);
     };
+    if let Some(existing) = key_remap.get(key) {
+        // Already rewritten this key in this pass.
+        return Ok(Some(existing.clone()));
+    }
     if key.len() != 64 || !key.chars().all(|c| c.is_ascii_hexdigit()) {
         return Ok(None);
     }
@@ -136,9 +181,12 @@ async fn scrub_blob_key(
                 if redacted.as_bytes() != data.as_slice() {
                     report.blobs_rewritten += 1;
                     if dry_run {
-                        return Ok(Some(key.to_string())); // signal dirty without write
+                        // Signal dirty without write; map to self for detection.
+                        key_remap.insert(key.to_string(), key.to_string());
+                        return Ok(Some(key.to_string()));
                     }
                     let new_ref = store.store_blob(redacted.as_bytes()).await?;
+                    key_remap.insert(key.to_string(), new_ref.key.clone());
                     return Ok(Some(new_ref.key));
                 }
             }
@@ -151,12 +199,101 @@ async fn scrub_blob_key(
     }
 }
 
+/// Scrub nested file blobs referenced by a workspace manifest and rewrite
+/// `content_hash` fields. Returns a new manifest blob key when the manifest
+/// JSON or any nested content hash changed.
+async fn scrub_workspace_manifest_blob(
+    store: &dyn TraceStore,
+    scanner: &SecretScanner,
+    manifest_key: &str,
+    dry_run: bool,
+    report: &mut ScrubReport,
+    key_remap: &mut HashMap<String, String>,
+) -> anyhow::Result<Option<String>> {
+    let Some(bref) = BlobReference::try_new(manifest_key.to_string(), 0) else {
+        return Ok(None);
+    };
+    let data = match store.load_blob(&bref).await {
+        Ok(d) => d,
+        Err(_) => return Ok(None),
+    };
+    let text = match std::str::from_utf8(&data) {
+        Ok(t) => t,
+        Err(_) => return Ok(None),
+    };
+    let mut manifest = match WorkspaceManifest::from_json(text) {
+        Ok(m) => m,
+        Err(_) => {
+            // Not a workspace manifest — fall back to plain text scrub.
+            return scrub_blob_key(
+                store,
+                scanner,
+                Some(manifest_key),
+                dry_run,
+                report,
+                key_remap,
+            )
+            .await;
+        }
+    };
+
+    // Scrub each file content blob referenced by content_hash.
+    let hashes: Vec<String> = manifest
+        .entries
+        .iter()
+        .filter_map(|e| e.content_hash.clone())
+        .collect();
+    for hash in hashes {
+        let _ = scrub_blob_key(
+            store,
+            scanner,
+            Some(&hash),
+            dry_run,
+            report,
+            key_remap,
+        )
+        .await?;
+    }
+
+    let mut nested_dirty = remap_manifest_blob_refs(&mut manifest, key_remap);
+
+    // Also redact any secrets that appear in the manifest JSON itself.
+    let mut json = manifest.to_json()?;
+    let redacted_json = scanner.redact(&json);
+    if redacted_json != json {
+        json = redacted_json;
+        nested_dirty = true;
+        // Re-parse after redaction so structure stays valid when possible.
+        if let Ok(m) = WorkspaceManifest::from_json(&json) {
+            manifest = m;
+            let _ = remap_manifest_blob_refs(&mut manifest, key_remap);
+            json = manifest.to_json()?;
+        }
+    } else if nested_dirty {
+        json = manifest.to_json()?;
+    }
+
+    if !nested_dirty {
+        return Ok(None);
+    }
+
+    report.blobs_rewritten += 1;
+    if dry_run {
+        key_remap.insert(manifest_key.to_string(), manifest_key.to_string());
+        return Ok(Some(manifest_key.to_string()));
+    }
+    let new_ref = store.store_blob(json.as_bytes()).await?;
+    key_remap.insert(manifest_key.to_string(), new_ref.key.clone());
+    Ok(Some(new_ref.key))
+}
+
 async fn scrub_event(
     store: &dyn TraceStore,
     scanner: &SecretScanner,
     mut event: TraceEvent,
     dry_run: bool,
     report: &mut ScrubReport,
+    key_remap: &mut HashMap<String, String>,
 ) -> anyhow::Result<Option<TraceEvent>> {
     let mut dirty = false;
 
@@ -184,8 +321,15 @@ async fn scrub_event(
             "error" => &mut event.error_blob,
             _ => unreachable!(),
         };
-        if let Some(new_key) =
-            scrub_blob_key(store, scanner, key_slot.as_deref(), dry_run, report).await?
+        if let Some(new_key) = scrub_blob_key(
+            store,
+            scanner,
+            key_slot.as_deref(),
+            dry_run,
+            report,
+            key_remap,
+        )
+        .await?
         {
             dirty = true;
             if !dry_run {
@@ -207,7 +351,9 @@ async fn scrub_event(
         let Some(val) = event.metadata.get(&mk).and_then(|v| v.as_str()) else {
             continue;
         };
-        if let Some(new_key) = scrub_blob_key(store, scanner, Some(val), dry_run, report).await? {
+        if let Some(new_key) =
+            scrub_blob_key(store, scanner, Some(val), dry_run, report, key_remap).await?
+        {
             dirty = true;
             if !dry_run {
                 event
@@ -215,6 +361,11 @@ async fn scrub_event(
                     .insert(mk, serde_json::Value::String(new_key));
             }
         }
+    }
+
+    // Apply any remaps collected from this or prior events in the same run.
+    if remap_event_blob_refs(&mut event, key_remap) {
+        dirty = true;
     }
 
     Ok(if dirty { Some(event) } else { None })

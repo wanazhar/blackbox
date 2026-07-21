@@ -1,4 +1,5 @@
 pub mod blob;
+pub mod blob_refs;
 pub mod checkpoint;
 pub mod command;
 pub mod event;
@@ -7,6 +8,10 @@ pub mod run;
 pub mod timing;
 
 pub use blob::BlobReference;
+pub use blob_refs::{
+    collect_checkpoint_blob_keys, collect_event_blob_keys, collect_manifest_blob_keys,
+    remap_checkpoint_blob_refs, remap_event_blob_refs, remap_manifest_blob_refs,
+};
 pub use checkpoint::Checkpoint;
 pub use command::{CaptureMethod, CommandFidelity, CommandMetadata};
 pub use event::{Confidence, EventSource, EventStatus, SideEffect, TraceEvent};

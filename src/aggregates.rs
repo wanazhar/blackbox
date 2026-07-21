@@ -4,12 +4,15 @@
 //! event-load windows. Aggregates are updated on each insert and can be
 //! recomputed from the event table after interruption.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::core::event::{EventSource, EventStatus, SideEffect, TraceEvent};
+
+/// Cap unique path / process identity sets stored in aggregates payload.
+const UNIQUE_SET_CAP: usize = 10_000;
 
 /// Pointer to a salient event kept inside aggregates.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -36,9 +39,26 @@ pub struct RunAggregates {
     pub tool_calls: u64,
     pub tool_results: u64,
     pub tool_failures: u64,
+    /// Count of create/modify/rename/remove filesystem operations
+    /// (`filesystem.created|modified|renamed|removed`, plus legacy `file.*`/`fs.*`).
     pub file_ops: u64,
+    /// Unique project-relative (or reported) paths touched by file ops.
+    #[serde(default)]
+    pub files_touched_unique: u64,
     pub side_effect_writes: u64,
+    /// Total process-source events (spawned, exited, resource samples, …).
+    #[serde(default)]
+    pub process_events: u64,
+    /// Unique process identities observed (prefer `pid` + `start_time` when present).
+    ///
+    /// One process with many resource samples counts as one.
     pub processes_observed: u64,
+    /// Internal set backing `files_touched_unique` (capped).
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    files_touched: BTreeSet<String>,
+    /// Internal set backing `processes_observed` (capped).
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    process_ids: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_human_instruction: Option<AggregateEventRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -79,8 +99,12 @@ impl RunAggregates {
             tool_results: 0,
             tool_failures: 0,
             file_ops: 0,
+            files_touched_unique: 0,
             side_effect_writes: 0,
+            process_events: 0,
             processes_observed: 0,
+            files_touched: BTreeSet::new(),
+            process_ids: BTreeSet::new(),
             first_human_instruction: None,
             first_failure: None,
             last_failure: None,
@@ -137,11 +161,26 @@ impl RunAggregates {
                     self.tool_failures = self.tool_failures.saturating_add(1);
                 }
             }
-            k if k.starts_with("file.") || k.starts_with("fs.") => {
+            k if is_file_op_kind(k) => {
                 self.file_ops = self.file_ops.saturating_add(1);
+                if let Some(path) = file_path_from(event) {
+                    if self.files_touched.len() < UNIQUE_SET_CAP {
+                        self.files_touched.insert(path);
+                    }
+                    self.files_touched_unique = self.files_touched.len() as u64;
+                }
             }
             k if k.starts_with("process.") => {
-                self.processes_observed = self.processes_observed.saturating_add(1);
+                self.process_events = self.process_events.saturating_add(1);
+                // Observer lifecycle is not a process identity.
+                if k != "process.observer.started" && k != "process.observer.stopped" {
+                    if let Some(id) = process_identity_from(event) {
+                        if self.process_ids.len() < UNIQUE_SET_CAP {
+                            self.process_ids.insert(id);
+                        }
+                        self.processes_observed = self.process_ids.len() as u64;
+                    }
+                }
             }
             _ => {}
         }
@@ -239,6 +278,67 @@ fn source_key(source: &EventSource) -> String {
         EventSource::Browser => "Browser".into(),
         EventSource::System => "System".into(),
     }
+}
+
+/// True for create/modify/rename/remove filesystem operation events.
+fn is_file_op_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "filesystem.created"
+            | "filesystem.modified"
+            | "filesystem.renamed"
+            | "filesystem.removed"
+            | "file.created"
+            | "file.modified"
+            | "file.renamed"
+            | "file.removed"
+            | "fs.created"
+            | "fs.modified"
+            | "fs.renamed"
+            | "fs.removed"
+    ) || kind.starts_with("file.")
+        || kind.starts_with("fs.")
+}
+
+fn file_path_from(event: &TraceEvent) -> Option<String> {
+    for key in ["path", "rel_path", "relative_path", "from", "to"] {
+        if let Some(s) = event.metadata.get(key).and_then(|v| v.as_str()) {
+            let t = s.trim();
+            if !t.is_empty() {
+                return Some(t.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Prefer `pid` + `start_time` / `starttime`; fall back to pid alone.
+fn process_identity_from(event: &TraceEvent) -> Option<String> {
+    let pid = event
+        .metadata
+        .get("pid")
+        .and_then(|v| {
+            v.as_u64()
+                .map(|n| n.to_string())
+                .or_else(|| v.as_i64().map(|n| n.to_string()))
+                .or_else(|| v.as_str().map(|s| s.trim().to_string()))
+        })
+        .filter(|s| !s.is_empty())?;
+    let start = event
+        .metadata
+        .get("start_time")
+        .or_else(|| event.metadata.get("starttime"))
+        .and_then(|v| {
+            v.as_u64()
+                .map(|n| n.to_string())
+                .or_else(|| v.as_i64().map(|n| n.to_string()))
+                .or_else(|| v.as_str().map(|s| s.trim().to_string()))
+        })
+        .filter(|s| !s.is_empty());
+    Some(match start {
+        Some(st) => format!("{pid}:{st}"),
+        None => pid,
+    })
 }
 
 fn is_human_instruction(event: &TraceEvent) -> bool {
@@ -455,5 +555,75 @@ mod tests {
         assert_eq!(a.events_total, b.events_total);
         assert_eq!(a.by_kind, b.by_kind);
         assert_eq!(a.last_sequence, 50);
+    }
+
+    #[test]
+    fn filesystem_ops_increment_file_ops_and_unique_paths() {
+        let run = "r3";
+        let mut agg = RunAggregates::new(run);
+
+        for (i, kind) in [
+            "filesystem.created",
+            "filesystem.modified",
+            "filesystem.renamed",
+            "filesystem.removed",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let mut e = TraceEvent::new(run, EventSource::Filesystem, *kind);
+            e.sequence = (i + 1) as u64;
+            e.metadata
+                .insert("path".into(), serde_json::json!(format!("src/f{i}.rs")));
+            agg.observe(&e);
+        }
+        // Second modify of same path should not increase unique count.
+        let mut again = TraceEvent::new(run, EventSource::Filesystem, "filesystem.modified");
+        again.sequence = 5;
+        again
+            .metadata
+            .insert("path".into(), serde_json::json!("src/f1.rs"));
+        agg.observe(&again);
+
+        // Snapshots / overflow are not file ops.
+        let mut snap = TraceEvent::new(run, EventSource::Filesystem, "filesystem.snapshot");
+        snap.sequence = 6;
+        agg.observe(&snap);
+
+        assert_eq!(agg.file_ops, 5);
+        assert_eq!(agg.files_touched_unique, 4);
+    }
+
+    #[test]
+    fn process_samples_count_as_one_unique_process() {
+        let run = "r4";
+        let mut agg = RunAggregates::new(run);
+
+        let mut spawned = TraceEvent::new(run, EventSource::Process, "process.spawned");
+        spawned.sequence = 1;
+        spawned.metadata.insert("pid".into(), serde_json::json!(42));
+        spawned
+            .metadata
+            .insert("start_time".into(), serde_json::json!(1000));
+        agg.observe(&spawned);
+
+        for i in 0..10 {
+            let mut sample =
+                TraceEvent::new(run, EventSource::Process, "process.resource.sample");
+            sample.sequence = 2 + i;
+            sample.metadata.insert("pid".into(), serde_json::json!(42));
+            sample
+                .metadata
+                .insert("start_time".into(), serde_json::json!(1000));
+            agg.observe(&sample);
+        }
+
+        let mut other = TraceEvent::new(run, EventSource::Process, "process.spawned");
+        other.sequence = 20;
+        other.metadata.insert("pid".into(), serde_json::json!(99));
+        agg.observe(&other);
+
+        assert_eq!(agg.process_events, 12);
+        assert_eq!(agg.processes_observed, 2);
     }
 }

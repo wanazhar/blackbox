@@ -1,6 +1,6 @@
 id: boundary-17-integration
 scope: issue #5 end-to-end qualification and release documentation
-status: pending
+status: in-progress
 depends-on: [boundary-17-sensors, boundary-17-incidents, boundary-17-adversarial]
 
 ## objective

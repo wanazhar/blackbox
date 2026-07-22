@@ -29,6 +29,12 @@ pub struct ImportOptions {
     pub default_source: String,
     /// Reject events with integrity `signed_invalid`.
     pub reject_invalid_signatures: bool,
+    /// Reject events whose integrity is not `hash_ok` or `signed_verified`.
+    /// Default **false** so generic JSONL still imports; enable for fail-closed IR.
+    pub reject_unverified: bool,
+    /// When `original_payload_hash` is present, require a matching `payload` /
+    /// `raw` attribute string (sha256 hex) or reject the event.
+    pub verify_payload_hashes: bool,
 }
 
 impl Default for ImportOptions {
@@ -40,6 +46,8 @@ impl Default for ImportOptions {
             default_sensor: "generic".into(),
             default_source: "import".into(),
             reject_invalid_signatures: true,
+            reject_unverified: false,
+            verify_payload_hashes: true,
         }
     }
 }
@@ -151,6 +159,14 @@ pub fn import_evidence_ndjson_str(
                     report.rejects.push(ImportReject {
                         line: line_no,
                         reason: "integrity signed_invalid".into(),
+                    });
+                    continue;
+                }
+                if let Err(reason) = apply_integrity_checks(&mut ev, opts) {
+                    report.rejected += 1;
+                    report.rejects.push(ImportReject {
+                        line: line_no,
+                        reason,
                     });
                     continue;
                 }
@@ -350,6 +366,91 @@ fn map_action(s: &str) -> EvidenceAction {
     }
 }
 
+/// Verify declared payload hashes and apply integrity honesty gates.
+///
+/// - When `original_payload_hash` is set and `verify_payload_hashes`, require a
+///   matching `payload` / `raw` / `body` attribute (sha256 hex of UTF-8 bytes).
+/// - Unverified claims of `hash_ok` without a successful check are demoted.
+/// - `reject_unverified` fails closed unless integrity is `hash_ok` or
+///   `signed_verified`.
+fn apply_integrity_checks(
+    ev: &mut ExternalEvidenceEvent,
+    opts: &ImportOptions,
+) -> Result<(), String> {
+    use sha2::{Digest, Sha256};
+
+    let mut hash_verified = false;
+
+    if opts.verify_payload_hashes {
+        if let Some(ref want) = ev.original_payload_hash {
+            let want = want.trim().to_ascii_lowercase();
+            if want.is_empty() || want.len() != 64 || !want.chars().all(|c| c.is_ascii_hexdigit()) {
+                return Err(format!(
+                    "original_payload_hash is not a 64-char sha256 hex: {want:?}"
+                ));
+            }
+            let payload = payload_bytes_from_attrs(ev).ok_or_else(|| {
+                "original_payload_hash present but no payload/raw/body attribute".to_string()
+            })?;
+            let mut h = Sha256::new();
+            h.update(&payload);
+            let got = hex::encode(h.finalize());
+            if got != want {
+                return Err(format!(
+                    "payload hash mismatch (declared {want}, computed {got})"
+                ));
+            }
+            hash_verified = true;
+            if matches!(
+                ev.integrity,
+                EvidenceIntegrity::Unverified | EvidenceIntegrity::Transformed
+            ) {
+                ev.integrity = EvidenceIntegrity::HashOk;
+                ev.transformations.push("payload_hash_verified".into());
+            }
+        } else if matches!(ev.integrity, EvidenceIntegrity::HashOk) {
+            // Source claimed hash_ok without material we can check — demote.
+            ev.integrity = EvidenceIntegrity::Unverified;
+            ev.transformations
+                .push("hash_ok_demoted_no_payload_hash".into());
+        }
+    }
+
+    if opts.reject_unverified
+        && !matches!(
+            ev.integrity,
+            EvidenceIntegrity::HashOk | EvidenceIntegrity::SignedVerified
+        )
+    {
+        return Err(format!(
+            "reject_unverified: integrity is {}{}",
+            ev.integrity.as_str(),
+            if hash_verified {
+                ""
+            } else {
+                " (provide original_payload_hash + payload or signed_verified)"
+            }
+        ));
+    }
+
+    Ok(())
+}
+
+fn payload_bytes_from_attrs(ev: &ExternalEvidenceEvent) -> Option<Vec<u8>> {
+    for key in ["payload", "raw", "body"] {
+        if let Some(v) = ev.attributes.get(key) {
+            if let Some(s) = v.as_str() {
+                return Some(s.as_bytes().to_vec());
+            }
+            // Allow compact JSON objects/arrays as canonical payload.
+            if v.is_object() || v.is_array() {
+                return serde_json::to_vec(v).ok();
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -396,5 +497,61 @@ mod tests {
         let (events, report) = import_evidence_ndjson_str(&lines, &opts).unwrap();
         assert_eq!(events.len(), 3);
         assert!(report.rejected >= 7);
+    }
+
+    #[test]
+    fn verifies_payload_hash_and_promotes() {
+        use sha2::{Digest, Sha256};
+        let body = "hello-evidence";
+        let mut h = Sha256::new();
+        h.update(body.as_bytes());
+        let digest = hex::encode(h.finalize());
+        let ndjson = format!(
+            r#"{{"schema":"blackbox.evidence.event/v1","id":"evext-hash","source":"proxy","sensor":"proxy","source_event_id":"h1","ingested_at":"2026-07-22T00:00:00Z","action":"http_request","outcome":"denied","integrity":"unverified","original_payload_hash":"{digest}","attributes":{{"payload":"{body}"}}}}"#
+        );
+        let (events, report) =
+            import_evidence_ndjson_str(&ndjson, &ImportOptions::default()).unwrap();
+        assert_eq!(report.accepted, 1, "{report:?}");
+        assert!(matches!(events[0].integrity, EvidenceIntegrity::HashOk));
+        assert!(events[0]
+            .transformations
+            .iter()
+            .any(|t| t == "payload_hash_verified"));
+    }
+
+    #[test]
+    fn rejects_payload_hash_mismatch() {
+        let ndjson = r#"{"schema":"blackbox.evidence.event/v1","id":"evext-bad","source":"proxy","sensor":"proxy","source_event_id":"h2","ingested_at":"2026-07-22T00:00:00Z","action":"http_request","outcome":"denied","integrity":"unverified","original_payload_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","attributes":{"payload":"nope"}}"#;
+        let (_e, report) =
+            import_evidence_ndjson_str(ndjson, &ImportOptions::default()).unwrap();
+        assert_eq!(report.accepted, 0);
+        assert_eq!(report.rejected, 1);
+        assert!(report.rejects[0].reason.contains("payload hash mismatch"));
+    }
+
+    #[test]
+    fn demotes_unverified_hash_ok_claim() {
+        let ndjson = r#"{"schema":"blackbox.evidence.event/v1","id":"evext-claim","source":"proxy","sensor":"proxy","source_event_id":"h3","ingested_at":"2026-07-22T00:00:00Z","action":"http_request","outcome":"denied","integrity":"hash_ok"}"#;
+        let (events, report) =
+            import_evidence_ndjson_str(ndjson, &ImportOptions::default()).unwrap();
+        assert_eq!(report.accepted, 1);
+        assert!(matches!(events[0].integrity, EvidenceIntegrity::Unverified));
+        assert!(events[0]
+            .transformations
+            .iter()
+            .any(|t| t == "hash_ok_demoted_no_payload_hash"));
+    }
+
+    #[test]
+    fn reject_unverified_fail_closed() {
+        let ndjson = r#"{"id":"g-unv","action":"connect","destination":"10.0.0.1:443"}"#;
+        let opts = ImportOptions {
+            reject_unverified: true,
+            ..Default::default()
+        };
+        let (_e, report) = import_evidence_ndjson_str(ndjson, &opts).unwrap();
+        assert_eq!(report.accepted, 0);
+        assert_eq!(report.rejected, 1);
+        assert!(report.rejects[0].reason.contains("reject_unverified"));
     }
 }

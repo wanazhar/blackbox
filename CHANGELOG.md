@@ -48,6 +48,7 @@ Epic: [issue #5](https://github.com/wanazhar/blackbox/issues/5). Plan: [docs/pla
 #### Polish (pre-release)
 - Detector **FP/FN quality gate** (`evaluate_detector_quality`, min recall 0.85 / precision 0.80; benign controls must be clean)
 - Expanded corpus (~22 cases): escape, probe, credential, package, privilege, transition, benign admin/dev
+- **Residual-risk closure:** payload-hash verify + `--reject-unverified` on evidence import; correlation caps on unverified integrity / cooperative `trace_id`; forensic packs use `SecretScanner`; `serve` auto-token by default (`--allow-anonymous` danger opt-in)
 - Incident **cursor pagination** (`list_incidents_page`, CLI `--cursor/--limit`) + **aggregates** on show
 - Dashboard HTML: run trust panel + findings table; `/incidents` and `/incidents/{id}` pages
 - Incident page **reconstruction graph** (SVG runs + reuse curves), earliest-signal banner, techniques/findings/edges tables

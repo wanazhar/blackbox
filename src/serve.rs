@@ -64,6 +64,9 @@ pub struct ServeOptions {
     pub unix_socket: Option<PathBuf>,
     /// Force Secure cookie flag (also implied for non-loopback binds).
     pub secure_cookies: bool,
+    /// Danger: allow unauthenticated access on loopback/unix only.
+    /// Default is **false** — when no token is supplied, one is auto-generated.
+    pub allow_anonymous: bool,
 }
 
 /// Bind and serve the dashboard until cancelled.
@@ -75,8 +78,33 @@ pub struct ServeOptions {
 /// // `serve` — see module docs for full workflow.
 /// ```
 pub async fn serve(store: Arc<SqliteStore>, opts: ServeOptions) -> anyhow::Result<()> {
-    // Privacy: non-loopback bind requires a token (loopback multi-user still warned).
-    if !crate::privacy::is_loopback_addr(&opts.addr) && opts.token.is_none() {
+    let is_loopback = crate::privacy::is_loopback_addr(&opts.addr);
+    let on_unix = opts.unix_socket.is_some();
+
+    // Resolve auth: explicit token → auto-generate → (danger) allow anonymous.
+    let mut token = opts.token.clone();
+    let mut auto_generated = false;
+    if token.as_ref().is_some_and(|t| t.is_empty()) {
+        token = None;
+    }
+    if token.is_none() {
+        if opts.allow_anonymous {
+            if !is_loopback && !on_unix {
+                anyhow::bail!(
+                    "refusing --allow-anonymous on non-loopback address {}. \
+                     Use --token / BLACKBOX_SERVE_TOKEN, or bind 127.0.0.1.",
+                    opts.addr
+                );
+            }
+        } else {
+            // Fail-closed default: never serve history without a shared secret.
+            token = Some(uuid::Uuid::new_v4().simple().to_string());
+            auto_generated = true;
+        }
+    }
+
+    // Privacy: non-loopback bind still requires a token (auto or explicit).
+    if !is_loopback && !on_unix && token.is_none() {
         anyhow::bail!(
             "refusing to serve on non-loopback address {} without authentication. \
              Set --token or BLACKBOX_SERVE_TOKEN (or bind 127.0.0.1).",
@@ -89,10 +117,10 @@ pub async fn serve(store: Arc<SqliteStore>, opts: ServeOptions) -> anyhow::Resul
         println!("Reindexed FTS ({n} events)");
     }
 
-    let secure_cookies = opts.secure_cookies || !crate::privacy::is_loopback_addr(&opts.addr);
+    let secure_cookies = opts.secure_cookies || !is_loopback;
     let state = AppState {
         store,
-        token: opts.token.clone(),
+        token: token.clone(),
         sse_semaphore: Arc::new(Semaphore::new(100)),
         sessions: Arc::new(Mutex::new(HashMap::new())),
         login_failures: Arc::new(Mutex::new(Vec::new())),
@@ -142,21 +170,24 @@ pub async fn serve(store: Arc<SqliteStore>, opts: ServeOptions) -> anyhow::Resul
     }
 
     let listener = tokio::net::TcpListener::bind(opts.addr).await?;
-    tracing::info!(addr = %opts.addr, auth = opts.token.is_some(), "dashboard listening");
+    tracing::info!(addr = %opts.addr, auth = token.is_some(), "dashboard listening");
     println!("blackbox dashboard → http://{}", opts.addr);
-    if opts.token.is_none() {
-        eprintln!(
-            "WARNING: dashboard is running WITHOUT authentication on loopback — \
-             any local user can curl http://{} and read full run history. \
-             Set --token or BLACKBOX_SERVE_TOKEN to require auth.",
-            opts.addr
-        );
-    }
-    if opts.token.is_some() {
+    if let Some(ref t) = token {
+        if auto_generated {
+            println!("  token:   {t}  (auto-generated; not stored — pass --token next time)");
+            println!("  note:    set BLACKBOX_SERVE_TOKEN or --token to pin the secret");
+            println!("  danger:  --allow-anonymous opts out of auth on loopback only");
+        }
         println!(
             "  auth:    browser → GET /login then session cookie; API → Authorization: Bearer"
         );
         println!("  login:   http://{}/login", opts.addr);
+    } else {
+        eprintln!(
+            "WARNING: dashboard is running WITHOUT authentication (--allow-anonymous) — \
+             any local user can curl http://{} and read full run history.",
+            opts.addr
+        );
     }
     println!("  live:    http://{}/watch", opts.addr);
     println!("  status:  http://{}/status", opts.addr);

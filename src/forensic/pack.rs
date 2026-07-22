@@ -1,6 +1,8 @@
 //! Bounded, redacted forensic packs for on-premise analysis.
 
 #![allow(missing_docs)]
+use std::sync::OnceLock;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -9,6 +11,8 @@ use crate::boundary::{BoundaryFinding, EvidenceEdge, ResolvedBoundary};
 use crate::core::event::TraceEvent;
 use crate::evidence::ExternalEvidenceEvent;
 use crate::incident::IncidentGraph;
+use crate::redaction::scanner::SecretScanner;
+use crate::redaction::RedactionConfig;
 
 /// Schema for forensic packs.
 pub const FORENSIC_PACK_SCHEMA: &str = "blackbox.forensic.pack/v1";
@@ -141,7 +145,18 @@ pub fn build_forensic_pack(
         })
         .collect();
 
-    let findings: Vec<BoundaryFinding> = findings.iter().take(opts.max_findings).cloned().collect();
+    let findings: Vec<BoundaryFinding> = findings
+        .iter()
+        .take(opts.max_findings)
+        .map(|f| {
+            let mut f = f.clone();
+            f.summary = redact_str(&f.summary, opts);
+            if let Some(ref rec) = f.recommendation {
+                f.recommendation = Some(redact_str(rec, opts));
+            }
+            f
+        })
+        .collect();
 
     let mut fingerprints = Vec::new();
     for e in events.iter().take(opts.max_events) {
@@ -197,6 +212,7 @@ pub fn build_forensic_pack(
             continue;
         }
         derived_claims.push(ForensicClaim {
+            // Summary already redacted on findings above.
             claim: f.summary.clone(),
             citations,
             origin: "deterministic".into(),
@@ -236,8 +252,15 @@ fn hash_pack(pack: &ForensicPack) -> String {
     hex::encode(h.finalize())
 }
 
+fn pack_scanner() -> &'static SecretScanner {
+    static SCANNER: OnceLock<SecretScanner> = OnceLock::new();
+    SCANNER.get_or_init(|| SecretScanner::new(RedactionConfig::default()))
+}
+
 fn redact_str(s: &str, opts: &ForensicPackOpts) -> String {
-    let mut out = s.to_string();
+    // Full SecretScanner first (API keys, JWTs, PEMs, connection strings, …).
+    let mut out = pack_scanner().redact(s);
+    // Operator/extra substring patterns (opaque stable tags for incident sharing).
     for pat in &opts.redact_patterns {
         if out.contains(pat) {
             let rep = format!("[REDACTED:{}]", short_hash(pat));
@@ -430,5 +453,36 @@ mod tests {
         assert!(!pack.pack_hash.is_empty());
         validate_claim_citations(&pack).unwrap();
         assert_eq!(pack.findings[0].id, f.id);
+    }
+
+    #[test]
+    fn pack_secret_scanner_redacts_api_keys() {
+        let mut ev = TraceEvent::new("r1", EventSource::Tool, "tool.call");
+        // OpenAI-shaped key (matches SecretScanner BASE_PATTERNS), not only substring tags.
+        let secret = "sk-abcdefghijklmnopqrstuvwxyz012345";
+        ev.metadata
+            .insert("command".into(), serde_json::json!(format!("export KEY={secret}")));
+        let pack = build_forensic_pack(
+            "r1",
+            None,
+            &[ev],
+            &[],
+            &[],
+            &[],
+            &ForensicPackOpts {
+                // No substring patterns that would catch sk- alone.
+                redact_patterns: vec![],
+                ..Default::default()
+            },
+        );
+        let dumped = serde_json::to_string(&pack).unwrap();
+        assert!(
+            !dumped.contains(secret),
+            "forensic pack must not leak API key material: {dumped}"
+        );
+        assert!(
+            dumped.contains("REDACTED") || pack.fingerprints.iter().any(|fp| fp.contains("REDACTED")),
+            "expected SecretScanner redaction markers"
+        );
     }
 }

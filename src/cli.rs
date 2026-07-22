@@ -426,9 +426,15 @@ pub struct ServeArgs {
     #[arg(long)]
     pub reindex: bool,
 
-    /// Require this shared secret (browser: POST /session cookie; API: Authorization: Bearer)
+    /// Require this shared secret (browser: POST /session cookie; API: Authorization: Bearer).
+    /// When omitted, a one-shot token is auto-generated and printed (fail-closed default).
     #[arg(long, env = "BLACKBOX_SERVE_TOKEN")]
     pub token: Option<String>,
+
+    /// Danger: allow unauthenticated loopback/unix access (any local user can read traces).
+    /// Default is off — prefer `--token` / auto-generated token.
+    #[arg(long)]
+    pub allow_anonymous: bool,
 
     /// Listen on a Unix domain socket instead of TCP (mode 0600)
     #[arg(long, value_name = "PATH")]
@@ -5836,6 +5842,7 @@ async fn cmd_serve(cli: &Cli, args: &ServeArgs) -> anyhow::Result<()> {
             reindex: args.reindex,
             unix_socket: args.unix_socket.clone(),
             secure_cookies: args.secure_cookies,
+            allow_anonymous: args.allow_anonymous,
         },
     )
     .await

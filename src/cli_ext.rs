@@ -477,6 +477,12 @@ pub enum EvidenceAction {
         /// Max events
         #[arg(long, default_value_t = 50_000)]
         max_events: usize,
+        /// Fail closed: reject events that are not hash_ok or signed_verified
+        #[arg(long)]
+        reject_unverified: bool,
+        /// Skip sha256 checks when original_payload_hash is present (not recommended)
+        #[arg(long)]
+        no_verify_payload_hashes: bool,
     },
     /// List external evidence (optionally for a run)
     List {
@@ -2052,6 +2058,8 @@ pub async fn cmd_evidence(
             run,
             correlate,
             max_events,
+            reject_unverified,
+            no_verify_payload_hashes,
         } => {
             use crate::boundary::{
                 correlate_external_batch, CorrelationContext, PropagationChannel,
@@ -2062,6 +2070,8 @@ pub async fn cmd_evidence(
             let opts = ImportOptions {
                 max_events: *max_events,
                 default_run_id: run.clone(),
+                reject_unverified: *reject_unverified,
+                verify_payload_hashes: !*no_verify_payload_hashes,
                 ..Default::default()
             };
             let (events, mut report) = import_evidence_ndjson(file, &opts)?;

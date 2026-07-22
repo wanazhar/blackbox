@@ -56,8 +56,9 @@ blackbox timeline latest --semantic
 blackbox timeline latest --kind tool.call
 blackbox inspect <event-id>
 blackbox search "timeout"
-blackbox serve                      # http://127.0.0.1:7788
-blackbox serve --token "$TOKEN"
+blackbox serve                      # auto-token printed; http://127.0.0.1:7788
+blackbox serve --token "$TOKEN"     # pin secret
+# blackbox serve --allow-anonymous  # danger: loopback only
 ```
 
 ---

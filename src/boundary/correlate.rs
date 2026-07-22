@@ -222,17 +222,26 @@ pub fn correlate_external_event(
     }
 
     // Cap confidence: never upgrade temporal-only to confirmed.
-    // Matching blackbox run_id is enough for confirmed (store-owned identity).
-    // Cooperative trace_id alone never reaches confirmed without another signal.
-    let confidence = if reasons.iter().any(|r| r == "matching_run_id") {
+    // Cooperative trace_id alone never reaches confirmed (closed residual risk).
+    // Integrity-unverified sensor data cannot become Confirmed either.
+    let integrity_trusted = matches!(
+        ev.integrity,
+        crate::evidence::EvidenceIntegrity::HashOk
+            | crate::evidence::EvidenceIntegrity::SignedVerified
+    );
+    let confidence = if reasons.iter().any(|r| r == "matching_run_id") && integrity_trusted {
         Confidence::Confirmed
+    } else if reasons.iter().any(|r| r == "matching_run_id") {
+        // Operator/agent-supplied run_id on unverified sensor feed.
+        reasons.push("unverified_integrity_caps_confidence".into());
+        Confidence::StronglyCorrelated
     } else if score >= 4
         && reasons
             .iter()
             .any(|r| r == "matching_pid" || r == "matching_workload")
         && trace_match
+        && integrity_trusted
     {
-        // Multi-signal including non-cooperative.
         Confidence::Confirmed
     } else if score >= 3 || trace_match {
         Confidence::StronglyCorrelated
@@ -244,7 +253,10 @@ pub fn correlate_external_event(
 
     // Enforce temporal proximity cap.
     let confidence = if matches!(relation, EvidenceRelation::TemporalProximity)
-        && matches!(confidence, Confidence::Confirmed)
+        && matches!(
+            confidence,
+            Confidence::Confirmed | Confidence::StronglyCorrelated
+        )
     {
         Confidence::WeaklyCorrelated
     } else {
@@ -254,9 +266,22 @@ pub fn correlate_external_event(
     // Forged/conflict: never confirmed.
     let confidence = if reasons.iter().any(|r| r == "conflicting_trace_id") {
         match confidence {
-            Confidence::Confirmed => Confidence::WeaklyCorrelated,
+            Confidence::Confirmed | Confidence::StronglyCorrelated => {
+                Confidence::WeaklyCorrelated
+            }
             other => other,
         }
+    } else {
+        confidence
+    };
+
+    // Signed-invalid feeds: max unknown/weak if somehow accepted.
+    let confidence = if matches!(
+        ev.integrity,
+        crate::evidence::EvidenceIntegrity::SignedInvalid
+    ) {
+        reasons.push("signed_invalid_integrity".into());
+        Confidence::Unknown
     } else {
         confidence
     };
@@ -313,7 +338,22 @@ mod tests {
     }
 
     #[test]
-    fn run_id_match_can_confirm() {
+    fn run_id_match_can_confirm_when_integrity_ok() {
+        use crate::evidence::EvidenceIntegrity;
+        let mut ev = ExternalEvidenceEvent::new("proxy", "proxy", "2", EvidenceAction::ProxyDeny);
+        ev.identity.run_id = Some("r1".into());
+        ev.integrity = EvidenceIntegrity::HashOk;
+        let ctx = CorrelationContext {
+            run_id: "r1".into(),
+            ..Default::default()
+        };
+        let edge = correlate_external_event(&ev, &ctx).unwrap();
+        assert!(matches!(edge.confidence, Confidence::Confirmed));
+    }
+
+    #[test]
+    fn run_id_unverified_caps_to_strongly_correlated() {
+        // Default integrity is Unverified — must not reach Confirmed alone.
         let mut ev = ExternalEvidenceEvent::new("proxy", "proxy", "2", EvidenceAction::ProxyDeny);
         ev.identity.run_id = Some("r1".into());
         let ctx = CorrelationContext {
@@ -321,7 +361,49 @@ mod tests {
             ..Default::default()
         };
         let edge = correlate_external_event(&ev, &ctx).unwrap();
+        assert!(matches!(edge.confidence, Confidence::StronglyCorrelated));
+        assert!(edge
+            .reasons
+            .iter()
+            .any(|r| r == "unverified_integrity_caps_confidence"));
+    }
+
+    #[test]
+    fn multi_signal_trace_pid_workload_confirmed_only_with_integrity() {
+        use crate::evidence::EvidenceIntegrity;
+        let mut ev = ExternalEvidenceEvent::new("otel", "otel", "3", EvidenceAction::HttpRequest);
+        ev.identity.trace_id = Some("t-1".into());
+        ev.identity.pid = Some(42);
+        ev.identity.workload = Some("agent".into());
+        let ctx = CorrelationContext {
+            run_id: "r1".into(),
+            trace_id: Some("t-1".into()),
+            pids: vec![42],
+            workload: Some("agent".into()),
+            ..Default::default()
+        };
+        // Unverified: capped below Confirmed.
+        let edge = correlate_external_event(&ev, &ctx).unwrap();
+        assert!(!matches!(edge.confidence, Confidence::Confirmed));
+
+        ev.integrity = EvidenceIntegrity::HashOk;
+        let edge = correlate_external_event(&ev, &ctx).unwrap();
         assert!(matches!(edge.confidence, Confidence::Confirmed));
+    }
+
+    #[test]
+    fn signed_invalid_never_correlates_confidently() {
+        use crate::evidence::EvidenceIntegrity;
+        let mut ev = ExternalEvidenceEvent::new("proxy", "proxy", "4", EvidenceAction::ProxyDeny);
+        ev.identity.run_id = Some("r1".into());
+        ev.integrity = EvidenceIntegrity::SignedInvalid;
+        let ctx = CorrelationContext {
+            run_id: "r1".into(),
+            ..Default::default()
+        };
+        let edge = correlate_external_event(&ev, &ctx).unwrap();
+        assert!(matches!(edge.confidence, Confidence::Unknown));
+        assert!(edge.reasons.iter().any(|r| r == "signed_invalid_integrity"));
     }
 
     #[test]

@@ -132,12 +132,13 @@ Normalized NDJSON for process/network/proxy/k8s/cloud/generic sensors. Import is
 
 ```bash
 blackbox evidence import events.ndjson --run <run|latest>
+blackbox evidence import events.ndjson --run latest --reject-unverified
 blackbox evidence list --run latest
 ```
 
 ## Correlation & trace identity
 
-Each supervised run mints a random `TraceIdentity`. Edges never upgrade temporal proximity alone to `confirmed`. Matching cooperative `trace_id` alone is at most `strongly_correlated`.
+Each supervised run mints a random `TraceIdentity`. Edges never upgrade temporal proximity alone to `confirmed`. Matching cooperative `trace_id` alone is at most `strongly_correlated` (closed residual risk). Unverified integrity never reaches `confirmed` even with a matching `run_id`; `hash_ok` / `signed_verified` is required.
 
 ## Detection & provenance
 
@@ -156,7 +157,7 @@ blackbox incident show <inc-id>
 blackbox forensic pack <run> -o pack.json
 ```
 
-Forensic packs redact common secret patterns, cite original evidence pointers, and keep model-derived claims (if any) as `origin=model` — never as raw evidence.
+Forensic packs run `SecretScanner` (same patterns as capture/export) plus optional substring tags, cite original evidence pointers, and keep model-derived claims (if any) as `origin=model` — never as raw evidence.
 
 ## CLI
 

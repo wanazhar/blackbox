@@ -61,11 +61,14 @@ High-risk product claims classified by evidence. Update when tests or platforms 
 | Policy hash is stable for the same merged contract | test-backed | SHA-256 of canonical JSON; inheritance unit tests |
 | Blackbox enforces sandbox/network policy by default | false / non-goal | Records authorization and evidence; not a firewall or EDR |
 | External NDJSON evidence import is idempotent and path-safe | test-backed | `tests/boundary_1_7_full.rs`; rejects `..` / absolute path attrs |
-| Trace-id alone never yields confirmed correlation | test-backed | `correlate::tests`; multi-signal required for confirmed without run_id |
+| Payload hash mismatch rejects import; false `hash_ok` demoted | test-backed | `evidence::import` integrity checks; `--reject-unverified` |
+| Trace-id alone never yields confirmed correlation | test-backed | `correlate::tests`; multi-signal + integrity required for Confirmed |
+| Unverified integrity never reaches Confirmed correlation | test-backed | `correlate::tests::run_id_unverified_caps_to_strongly_correlated` |
 | Deterministic detectors emit evidence-linked findings | test-backed | `boundary::detect`; `boundary detect` CLI |
 | Correct task answer can fail provenance gate independently | test-backed | `evaluate_provenance` + full pipeline test |
 | Multi-run incidents surface earliest signal and technique reuse | test-backed | `incident::graph` tests |
-| Forensic packs validate citations and redact secret-like patterns | test-backed | `forensic::pack` tests |
+| Forensic packs validate citations and redact via SecretScanner | test-backed | `forensic::pack` tests (API-key fixture must not leak) |
+| `serve` defaults to authenticated (auto-token; `--allow-anonymous` opt-in) | code-backed | `serve::ServeOptions.allow_anonymous`; security guide |
 | Detector quality stays above min recall/precision on committed corpus | test-backed | `tests/boundary_detector_quality.rs` (~22 cases, ≥10 TP, ≥5 benign TN; zero high/critical FP on benign) |
 | Incident listing paginates with cursors without duplicates | test-backed | `tests/incident_pagination.rs` |
 | Experiment `dataset_case` auto-feeds provenance declared sources | test-backed | `tests/auto_provenance.rs`; undeclared network still invalidates |

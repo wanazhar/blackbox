@@ -46,10 +46,12 @@ Supports native `blackbox.evidence.event/v1`, generic JSONL, and adapters for **
 
 ```bash
 blackbox evidence import tests/fixtures/boundary_1_7/proxy_events.ndjson --run latest
+# Fail-closed IR: only hash_ok / signed_verified events
+blackbox evidence import events.ndjson --run latest --reject-unverified
 blackbox evidence list --run latest
 ```
 
-Import is idempotent on `(source, source_event_id)`, bounded, and rejects absolute/traversal path attributes.
+Import is idempotent on `(source, source_event_id)`, bounded, and rejects absolute/traversal path attributes. When `original_payload_hash` is present, the importer verifies sha256 of the `payload` / `raw` / `body` attribute (disable with `--no-verify-payload-hashes` only for private debugging). Unverified integrity **caps correlation confidence** below `confirmed`.
 
 ---
 
@@ -115,7 +117,8 @@ blackbox run --experiment exp1 --dataset-case case-9 --boundary eval.json -- ...
 ## Honesty limits
 
 - Configured ≠ enforced ≠ verified containment  
-- Cooperative `trace_id` alone is not confirmed attribution  
+- Cooperative `trace_id` alone is **never** confirmed attribution (closed by design; permanent unit gates)  
+- Unverified / signed-invalid sensor integrity cannot reach `confirmed` correlation  
 - Missing sensors → `insufficient_evidence`, not silent success  
 - Blackbox is **not** an EDR/SIEM/firewall  
 

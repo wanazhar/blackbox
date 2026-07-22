@@ -616,16 +616,17 @@ blackbox sync pull --s3 s3://bucket/prefix/
 **When to use:** Local web UI + JSON/SSE API for browsing runs. Default bind `127.0.0.1:7788`.
 
 ```bash
-blackbox serve [--bind <addr>] [--token <token>] [--store <path>] [--reindex]
+blackbox serve [--bind <addr>] [--token <token>] [--allow-anonymous] [--store <path>] [--reindex]
 ```
 
 | Arg | Description |
 |---|---|
 | `--bind <addr>` | Bind address (default `127.0.0.1:7788`) |
-| `--token <token>` | Auth token (`BLACKBOX_SERVE_TOKEN`); **required** off-loopback |
+| `--token <token>` | Auth token (`BLACKBOX_SERVE_TOKEN`); when omitted, a one-shot token is auto-generated and printed |
+| `--allow-anonymous` | **Danger:** unauthenticated loopback/unix only (any local user can read traces) |
 | `--reindex` | Rebuild FTS before serving |
 
-**Auth:** `Authorization: Bearer <token>` only (no query API auth).
+**Auth:** fail-closed by default (auto token or explicit). `Authorization: Bearer <token>` only (no query API auth).
 
 | Path | Description |
 |---|---|
@@ -1037,11 +1038,12 @@ Reference: [boundary.md](boundary.md). Plan: [agent-boundary-1.7.md](../plan/age
 ## 47. `evidence`
 
 ```bash
-blackbox evidence import <file.ndjson> [--run <id|latest>] [--max-events N]
+blackbox evidence import <file.ndjson> [--run <id|latest>] [--max-events N] \
+  [--reject-unverified] [--no-verify-payload-hashes]
 blackbox evidence list [--run <id|latest>] [--limit N]
 ```
 
-Import versioned `blackbox.evidence.event/v1` (or generic JSONL mapping). Idempotent on `(source, source_event_id)`.
+Import versioned `blackbox.evidence.event/v1` (or generic JSONL mapping). Idempotent on `(source, source_event_id)`. Payload hashes are verified when `original_payload_hash` is present. `--reject-unverified` fails closed for IR (only `hash_ok` / `signed_verified`).
 
 ---
 

@@ -204,15 +204,18 @@ Workflow detail: [export-and-sync.md](export-and-sync.md).
 ## 7. Serve / dashboard
 
 ```bash
-blackbox serve                          # 127.0.0.1:7788
+blackbox serve                          # auto-generates a one-shot token (printed once)
 blackbox serve --token "$TOKEN"
 BLACKBOX_SERVE_TOKEN="$TOKEN" blackbox serve --bind 0.0.0.0:7788
+blackbox serve --allow-anonymous        # danger: loopback only, no auth
 ```
 
 | Rule | Behavior |
 |---|---|
-| Non-loopback bind | **Refuses** without token |
-| Loopback, no token | Starts with warning — any local user can read history |
+| No token supplied | **Auto-generates** a random token and prints it (fail-closed default) |
+| Explicit `--token` / `BLACKBOX_SERVE_TOKEN` | Uses that secret |
+| `--allow-anonymous` | Loopback/unix only; any local user can read history (danger flag) |
+| Non-loopback bind | **Refuses** without a token (auto or explicit); never with `--allow-anonymous` alone |
 | Auth | `Authorization: Bearer <token>` only (no query API auth) |
 | Browser | One-shot `?token=` may be migrated into `sessionStorage` then stripped from URL |
 
@@ -241,12 +244,24 @@ SSE streams and JSON APIs share the same auth middleware.
 | Topic | Default |
 |---|---|
 | External NDJSON import | Bounded size/count; idempotent; rejects loadable absolute/`..` path **attributes** |
+| Payload integrity | When `original_payload_hash` is present, sha256 of `payload`/`raw`/`body` is verified; false `hash_ok` claims demoted |
+| Fail-closed IR import | `evidence import --reject-unverified` keeps only `hash_ok` / `signed_verified` |
+| Correlation confidence | Cooperative `trace_id` alone ≤ strongly_correlated; unverified integrity never Confirmed |
 | Process `object` paths | Absolute exe paths are allowed as labels (never opened) |
 | Containment “verified” | Requires verified+held on a real control — process-only absence of egress does **not** satisfy |
-| Forensic packs | Pattern redaction + truncation; model claims need citations |
+| Forensic packs | `SecretScanner` + substring patterns + truncation; model claims need citations |
 | Incidents / dashboard | Same auth as other `serve` APIs; HTML escapes free text |
 
 Guide: [boundaries-and-incidents.md](boundaries-and-incidents.md).
+
+### Residual risks closed by design (1.7)
+
+| Risk | Closure |
+|---|---|
+| Unverified sensor feed treated as proof | Integrity caps correlation; payload hash verify on import; optional `--reject-unverified` |
+| Forensic pack leaks fixture secrets | Packs run the same `SecretScanner` as capture/export before write |
+| Anonymous loopback `serve` | Token auto-generated unless `--allow-anonymous` (loopback-only danger) |
+| Forged cooperative `trace_id` → Confirmed | Permanent unit gates; multi-signal + integrity required |
 
 ---
 
@@ -257,9 +272,9 @@ Guide: [boundaries-and-incidents.md](boundaries-and-incidents.md).
 3. Run `blackbox doctor` after enable; fix permission and encryption tips.
 4. Prefer `BLACKBOX_STORE_KEY_FILE` outside the repo if `encrypt_blobs` is on.
 5. Use passphrase `backup` for cold storage; test `restore` once.
-6. Token-protect any non-loopback `serve`.
+6. Prefer pinned `--token` / `BLACKBOX_SERVE_TOKEN` for `serve`; avoid `--allow-anonymous` on multi-user hosts.
 7. After expanding scanner patterns: `blackbox scrub --gc`.
-8. Treat imported external evidence as untrusted telemetry (integrity fields may be `unverified`).
+8. Treat imported external evidence as untrusted telemetry unless integrity is `hash_ok` / `signed_verified`.
 
 ---
 
@@ -274,4 +289,6 @@ Guide: [boundaries-and-incidents.md](boundaries-and-incidents.md).
 | `src/crypto.rs` | Blob seal, sealed packs |
 | `src/backup.rs` | Store vault |
 | `src/privacy.rs` | Path modes, bind checks |
-| `src/evidence/` | Import validation / path-attr rejection |
+| `src/evidence/` | Import validation, payload-hash verify, path-attr rejection |
+| `src/boundary/correlate.rs` | Confidence caps (trace_id / integrity) |
+| `src/forensic/` | SecretScanner forensic packs |

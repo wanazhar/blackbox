@@ -90,7 +90,7 @@ blackbox serve
 | `/api/runs/{id}/anomalies` | JSON anomaly markers |
 | `/api/status`, `/api/handoff` | Project status / handoff |
 
-**Auth:** non-loopback bind requires `--token` / `BLACKBOX_SERVE_TOKEN`. Loopback without a token is reachable by other local users—set a token if that matters. Query `?token=` is not used for API auth; prefer `Authorization: Bearer …` (dashboard can migrate a one-shot `?token=` into `sessionStorage`).
+**Auth:** by default `serve` auto-generates a one-shot token and prints it (fail-closed). Pin with `--token` / `BLACKBOX_SERVE_TOKEN`. `--allow-anonymous` is a danger flag for loopback/unix only. Query `?token=` is not used for API auth; prefer `Authorization: Bearer …` (dashboard can migrate a one-shot `?token=` into `sessionStorage`).
 
 ---
 

@@ -1,6 +1,6 @@
 id: boundary-17-incidents
 scope: incident flow reconstruction and scale honesty
-status: ready
+status: in-progress
 depends-on: []
 
 ## objective

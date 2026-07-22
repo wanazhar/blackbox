@@ -1,6 +1,6 @@
 id: boundary-17-sensors
 scope: external evidence adapters and orchestration correlation
-status: ready
+status: in-progress
 depends-on: []
 
 ## objective

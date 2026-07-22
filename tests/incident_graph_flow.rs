@@ -91,11 +91,14 @@ fn reconstructs_typed_flows_without_losing_edge_provenance() {
         },
     );
 
-    assert_eq!(graph.edge_count, 4);
-    assert_eq!(graph.flow_count, 3);
-    assert_eq!(graph.flow_counts.delegation, 1);
-    assert_eq!(graph.flow_counts.credential_use, 1);
-    assert_eq!(graph.flow_counts.artifact_derivation, 1);
+    assert_eq!(graph.schema, "blackbox.incident.graph/v2");
+    assert!(graph.counts_exact);
+    assert_eq!(graph.edge_count, Some(4));
+    assert_eq!(graph.flow_count, Some(3));
+    let flow_counts = graph.flow_counts.unwrap();
+    assert_eq!(flow_counts.delegation, 1);
+    assert_eq!(flow_counts.credential_use, 1);
+    assert_eq!(flow_counts.artifact_derivation, 1);
     assert_eq!(graph.flows.len(), 3);
     assert_eq!(graph.flows[0].kind, IncidentFlowKind::Delegation);
     assert_eq!(graph.flows[1].kind, IncidentFlowKind::CredentialUse);
@@ -159,18 +162,127 @@ fn graph_limits_bound_details_but_preserve_exact_totals() {
     assert_eq!(graph.nodes.len(), 2);
     assert_eq!(graph.edges.len(), 4);
     assert_eq!(graph.flows.len(), 3);
-    assert_eq!(graph.edge_count, 12);
-    assert_eq!(graph.flow_count, 12);
-    assert_eq!(graph.flow_counts.delegation, 4);
-    assert_eq!(graph.flow_counts.credential_use, 4);
-    assert_eq!(graph.flow_counts.artifact_derivation, 4);
-    assert_eq!(graph.truncation.nodes.total, 3);
-    assert_eq!(graph.truncation.nodes.truncated, 1);
-    assert_eq!(graph.truncation.edges.truncated, 8);
-    assert_eq!(graph.truncation.flows.truncated, 9);
-    assert!(graph.truncation.is_truncated());
+    assert_eq!(graph.edge_count, Some(12));
+    assert_eq!(graph.flow_count, Some(12));
+    let flow_counts = graph.flow_counts.unwrap();
+    assert_eq!(flow_counts.delegation, 4);
+    assert_eq!(flow_counts.credential_use, 4);
+    assert_eq!(flow_counts.artifact_derivation, 4);
+    let truncation = graph.truncation.as_ref().unwrap();
+    assert_eq!(truncation.nodes.total, 3);
+    assert_eq!(truncation.nodes.truncated, 1);
+    assert_eq!(truncation.edges.truncated, 8);
+    assert_eq!(truncation.flows.truncated, 9);
+    assert!(truncation.is_truncated());
 
     let json = serde_json::to_value(&graph).unwrap();
     assert_eq!(json["truncation"]["edges"]["total"], 12);
     assert_eq!(json["detail_limits"]["edges"], 4);
+}
+
+#[test]
+fn legacy_v1_counts_are_lower_bounds_and_truncation_is_unknown() {
+    const LEGACY_GRAPH_V1: &str = r#"{
+      "schema":"blackbox.incident.graph/v1",
+      "incident_id":"inc-legacy",
+      "nodes":[{"kind":"run","id":"run-1","run_id":"run-1","label":"run run-1"}],
+      "edges":[{
+        "schema":"blackbox.evidence.edge/v1",
+        "id":"edge-legacy",
+        "from_kind":"run",
+        "from_id":"run-1",
+        "to_kind":"credential",
+        "to_id":"credential:legacy",
+        "relation":"credential_use",
+        "confidence":"strongly_correlated",
+        "reasons":["legacy_fixture"],
+        "created_at":"2026-07-22T00:00:00Z",
+        "run_id":"run-1"
+      }],
+      "techniques":[{
+        "technique":"credential_use",
+        "first_run_id":"run-1",
+        "first_ref":"edge-legacy",
+        "reused_by_runs":["run-2"]
+      }],
+      "run_count":2,
+      "evidence_count":0,
+      "finding_count":0
+    }"#;
+
+    let graph: blackbox::incident::IncidentGraph = serde_json::from_str(LEGACY_GRAPH_V1).unwrap();
+    assert_eq!(graph.schema, "blackbox.incident.graph/v1");
+    assert_eq!(graph.edge_total(), 1);
+    assert_eq!(graph.flow_total(), 1);
+    assert_eq!(graph.technique_total(), 1);
+    assert_eq!(graph.reuse_total(), 1);
+    assert!(!graph.counts_exact);
+    assert_eq!(graph.detail_limits, None);
+    assert_eq!(graph.is_detail_truncated(), None);
+
+    let mut incident = Incident::new(Some("legacy".into()));
+    incident.id = "inc-legacy".into();
+    let aggregates =
+        blackbox::incident::compute_incident_aggregates_from_graph(&incident, &graph, 0, 0);
+    assert_eq!(aggregates.technique_count, 1);
+    assert_eq!(aggregates.reuse_count, 1);
+    assert!(!aggregates.counts_exact);
+}
+
+#[test]
+fn tied_edge_detail_is_stable_by_id() {
+    let incident = Incident::new(Some("stable detail".into()));
+    let at = chrono::Utc::now();
+    let mut edges: Vec<_> = (0..8)
+        .rev()
+        .map(|index| {
+            let mut item = edge(
+                &format!("edge-{index:02}"),
+                EvidenceRelation::Delegation,
+                EntityKind::Run,
+                "run-parent",
+                EntityKind::Run,
+                "run-child",
+                "run-parent",
+            );
+            item.created_at = at;
+            item
+        })
+        .collect();
+    let limits = IncidentGraphLimits {
+        nodes: 1,
+        edges: 3,
+        flows: 3,
+        techniques: 1,
+    };
+    let first = build_incident_graph_with_limits(
+        &incident,
+        &GraphInputs {
+            edges: edges.clone(),
+            ..Default::default()
+        },
+        limits,
+    );
+    edges.rotate_left(3);
+    let second = build_incident_graph_with_limits(
+        &incident,
+        &GraphInputs {
+            edges,
+            ..Default::default()
+        },
+        limits,
+    );
+
+    let first_ids: Vec<_> = first.edges.iter().map(|edge| edge.id.as_str()).collect();
+    let second_ids: Vec<_> = second.edges.iter().map(|edge| edge.id.as_str()).collect();
+    assert_eq!(first_ids, vec!["edge-00", "edge-01", "edge-02"]);
+    assert_eq!(first_ids, second_ids);
+    assert_eq!(
+        first
+            .flows
+            .iter()
+            .map(|flow| flow.edge_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["edge-00", "edge-01", "edge-02"]
+    );
 }

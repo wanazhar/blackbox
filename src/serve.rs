@@ -971,20 +971,34 @@ async fn incident_page(
         let _ = state.store.upsert_incident(&updated).await;
     }
 
-    let reuse = graph
-        .techniques
-        .iter()
-        .filter(|t| !t.reused_by_runs.is_empty())
-        .count();
-    let aggregates = crate::incident::compute_incident_aggregates(
+    let aggregates = crate::incident::compute_incident_aggregates_from_graph(
         &inc,
-        graph.finding_count,
+        &graph,
         0,
         graph.finding_count,
-        graph.evidence_count,
-        graph.techniques.len(),
-        reuse,
     );
+
+    let detail_status = match graph.is_detail_truncated() {
+        Some(true) => {
+            let truncation = graph
+                .truncation
+                .as_ref()
+                .expect("known graph truncation must include totals");
+            format!(
+                "truncated (nodes {}/{}, edges {}/{}, flows {}/{}, techniques {}/{})",
+                truncation.nodes.included,
+                truncation.nodes.total,
+                truncation.edges.included,
+                truncation.edges.total,
+                truncation.flows.included,
+                truncation.flows.total,
+                truncation.techniques.included,
+                truncation.techniques.total,
+            )
+        }
+        Some(false) => "complete".into(),
+        None => "unknown legacy detail; counts are lower bounds".into(),
+    };
 
     let body = format!(
         r#"<p><a href="/incidents">← Incidents</a> · <a class="muted" href="/api/incidents/{id}">JSON</a></p>
@@ -998,6 +1012,7 @@ async fn incident_page(
   <div><b>Evidence</b> {ev_n}</div>
   <div><b>Techniques</b> {tech_n}</div>
   <div><b>Reuse</b> {reuse}</div>
+  <div><b>Graph detail</b> {detail_status}</div>
   <div><b>Continued after signal</b> {cont}</div>
 </div>
 {graph_svg}
@@ -1033,6 +1048,7 @@ async fn incident_page(
         ev_n = aggregates.external_evidence_count,
         tech_n = aggregates.technique_count,
         reuse = aggregates.reuse_count,
+        detail_status = html_escape(&detail_status),
         cont = graph
             .continued_after_signal
             .or(inc.continued_after_signal)

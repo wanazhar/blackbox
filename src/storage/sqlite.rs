@@ -2541,7 +2541,8 @@ impl TraceStore for SqliteStore {
         let result = {
             let conn = self.lock();
             let mut stmt = conn.prepare(
-                "SELECT payload FROM evidence_edges WHERE run_id = ?1 ORDER BY created_at ASC",
+                "SELECT payload FROM evidence_edges
+                 WHERE run_id = ?1 ORDER BY created_at ASC, id ASC",
             )?;
             let rows = stmt
                 .query_map(params![run_id], |row| row.get::<_, String>(0))?

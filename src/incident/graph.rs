@@ -203,20 +203,66 @@ pub struct IncidentGraph {
     pub evidence_count: usize,
     pub finding_count: usize,
     /// Exact source totals; these do not shrink when graph detail is truncated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edge_count: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flow_count: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flow_counts: Option<IncidentFlowCounts>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub technique_count: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reuse_count: Option<usize>,
+    /// False for legacy v1 payloads whose omitted detail cannot be quantified.
     #[serde(default)]
-    pub edge_count: usize,
-    #[serde(default)]
-    pub flow_count: usize,
-    #[serde(default)]
-    pub flow_counts: IncidentFlowCounts,
-    #[serde(default)]
-    pub technique_count: usize,
-    #[serde(default)]
-    pub reuse_count: usize,
-    #[serde(default)]
-    pub detail_limits: IncidentGraphLimits,
-    #[serde(default)]
-    pub truncation: IncidentGraphTruncation,
+    pub counts_exact: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail_limits: Option<IncidentGraphLimits>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub truncation: Option<IncidentGraphTruncation>,
+}
+
+impl IncidentGraph {
+    /// Exact total for v2 graphs, or the known included lower bound for legacy v1.
+    pub fn edge_total(&self) -> usize {
+        self.edge_count.unwrap_or(self.edges.len())
+    }
+
+    /// Exact total for v2 graphs, or the known included lower bound for legacy v1.
+    pub fn flow_total(&self) -> usize {
+        self.flow_count.unwrap_or_else(|| {
+            if self.flows.is_empty() {
+                self.edges
+                    .iter()
+                    .filter(|edge| IncidentFlowKind::from_relation(&edge.relation).is_some())
+                    .count()
+            } else {
+                self.flows.len()
+            }
+        })
+    }
+
+    /// Exact total for v2 graphs, or the known included lower bound for legacy v1.
+    pub fn technique_total(&self) -> usize {
+        self.technique_count.unwrap_or(self.techniques.len())
+    }
+
+    /// Exact total for v2 graphs, or the known included lower bound for legacy v1.
+    pub fn reuse_total(&self) -> usize {
+        self.reuse_count.unwrap_or_else(|| {
+            self.techniques
+                .iter()
+                .filter(|technique| !technique.reused_by_runs.is_empty())
+                .count()
+        })
+    }
+
+    /// Some(true/false) for v2 graphs; None when legacy truncation is unknowable.
+    pub fn is_detail_truncated(&self) -> Option<bool> {
+        self.truncation
+            .as_ref()
+            .map(IncidentGraphTruncation::is_truncated)
+    }
 }
 
 /// Inputs assembled by the CLI / store layer.
@@ -250,7 +296,13 @@ fn record_technique(
                 },
             );
         }
-        Some(previous) if at < previous => {
+        Some(previous)
+            if at < previous
+                || (at == previous
+                    && techniques
+                        .get(&technique)
+                        .is_some_and(|entry| reference < entry.first_ref)) =>
+        {
             first_seen.insert(technique.clone(), at);
             if let Some(entry) = techniques.get_mut(&technique) {
                 let old_first = std::mem::replace(&mut entry.first_run_id, run_id);
@@ -385,7 +437,14 @@ pub fn build_incident_graph_with_limits(
     }
 
     // Credential / network edges as techniques.
-    for e in &inputs.edges {
+    let mut ordered_edges: Vec<_> = inputs.edges.iter().collect();
+    ordered_edges.sort_by(|left, right| {
+        left.created_at
+            .cmp(&right.created_at)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+
+    for e in &ordered_edges {
         if matches!(
             e.relation,
             EvidenceRelation::CredentialUse | EvidenceRelation::PolicyViolation
@@ -428,11 +487,15 @@ pub fn build_incident_graph_with_limits(
         .filter(|technique| !technique.reused_by_runs.is_empty())
         .count();
     let techniques: Vec<_> = techniques.into_values().take(limits.techniques).collect();
-    let edge_count = inputs.edges.len();
-    let edges: Vec<_> = inputs.edges.iter().take(limits.edges).cloned().collect();
+    let edge_count = ordered_edges.len();
+    let edges: Vec<_> = ordered_edges
+        .iter()
+        .take(limits.edges)
+        .map(|edge| (*edge).clone())
+        .collect();
     let mut flow_counts = IncidentFlowCounts::default();
-    let mut flows = Vec::with_capacity(limits.flows.min(inputs.edges.len()));
-    for edge in &inputs.edges {
+    let mut flows = Vec::with_capacity(limits.flows.min(ordered_edges.len()));
+    for edge in ordered_edges {
         if let Some(flow) = IncidentFlow::from_edge(edge) {
             flow_counts.record(flow.kind);
             if flows.len() < limits.flows {
@@ -449,7 +512,7 @@ pub fn build_incident_graph_with_limits(
     };
 
     IncidentGraph {
-        schema: "blackbox.incident.graph/v1".into(),
+        schema: "blackbox.incident.graph/v2".into(),
         incident_id: incident.id.clone(),
         nodes,
         edges,
@@ -460,13 +523,14 @@ pub fn build_incident_graph_with_limits(
         run_count: run_ids.len(),
         evidence_count: inputs.external.len(),
         finding_count,
-        edge_count,
-        flow_count,
-        flow_counts,
-        technique_count,
-        reuse_count,
-        detail_limits: limits,
-        truncation,
+        edge_count: Some(edge_count),
+        flow_count: Some(flow_count),
+        flow_counts: Some(flow_counts),
+        technique_count: Some(technique_count),
+        reuse_count: Some(reuse_count),
+        counts_exact: true,
+        detail_limits: Some(limits),
+        truncation: Some(truncation),
     }
 }
 

@@ -2253,21 +2253,7 @@ pub async fn cmd_incident(
                 graph_view = Some(g);
             }
             let aggregates = graph_view.as_ref().map(|g| {
-                use crate::incident::compute_incident_aggregates;
-                let reuse = g
-                    .techniques
-                    .iter()
-                    .filter(|t| !t.reused_by_runs.is_empty())
-                    .count();
-                compute_incident_aggregates(
-                    &inc,
-                    g.finding_count,
-                    0,
-                    g.finding_count,
-                    g.evidence_count,
-                    g.techniques.len(),
-                    reuse,
-                )
+                crate::incident::compute_incident_aggregates_from_graph(&inc, g, 0, g.finding_count)
             });
             if json {
                 return output::emit_ok(
@@ -2297,13 +2283,34 @@ pub async fn cmd_incident(
                     g.run_count,
                     g.evidence_count,
                     g.finding_count,
-                    g.techniques.len()
+                    g.technique_total()
                 );
                 if let Some(ref a) = aggregates {
                     println!(
                         "  aggregates runs={} attachments={} reuse={}",
                         a.run_count, a.attachment_count, a.reuse_count
                     );
+                }
+                match g.is_detail_truncated() {
+                    Some(true) => {
+                        let truncation = g
+                            .truncation
+                            .as_ref()
+                            .expect("known graph truncation must include totals");
+                        println!(
+                            "  graph_detail=truncated nodes={}/{} edges={}/{} flows={}/{} techniques={}/{}",
+                            truncation.nodes.included,
+                            truncation.nodes.total,
+                            truncation.edges.included,
+                            truncation.edges.total,
+                            truncation.flows.included,
+                            truncation.flows.total,
+                            truncation.techniques.included,
+                            truncation.techniques.total,
+                        );
+                    }
+                    Some(false) => println!("  graph_detail=complete"),
+                    None => println!("  graph_detail=unknown_legacy counts=lower_bounds"),
                 }
                 if let Some(ref s) = g.earliest_signal {
                     println!(

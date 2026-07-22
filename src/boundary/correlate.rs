@@ -142,6 +142,8 @@ pub struct CorrelationContext {
     pub host: Option<String>,
     pub pids: Vec<i64>,
     pub workload: Option<String>,
+    /// Expected infrastructure principal (service account, role, or user).
+    pub principal: Option<String>,
 }
 
 /// Correlate one external event to a run using multi-signal join.
@@ -149,8 +151,9 @@ pub struct CorrelationContext {
 /// Confidence policy:
 /// - matching cooperative `trace_id` alone → at most `strongly_correlated`
 ///   (forged IDs are possible)
-/// - matching trace_id + process/workload → may reach `confirmed` only with
-///   additional non-cooperative signal
+/// - matching trace_id + process/workload/principal → may reach `confirmed`
+///   only when source integrity was independently verified
+/// - a conflicting expected principal caps attribution at `weakly_correlated`
 /// - temporal proximity alone → `weakly_correlated` max
 pub fn correlate_external_event(
     ev: &ExternalEvidenceEvent,
@@ -193,6 +196,17 @@ pub fn correlate_external_event(
         if want == got {
             score += 2;
             reasons.push("matching_workload".into());
+        }
+    }
+    let mut principal_conflict = false;
+    if let (Some(ref want), Some(ref got)) = (&ctx.principal, &ev.identity.principal) {
+        if want == got {
+            score += 2;
+            reasons.push("matching_principal".into());
+        } else {
+            principal_conflict = true;
+            score -= 1;
+            reasons.push("conflicting_principal".into());
         }
     }
     if let Some(pid) = ev.identity.pid {
@@ -240,7 +254,7 @@ pub fn correlate_external_event(
     } else if score >= 4
         && reasons
             .iter()
-            .any(|r| r == "matching_pid" || r == "matching_workload")
+            .any(|r| r == "matching_pid" || r == "matching_workload" || r == "matching_principal")
         && trace_match
         && integrity_trusted
     {
@@ -266,6 +280,17 @@ pub fn correlate_external_event(
 
     // Forged/conflict: never confirmed.
     let confidence = if reasons.iter().any(|r| r == "conflicting_trace_id") {
+        match confidence {
+            Confidence::Confirmed | Confidence::StronglyCorrelated => Confidence::WeaklyCorrelated,
+            other => other,
+        }
+    } else {
+        confidence
+    };
+
+    // A principal mismatch is material. Cooperative identity matches must not
+    // overpower a conflicting infrastructure principal.
+    let confidence = if principal_conflict {
         match confidence {
             Confidence::Confirmed | Confidence::StronglyCorrelated => Confidence::WeaklyCorrelated,
             other => other,
@@ -334,6 +359,36 @@ mod tests {
             edge.confidence,
             Confidence::StronglyCorrelated | Confidence::WeaklyCorrelated
         ));
+    }
+
+    #[test]
+    fn principal_participates_and_conflict_caps_confidence() {
+        let mut ev =
+            ExternalEvidenceEvent::new("audit", "cloud_audit", "p1", EvidenceAction::CloudAudit);
+        ev.identity.trace_id = Some("t-1".into());
+        ev.identity.workload = Some("worker-1".into());
+        ev.identity.principal = Some("agent@example.test".into());
+        let mut ctx = CorrelationContext {
+            run_id: "r1".into(),
+            trace_id: Some("t-1".into()),
+            workload: Some("worker-1".into()),
+            principal: Some("agent@example.test".into()),
+            ..Default::default()
+        };
+        let edge = correlate_external_event(&ev, &ctx).unwrap();
+        assert_eq!(edge.confidence, Confidence::StronglyCorrelated);
+        assert!(edge
+            .reasons
+            .iter()
+            .any(|reason| reason == "matching_principal"));
+
+        ctx.principal = Some("other@example.test".into());
+        let edge = correlate_external_event(&ev, &ctx).unwrap();
+        assert_eq!(edge.confidence, Confidence::WeaklyCorrelated);
+        assert!(edge
+            .reasons
+            .iter()
+            .any(|reason| reason == "conflicting_principal"));
     }
 
     #[test]

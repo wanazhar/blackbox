@@ -7,6 +7,7 @@ use blackbox::core::Confidence;
 use blackbox::evidence::{
     import_evidence_ndjson_str, EvidenceAction, EvidenceOutcome, ImportOptions,
 };
+use blackbox::storage::{sqlite::SqliteStore, TraceStore};
 
 const KUBERNETES: &str =
     include_str!("fixtures/boundary_1_7/orchestration/kubernetes_audit.ndjson");
@@ -109,26 +110,35 @@ fn recognized_malformed_sensor_records_are_rejected_without_defaults() {
         import_evidence_ndjson_str(MALFORMED, &ImportOptions::default()).unwrap();
     assert!(events.is_empty());
     assert_eq!(report.accepted, 0);
-    assert_eq!(report.rejected, 3);
+    assert_eq!(report.rejected, 6);
     assert!(report
         .rejects
         .iter()
-        .all(|reject| reject.reason.contains("source is required")));
+        .all(|reject| reject.reason.starts_with("malformed sensor record:")));
+    for field in ["sourceIPs", "errorCode", "protoPayload.status.code"] {
+        assert!(
+            report
+                .rejects
+                .iter()
+                .any(|reject| reject.reason.contains(field)),
+            "missing diagnostic for {field}: {:?}",
+            report.rejects
+        );
+    }
 }
 
 #[test]
 fn importer_to_orchestration_correlation_uses_multiple_signals_but_stays_honest() {
-    let opts = ImportOptions {
-        default_run_id: Some("run-orchestration-001".into()),
-        ..Default::default()
-    };
-    let (events, report) = import_evidence_ndjson_str(KUBERNETES, &opts).unwrap();
+    let (events, report) =
+        import_evidence_ndjson_str(KUBERNETES, &ImportOptions::default()).unwrap();
     assert_eq!(report.accepted, 2);
+    assert!(events.iter().all(|event| event.linked_run_id.is_none()));
 
     let ctx = CorrelationContext {
         run_id: "run-orchestration-001".into(),
         trace_id: Some("trace-orchestration-001".into()),
         workload: Some("agent-worker".into()),
+        principal: Some("system:serviceaccount:eval:agent-runner".into()),
         ..Default::default()
     };
     let edges = correlate_external_batch(&events, &ctx);
@@ -140,10 +150,11 @@ fn importer_to_orchestration_correlation_uses_multiple_signals_but_stays_honest(
     assert_eq!(exec_edge.confidence, Confidence::StronglyCorrelated);
     assert!(exec_edge.reasons.iter().any(|r| r == "matching_trace_id"));
     assert!(exec_edge.reasons.iter().any(|r| r == "matching_workload"));
-    assert!(exec_edge
+    assert!(exec_edge.reasons.iter().any(|r| r == "matching_principal"));
+    assert!(!exec_edge
         .reasons
         .iter()
-        .any(|r| r == "import_linked_run_id"));
+        .any(|r| r == "import_linked_run_id" || r == "matching_run_id"));
 
     // The second audit event carries only a cooperative trace identity. Import
     // it without a default run link to prove that this forgeable signal cannot
@@ -158,4 +169,64 @@ fn importer_to_orchestration_correlation_uses_multiple_signals_but_stays_honest(
     assert_eq!(trace_only.confidence, Confidence::StronglyCorrelated);
     assert_ne!(trace_only.confidence, Confidence::Confirmed);
     assert_eq!(trace_only.relation, EvidenceRelation::SameTraceId);
+}
+
+#[tokio::test]
+async fn cloud_event_survives_sqlite_and_correlates_on_sensor_identity() {
+    let store = SqliteStore::open_memory().unwrap();
+    let (events, report) = import_evidence_ndjson_str(CLOUD, &ImportOptions::default()).unwrap();
+    assert_eq!(report.accepted, 2);
+    assert!(events.iter().all(|event| event.linked_run_id.is_none()));
+
+    let (inserted, edges) = store
+        .insert_external_evidence_batch(&events, &[])
+        .await
+        .unwrap();
+    assert_eq!((inserted, edges), (2, 0));
+
+    let gcp = store
+        .get_external_evidence(&events[1].id)
+        .await
+        .unwrap()
+        .expect("GCP audit event survives SQLite round-trip");
+    assert_eq!(gcp.action, EvidenceAction::CloudAudit);
+    assert_eq!(gcp.outcome, EvidenceOutcome::Success);
+    assert_eq!(
+        gcp.identity.principal.as_deref(),
+        Some("agent-runner@eval-project.iam.gserviceaccount.com")
+    );
+    assert_eq!(gcp.identity.workload.as_deref(), Some("worker-001"));
+    assert_eq!(
+        gcp.identity.trace_id.as_deref(),
+        Some("projects/eval-project/traces/trace-cloud-001")
+    );
+
+    let edge = correlate_external_event(
+        &gcp,
+        &CorrelationContext {
+            run_id: "run-cloud-001".into(),
+            trace_id: Some("projects/eval-project/traces/trace-cloud-001".into()),
+            workload: Some("worker-001".into()),
+            principal: Some("agent-runner@eval-project.iam.gserviceaccount.com".into()),
+            ..Default::default()
+        },
+    )
+    .expect("stored cloud audit event correlates from provider identity");
+    assert_eq!(edge.confidence, Confidence::StronglyCorrelated);
+    assert!(edge
+        .reasons
+        .iter()
+        .any(|reason| reason == "matching_trace_id"));
+    assert!(edge
+        .reasons
+        .iter()
+        .any(|reason| reason == "matching_workload"));
+    assert!(edge
+        .reasons
+        .iter()
+        .any(|reason| reason == "matching_principal"));
+    assert!(!edge
+        .reasons
+        .iter()
+        .any(|reason| reason == "import_linked_run_id" || reason == "matching_run_id"));
 }

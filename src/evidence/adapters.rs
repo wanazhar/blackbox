@@ -32,6 +32,27 @@ pub fn map_sensor_event(obj: &Map<String, Value>) -> Option<ExternalEvidenceEven
     None
 }
 
+/// Fallible adapter entrypoint for the importer. The public compatibility
+/// mapper still returns an event, while ingestion preserves actionable schema
+/// diagnostics for recognized malformed sensor records.
+pub(super) fn map_sensor_event_checked(
+    obj: &Map<String, Value>,
+) -> Result<Option<ExternalEvidenceEvent>, String> {
+    let Some(event) = map_sensor_event(obj) else {
+        return Ok(None);
+    };
+    if event.source.is_empty() {
+        let reason = event
+            .coverage_notes
+            .iter()
+            .find(|note| note.starts_with("malformed sensor record:"))
+            .cloned()
+            .unwrap_or_else(|| "malformed recognized sensor record".into());
+        return Err(reason);
+    }
+    Ok(Some(event))
+}
+
 fn is_kubernetes_audit(obj: &Map<String, Value>) -> bool {
     obj.get("apiVersion")
         .and_then(Value::as_str)
@@ -119,11 +140,7 @@ fn map_kubernetes_audit(obj: &Map<String, Value>) -> ExternalEvidenceEvent {
     if ev.identity.principal.is_none() {
         missing.push("user.username");
     }
-    if obj
-        .get("sourceIPs")
-        .and_then(Value::as_array)
-        .is_none_or(Vec::is_empty)
-    {
+    if !valid_string_array(obj.get("sourceIPs")) {
         missing.push("sourceIPs");
     }
     mark_malformed(&mut ev, &missing);
@@ -172,6 +189,14 @@ fn map_aws_cloudtrail(obj: &Map<String, Value>) -> ExternalEvidenceEvent {
     required_timestamp(obj, "eventTime", &mut missing);
     required_string(obj, "eventSource", &mut missing);
     required_string(obj, "eventName", &mut missing);
+    if obj.contains_key("errorCode")
+        && obj
+            .get("errorCode")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+    {
+        missing.push("errorCode");
+    }
     if ev.identity.principal.is_none() {
         missing.push("userIdentity principal");
     }
@@ -258,6 +283,9 @@ fn map_gcp_cloud_audit(obj: &Map<String, Value>) -> ExternalEvidenceEvent {
     }
     if ev.identity.principal.is_none() {
         missing.push("protoPayload.authenticationInfo.principalEmail");
+    }
+    if payload.is_some_and(|payload| !valid_gcp_status(payload.get("status"))) {
+        missing.push("protoPayload.status.code");
     }
     mark_malformed(&mut ev, &missing);
     ev
@@ -528,25 +556,55 @@ fn aws_object(obj: &Map<String, Value>) -> Option<String> {
 }
 
 fn aws_outcome(obj: &Map<String, Value>) -> EvidenceOutcome {
-    match string_at(obj, &["errorCode"]) {
-        Some(code)
+    match obj.get("errorCode") {
+        Some(Value::String(code))
             if code.to_ascii_lowercase().contains("accessdenied")
                 || code.to_ascii_lowercase().contains("unauthorized") =>
         {
             EvidenceOutcome::Denied
         }
-        Some(_) => EvidenceOutcome::Failure,
+        Some(Value::String(code)) if !code.is_empty() => EvidenceOutcome::Failure,
+        Some(_) => EvidenceOutcome::Unknown,
         None => EvidenceOutcome::Success,
     }
 }
 
 fn gcp_outcome(payload: Option<&Map<String, Value>>) -> EvidenceOutcome {
-    let status = payload.and_then(|p| object_at(p, &["status"]));
-    match status.and_then(|s| s.get("code")).and_then(Value::as_i64) {
-        Some(0) | None => EvidenceOutcome::Success,
-        Some(7 | 16) => EvidenceOutcome::Denied,
-        Some(_) => EvidenceOutcome::Failure,
+    let Some(status_value) = payload.and_then(|payload| payload.get("status")) else {
+        return EvidenceOutcome::Success;
+    };
+    let Some(code) = status_value
+        .as_object()
+        .and_then(|status| status.get("code"))
+        .and_then(Value::as_i64)
+    else {
+        return EvidenceOutcome::Unknown;
+    };
+    match code {
+        0 => EvidenceOutcome::Success,
+        7 | 16 => EvidenceOutcome::Denied,
+        _ => EvidenceOutcome::Failure,
     }
+}
+
+fn valid_gcp_status(status: Option<&Value>) -> bool {
+    match status {
+        None => true,
+        Some(status) => status
+            .as_object()
+            .and_then(|status| status.get("code"))
+            .and_then(Value::as_i64)
+            .is_some(),
+    }
+}
+
+fn valid_string_array(value: Option<&Value>) -> bool {
+    value.and_then(Value::as_array).is_some_and(|values| {
+        !values.is_empty()
+            && values
+                .iter()
+                .all(|value| value.as_str().is_some_and(|value| !value.is_empty()))
+    })
 }
 
 fn required_string<'a>(obj: &'a Map<String, Value>, key: &'a str, missing: &mut Vec<&'a str>) {
@@ -570,7 +628,7 @@ fn mark_malformed(ev: &mut ExternalEvidenceEvent, missing: &[&str]) {
         // mapping or manufacturing required values.
         ev.source.clear();
         ev.coverage_notes.push(format!(
-            "malformed sensor record: missing required {}",
+            "malformed sensor record: missing or invalid required fields: {}",
             missing.join(", ")
         ));
     }

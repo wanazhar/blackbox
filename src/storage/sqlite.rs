@@ -2563,7 +2563,7 @@ impl TraceStore for SqliteStore {
         let result = {
             let conn = self.lock();
             let mut stmt =
-                conn.prepare("SELECT payload FROM incidents ORDER BY created_at DESC")?;
+                conn.prepare("SELECT payload FROM incidents ORDER BY created_at DESC, id DESC")?;
             let rows = stmt
                 .query_map([], |row| row.get::<_, String>(0))?
                 .collect::<Result<Vec<_>, _>>()?;
@@ -2572,6 +2572,70 @@ impl TraceStore for SqliteStore {
                 out.push(serde_json::from_str(&p)?);
             }
             Ok(out)
+        };
+        tokio::task::yield_now().await;
+        result
+    }
+
+    async fn list_incidents_page(
+        &self,
+        cursor: Option<&crate::incident::IncidentPageCursor>,
+        limit: usize,
+    ) -> anyhow::Result<crate::incident::IncidentPage> {
+        let limit = limit.clamp(1, 500);
+        let fetch = limit + 1;
+        let result = {
+            let conn = self.lock();
+            let mut rows: Vec<String> = Vec::new();
+            if let Some(c) = cursor {
+                let created = c.created_at.to_rfc3339();
+                let mut stmt = conn.prepare(
+                    "SELECT payload FROM incidents
+                     WHERE (created_at < ?1) OR (created_at = ?1 AND id < ?2)
+                     ORDER BY created_at DESC, id DESC
+                     LIMIT ?3",
+                )?;
+                let mapped = stmt.query_map(params![created, c.id, fetch as i64], |row| {
+                    row.get::<_, String>(0)
+                })?;
+                for r in mapped {
+                    rows.push(r?);
+                }
+            } else {
+                let mut stmt = conn.prepare(
+                    "SELECT payload FROM incidents
+                     ORDER BY created_at DESC, id DESC
+                     LIMIT ?1",
+                )?;
+                let mapped =
+                    stmt.query_map(params![fetch as i64], |row| row.get::<_, String>(0))?;
+                for r in mapped {
+                    rows.push(r?);
+                }
+            }
+            let mut incidents: Vec<crate::incident::Incident> = Vec::new();
+            for p in rows {
+                incidents.push(serde_json::from_str(&p)?);
+            }
+            let has_more = incidents.len() > limit;
+            if has_more {
+                incidents.truncate(limit);
+            }
+            let next_cursor = if has_more {
+                incidents.last().map(|i| {
+                    crate::incident::encode_incident_cursor(&crate::incident::IncidentPageCursor {
+                        created_at: i.created_at,
+                        id: i.id.clone(),
+                    })
+                })
+            } else {
+                None
+            };
+            Ok(crate::incident::IncidentPage {
+                incidents,
+                next_cursor,
+                has_more,
+            })
         };
         tokio::task::yield_now().await;
         result

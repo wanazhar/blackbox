@@ -107,6 +107,8 @@ pub async fn serve(store: Arc<SqliteStore>, opts: ServeOptions) -> anyhow::Resul
         .route("/runs/{id}", get(run_page))
         .route("/runs/{id}/live", get(run_live_page))
         .route("/runs/{id}/export.html", get(run_export_html))
+        .route("/incidents", get(incidents_page))
+        .route("/incidents/{id}", get(incident_page))
         .route("/watch", get(watch_latest_page))
         .route("/status", get(status_page))
         .route("/handoff", get(handoff_page))
@@ -473,6 +475,7 @@ async fn index(State(state): State<AppState>) -> Result<Html<String>, AppError> 
     <button type="submit">Search</button>
   </form>
   <a class="btn" href="/watch">Live watch</a>
+  <a class="btn" href="/incidents">Incidents</a>
   <a class="btn" href="/handoff">Handoff</a>
   <a class="btn secondary" href="/status">Status</a>
   <a class="btn secondary" href="/api/runs">JSON API</a>
@@ -695,13 +698,45 @@ async fn run_page(
         .await
         .unwrap_or_default();
 
+    // 1.7 boundary trust + findings for HTML.
+    let boundary = state.store.get_run_boundary(&run_id).await.ok().flatten();
+    let findings = state
+        .store
+        .list_boundary_findings(&run_id)
+        .await
+        .unwrap_or_default();
+    let containment = state
+        .store
+        .list_containment_receipts(&run_id)
+        .await
+        .unwrap_or_default();
+    let provenance = state
+        .store
+        .list_provenance_records(&run_id)
+        .await
+        .unwrap_or_default();
+    let external = state
+        .store
+        .list_external_evidence_for_run(&run_id)
+        .await
+        .unwrap_or_default();
+    let trust = crate::boundary::build_boundary_trust(
+        boundary.as_ref(),
+        &findings,
+        &containment,
+        &provenance,
+        &external,
+        &[],
+    );
+    let trust_html = boundary_trust_html(&trust, &findings, &external);
+
     let mut timeline = String::new();
     for ev in events.iter().filter(|e| !is_bookkeeping(&e.kind)) {
         timeline.push_str(&event_row_html(ev));
     }
 
     let body = format!(
-        r#"<p><a href="/">← Runs</a> · <a href="/runs/{id}/live">Live view</a> · <a href="/runs/{id}/export.html">Full HTML export</a> · <a class="muted" href="/api/runs/{id}/anomalies">anomalies JSON</a></p>
+        r#"<p><a href="/">← Runs</a> · <a href="/runs/{id}/live">Live view</a> · <a href="/runs/{id}/export.html">Full HTML export</a> · <a class="muted" href="/api/runs/{id}/boundary">boundary JSON</a> · <a class="muted" href="/api/runs/{id}/anomalies">anomalies JSON</a></p>
 <h1>{title}</h1>
 <p class="mono muted">{full_id}</p>
 <div class="meta">
@@ -712,6 +747,7 @@ async fn run_page(
   <div><b>Tags</b> {}</div>
 </div>
 {anom}
+{trust}
 <h2>Tools</h2>
 <pre>{}</pre>
 <h2>Terminal</h2>
@@ -737,6 +773,7 @@ async fn run_page(
         title = html_escape(run.name.as_deref().unwrap_or("Run")),
         full_id = html_escape(&run_id),
         anom = anomaly_badges_html(&anomalies),
+        trust = trust_html,
     );
 
     Ok(Html(shell(
@@ -744,6 +781,171 @@ async fn run_page(
         &body,
     ))
     .into_response())
+}
+
+fn boundary_trust_html(
+    trust: &crate::boundary::BoundaryTrustView,
+    findings: &[crate::boundary::BoundaryFinding],
+    external: &[crate::evidence::ExternalEvidenceEvent],
+) -> String {
+    if !trust.has_boundary && findings.is_empty() && external.is_empty() {
+        return String::new();
+    }
+    let ok = if trust.trust_ok { "trust-ok" } else { "trust-bad" };
+    let mut finding_rows = String::new();
+    for f in findings.iter().take(20) {
+        finding_rows.push_str(&format!(
+            "<tr><td>{}</td><td class=\"mono\">{}</td><td>{}</td></tr>",
+            html_escape(f.severity.as_str()),
+            html_escape(&f.detector),
+            html_escape(&f.summary),
+        ));
+    }
+    if finding_rows.is_empty() {
+        finding_rows = "<tr><td colspan=\"3\" class=\"muted\">No findings</td></tr>".into();
+    }
+    format!(
+        r#"<div class="meta trust-panel {ok}">
+  <div><b>Boundary trust</b> {}</div>
+  <div><b>Policy</b> <span class="mono">{}</span></div>
+  <div><b>Evidence</b> {}</div>
+  <div><b>Provenance</b> {}</div>
+  <div><b>Findings</b> {} (critical {})</div>
+  <div><b>External evidence</b> {}</div>
+</div>
+<h2>Boundary findings</h2>
+<table>
+  <thead><tr><th>Sev</th><th>Detector</th><th>Summary</th></tr></thead>
+  <tbody>{rows}</tbody>
+</table>"#,
+        if trust.trust_ok { "ok" } else { "attention" },
+        html_escape(
+            trust
+                .policy_hash
+                .as_deref()
+                .map(|h| &h[..16.min(h.len())])
+                .unwrap_or("—")
+        ),
+        html_escape(trust.evidence_status.as_deref().unwrap_or("—")),
+        html_escape(trust.provenance_status.as_deref().unwrap_or("—")),
+        trust.finding_count,
+        trust.critical_finding_count,
+        external.len(),
+        ok = ok,
+        rows = finding_rows,
+    )
+}
+
+async fn incidents_page(State(state): State<AppState>) -> Result<Html<String>, AppError> {
+    let page = state.store.list_incidents_page(None, 50).await?;
+    let mut rows = String::new();
+    for inc in &page.incidents {
+        rows.push_str(&format!(
+            r#"<tr>
+  <td class="mono"><a href="/incidents/{id}">{short}</a></td>
+  <td>{title}</td>
+  <td>{runs}</td>
+  <td class="muted">{created}</td>
+</tr>"#,
+            id = urlencoding(&inc.id),
+            short = html_escape(&inc.id[..8.min(inc.id.len())]),
+            title = html_escape(inc.title.as_deref().unwrap_or("—")),
+            runs = inc.run_ids().len(),
+            created = html_escape(&inc.created_at.to_rfc3339()),
+        ));
+    }
+    if rows.is_empty() {
+        rows = r#"<tr><td colspan="4" class="muted">No incidents yet. Create with <code>blackbox incident create</code>.</td></tr>"#.into();
+    }
+    Ok(Html(shell(
+        "Incidents",
+        &format!(
+            r#"<p><a href="/">← Runs</a> · <a class="muted" href="/api/incidents">JSON</a></p>
+<h1>Incidents</h1>
+<p class="muted">{n} shown{more}</p>
+<table>
+  <thead><tr><th>ID</th><th>Title</th><th>Runs</th><th>Created</th></tr></thead>
+  <tbody>{rows}</tbody>
+</table>"#,
+            n = page.incidents.len(),
+            more = if page.has_more { " (more available via API cursor)" } else { "" },
+            rows = rows,
+        ),
+    )))
+}
+
+async fn incident_page(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Response, AppError> {
+    let Some(inc) = state.store.get_incident(&id).await? else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    };
+    let mut attach_rows = String::new();
+    for a in &inc.attachments {
+        let link = if matches!(a.kind, crate::incident::IncidentAttachmentKind::Run) {
+            format!(
+                r#"<a href="/runs/{0}">{1}</a>"#,
+                urlencoding(&a.ref_id),
+                html_escape(&a.ref_id[..8.min(a.ref_id.len())])
+            )
+        } else {
+            html_escape(&a.ref_id[..8.min(a.ref_id.len())])
+        };
+        attach_rows.push_str(&format!(
+            "<tr><td>{}</td><td class=\"mono\">{}</td><td class=\"muted\">{}</td></tr>",
+            html_escape(a.kind.as_str()),
+            link,
+            html_escape(a.reason.as_deref().unwrap_or("—")),
+        ));
+    }
+    // Lightweight per-run finding counts for the incident.
+    let mut finding_summary = String::new();
+    for rid in inc.run_ids() {
+        let n = state
+            .store
+            .list_boundary_findings(rid)
+            .await
+            .map(|f| f.len())
+            .unwrap_or(0);
+        finding_summary.push_str(&format!(
+            r#"<li><a href="/runs/{0}">{1}</a> — {n} finding(s)</li>"#,
+            urlencoding(rid),
+            html_escape(&rid[..8.min(rid.len())]),
+            n = n,
+        ));
+    }
+    let body = format!(
+        r#"<p><a href="/incidents">← Incidents</a> · <a class="muted" href="/api/incidents/{id}">JSON</a></p>
+<h1>{title}</h1>
+<p class="mono muted">{full}</p>
+<div class="meta">
+  <div><b>Runs</b> {runs}</div>
+  <div><b>Attachments</b> {atts}</div>
+  <div><b>Earliest signal</b> {signal}</div>
+  <div><b>Continued after signal</b> {cont}</div>
+</div>
+<h2>Attachments</h2>
+<table>
+  <thead><tr><th>Kind</th><th>Ref</th><th>Reason</th></tr></thead>
+  <tbody>{attach}</tbody>
+</table>
+<h2>Linked runs</h2>
+<ul>{findings}</ul>"#,
+        id = urlencoding(&inc.id),
+        title = html_escape(inc.title.as_deref().unwrap_or("Incident")),
+        full = html_escape(&inc.id),
+        runs = inc.run_ids().len(),
+        atts = inc.attachments.len(),
+        signal = html_escape(inc.earliest_signal_id.as_deref().unwrap_or("—")),
+        cont = inc
+            .continued_after_signal
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "—".into()),
+        attach = attach_rows,
+        findings = finding_summary,
+    );
+    Ok(Html(shell("Incident", &body)).into_response())
 }
 
 /// Live-updating run page powered by SSE.
@@ -1362,15 +1564,29 @@ async fn api_run_evidence(
     .into_response())
 }
 
-async fn api_incidents(State(state): State<AppState>) -> Result<Response, AppError> {
-    let mut list = state.store.list_incidents().await?;
-    // Dashboard default page size
-    list.truncate(100);
-    Ok(Json(serde_json::json!({
-        "count": list.len(),
-        "incidents": list,
-    }))
-    .into_response())
+#[derive(Deserialize)]
+struct IncidentListQuery {
+    limit: Option<usize>,
+    cursor: Option<String>,
+}
+
+async fn api_incidents(
+    State(state): State<AppState>,
+    Query(q): Query<IncidentListQuery>,
+) -> Result<Response, AppError> {
+    let limit = q.limit.unwrap_or(50);
+    let cur = match q.cursor.as_deref() {
+        Some(c) => Some(
+            crate::incident::decode_incident_cursor(c)
+                .ok_or_else(|| anyhow::anyhow!("invalid incident cursor"))?,
+        ),
+        None => None,
+    };
+    let page = state
+        .store
+        .list_incidents_page(cur.as_ref(), limit)
+        .await?;
+    Ok(Json(page).into_response())
 }
 
 async fn api_incident(
@@ -1669,6 +1885,8 @@ th {{ color:var(--muted); font-size:0.75rem; text-transform:uppercase; letter-sp
 .badge-info {{ background:color-mix(in srgb,var(--accent) 22%,transparent); }}
 .anom-slot {{ display:inline; }}
 .anom-bar {{ margin-top:0.25rem; }}
+.trust-panel.trust-ok {{ border-color:color-mix(in srgb,#22c55e 40%,var(--border)); }}
+.trust-panel.trust-bad {{ border-color:color-mix(in srgb,#ef4444 50%,var(--border)); }}
 .tags {{ color:var(--muted); font-size:0.8rem; margin-left:0.4rem; }}
 .row-tool {{ background:var(--tool); }}
 .row-error {{ background:var(--err); }}

@@ -1049,13 +1049,13 @@ Import versioned `blackbox.evidence.event/v1` (or generic JSONL mapping). Idempo
 
 ```bash
 blackbox incident create [--title T] [--run id]…
-blackbox incident list
+blackbox incident list [--limit N] [--cursor C]
 blackbox incident show <id> [--graph]
 blackbox incident attach <id> [--run id] [--evidence id] [--reason text]
 blackbox incident export <id> [-o path] [--sanitize] [--allow-unresolved]
 ```
 
-Multi-run incident object with optional reconstruction graph and sanitized export.
+Multi-run incident object with cursor pagination, aggregates on show, and sanitized export.
 
 ---
 

@@ -340,9 +340,15 @@ fn detect_public_network_probe(inputs: &DetectInputs<'_>) -> Vec<BoundaryFinding
     for ev in inputs.external {
         if matches!(
             ev.action,
-            EvidenceAction::NetworkConnect | EvidenceAction::DnsQuery
-        ) && matches!(ev.outcome, EvidenceOutcome::Denied | EvidenceOutcome::Failure)
-        {
+            EvidenceAction::NetworkConnect
+                | EvidenceAction::DnsQuery
+                | EvidenceAction::ProxyDeny
+                | EvidenceAction::HttpRequest
+        ) && matches!(
+            ev.outcome,
+            EvidenceOutcome::Denied | EvidenceOutcome::Failure
+        ) {
+
             let mut f = BoundaryFinding::new(
                 inputs.run_id,
                 FindingKind::BehaviorTransition,

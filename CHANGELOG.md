@@ -45,8 +45,15 @@ Epic: [issue #5](https://github.com/wanazhar/blackbox/issues/5). Plan: [docs/pla
 - Dashboard API: `/api/runs/{id}/boundary|findings|evidence`, `/api/incidents`
 - Operator guide: [docs/guide/boundaries-and-incidents.md](docs/guide/boundaries-and-incidents.md)
 
+#### Polish (pre-release)
+- Detector **FP/FN quality gate** (`evaluate_detector_quality`, min recall 0.85 / precision 0.80; benign controls must be clean)
+- Incident **cursor pagination** (`list_incidents_page`, CLI `--cursor/--limit`) + **aggregates** on show
+- Dashboard HTML: run trust panel + findings table; `/incidents` and `/incidents/{id}` pages
+- **Auto provenance** from experiment `dataset_case` / task_id on run end
+
 #### Tests & fixtures
 - `tests/boundary_contract.rs`, `tests/boundary_1_7_full.rs`, `tests/boundary_trust_integration.rs`
+- `tests/boundary_detector_quality.rs`, `tests/incident_pagination.rs`, `tests/auto_provenance.rs`
 - `tests/fixtures/boundary_1_7/` (proxy, credential, benign admin)
 
 ## [1.6.0] — 2026-07-21

@@ -1720,6 +1720,27 @@ async fn cmd_run(cli: &Cli, args: &RunArgs) -> anyhow::Result<()> {
                 eprintln!("experiment: linked run {} → {e}", crate::util::short_id(&run.id));
             }
         }
+
+        // 1.7: auto provenance from experiment dataset_case / task + observed evidence.
+        {
+            use crate::boundary::auto_provenance_record;
+            let external = store
+                .list_external_evidence_for_run(&run.id)
+                .await
+                .unwrap_or_default();
+            if let Some(rec) = auto_provenance_record(&run.id, Some(&meta), &external) {
+                if let Err(e) = store.insert_provenance_record(&rec).await {
+                    tracing::warn!(error = %e, "auto provenance record failed");
+                } else if !cli.json {
+                    eprintln!(
+                        "provenance: auto status={} declared={} observed={}",
+                        rec.status.as_str(),
+                        rec.declared_sources.len(),
+                        rec.observed_sources.len()
+                    );
+                }
+            }
+        }
     }
 
     // Sticky project state under state.lock + MEMORY refresh (1.2).

@@ -78,6 +78,8 @@ blackbox gate --experiment exp1 \
 
 ```bash
 blackbox incident create --title "egress-swarm" --run latest
+blackbox incident list --limit 50
+blackbox incident list --limit 50 --cursor <next_cursor>
 blackbox incident show <inc-id>
 blackbox incident export <inc-id> -o incident.json --sanitize
 
@@ -85,6 +87,16 @@ blackbox forensic pack latest -o pack.json
 # Optional local model claims (citations required; never replace evidence)
 blackbox forensic analyze pack.json --model local-llm \
   --claim "public egress after probe" --cite find-...
+```
+
+Dashboard: open `/incidents` and each run’s trust panel (findings + policy hash).
+
+### Auto provenance from experiments
+
+When you pass `--dataset-case` / `--task` / `--experiment` on `run`, Blackbox writes a provenance record automatically from declared dataset/task URIs and any observed network destinations. A successful exit with undeclared HTTP still fails score/provenance gates.
+
+```bash
+blackbox run --experiment exp1 --dataset-case case-9 --boundary eval.json -- ...
 ```
 
 ---

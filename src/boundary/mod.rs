@@ -6,10 +6,12 @@
 //! supports that claim. It does **not** enforce sandbox/firewall policy by
 //! default — see the threat model in `docs/plan/agent-boundary-1.7.md`.
 
+mod auto_provenance;
 mod canary;
 mod containment;
 mod contract;
 mod correlate;
+mod corpus;
 mod detect;
 mod evidence;
 mod identity;
@@ -18,6 +20,9 @@ mod resolve;
 mod trust;
 mod vocab;
 
+pub use auto_provenance::{
+    auto_provenance_record, declared_sources_from_experiment, observed_sources_from_evidence,
+};
 pub use canary::{
     launch_containment_receipts, post_run_canary_receipts, LaunchBackendInfo,
 };
@@ -30,6 +35,10 @@ pub use contract::{
 pub use correlate::{
     correlate_external_batch, correlate_external_event, CorrelationContext, EntityKind,
     EvidenceEdge, EvidenceRelation, EVIDENCE_EDGE_SCHEMA,
+};
+pub use corpus::{
+    detector_corpus, evaluate_detector_quality, CaseExpectation, CaseResult, CorpusCase,
+    QualityReport, MAX_BENIGN_FALSE_POSITIVES, MIN_PRECISION, MIN_RECALL,
 };
 pub use detect::{
     detect_boundary_findings, BoundaryFinding, DetectInputs, FindingKind, FindingSeverity,

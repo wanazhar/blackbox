@@ -66,6 +66,9 @@ High-risk product claims classified by evidence. Update when tests or platforms 
 | Correct task answer can fail provenance gate independently | test-backed | `evaluate_provenance` + full pipeline test |
 | Multi-run incidents surface earliest signal and technique reuse | test-backed | `incident::graph` tests |
 | Forensic packs validate citations and redact secret-like patterns | test-backed | `forensic::pack` tests |
+| Detector quality stays above min recall/precision on committed corpus | test-backed | `tests/boundary_detector_quality.rs`; benign controls must produce zero high/critical FP |
+| Incident listing paginates with cursors without duplicates | test-backed | `tests/incident_pagination.rs` |
+| Experiment `dataset_case` auto-feeds provenance declared sources | test-backed | `tests/auto_provenance.rs`; undeclared network still invalidates |
 | Blackbox blocks sandbox escapes by default | false / non-goal | Evidence only; no autonomous kill |
 
 **Classes:** `code-backed` · `test-backed` · `platform-dependent` · `best-effort` · `planned` · `historical` · `experimental`.

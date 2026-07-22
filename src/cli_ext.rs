@@ -510,7 +510,14 @@ pub enum IncidentAction {
         runs: Vec<String>,
     },
     /// List incidents
-    List,
+    List {
+        /// Max rows (cursor page size)
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+        /// Opaque cursor from previous page
+        #[arg(long)]
+        cursor: Option<String>,
+    },
     /// Show incident + graph summary
     Show {
         /// Incident id
@@ -2184,19 +2191,36 @@ pub async fn cmd_incident(
             );
             Ok(())
         }
-        IncidentAction::List => {
-            let list = store.list_incidents().await?;
+        IncidentAction::List { limit, cursor } => {
+            use crate::incident::decode_incident_cursor;
+            let cur = match cursor {
+                Some(c) => Some(
+                    decode_incident_cursor(c)
+                        .ok_or_else(|| anyhow::anyhow!("invalid incident cursor"))?,
+                ),
+                None => None,
+            };
+            let page = store
+                .list_incidents_page(cur.as_ref(), *limit)
+                .await?;
             if json {
-                return output::emit_ok("incident_list", &list);
+                return output::emit_ok("incident_list", &page);
             }
-            println!("incidents: {}", list.len());
-            for i in &list {
+            println!(
+                "incidents: {} (has_more={})",
+                page.incidents.len(),
+                page.has_more
+            );
+            for i in &page.incidents {
                 println!(
                     "  {} {:?} runs={}",
                     crate::util::short_id(&i.id),
                     i.title,
                     i.run_ids().len()
                 );
+            }
+            if let Some(ref c) = page.next_cursor {
+                println!("next_cursor: {c}");
             }
             Ok(())
         }
@@ -2243,10 +2267,31 @@ pub async fn cmd_incident(
                 let _ = store.upsert_incident(&updated).await;
                 graph_view = Some(g);
             }
+            let aggregates = graph_view.as_ref().map(|g| {
+                use crate::incident::compute_incident_aggregates;
+                let reuse = g
+                    .techniques
+                    .iter()
+                    .filter(|t| !t.reused_by_runs.is_empty())
+                    .count();
+                compute_incident_aggregates(
+                    &inc,
+                    g.finding_count,
+                    0,
+                    g.finding_count,
+                    g.evidence_count,
+                    g.techniques.len(),
+                    reuse,
+                )
+            });
             if json {
                 return output::emit_ok(
                     "incident_show",
-                    &serde_json::json!({ "incident": inc, "graph": graph_view }),
+                    &serde_json::json!({
+                        "incident": inc,
+                        "graph": graph_view,
+                        "aggregates": aggregates,
+                    }),
                 );
             }
             println!(
@@ -2265,6 +2310,12 @@ pub async fn cmd_incident(
                     g.finding_count,
                     g.techniques.len()
                 );
+                if let Some(ref a) = aggregates {
+                    println!(
+                        "  aggregates runs={} attachments={} reuse={}",
+                        a.run_count, a.attachment_count, a.reuse_count
+                    );
+                }
                 if let Some(ref s) = g.earliest_signal {
                     println!(
                         "  earliest_signal {} — {}",

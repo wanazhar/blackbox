@@ -18,7 +18,7 @@ use crate::core::event::TraceEvent;
 use crate::core::run::Run;
 use crate::evidence::ExternalEvidenceEvent;
 use crate::experiment::{ExperimentManifest, RunExperimentMeta};
-use crate::incident::Incident;
+use crate::incident::{Incident, IncidentPage, IncidentPageCursor};
 use crate::verification::VerificationReceipt;
 
 pub use page::{
@@ -603,5 +603,15 @@ pub trait TraceStore: Send + Sync + 'static {
     /// List incidents (newest first).
     async fn list_incidents(&self) -> anyhow::Result<Vec<Incident>> {
         Ok(Vec::new())
+    }
+
+    /// Cursor page of incidents (newest first). Default uses full list + in-memory page.
+    async fn list_incidents_page(
+        &self,
+        cursor: Option<&IncidentPageCursor>,
+        limit: usize,
+    ) -> anyhow::Result<IncidentPage> {
+        let all = self.list_incidents().await?;
+        Ok(crate::incident::page_incidents(&all, cursor, limit))
     }
 }

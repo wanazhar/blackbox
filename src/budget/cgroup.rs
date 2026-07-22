@@ -8,8 +8,10 @@
 //! Capability reporting never claims `enforced` when the backend is unavailable.
 
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
+
+#[cfg(target_os = "linux")]
+use std::io::Write;
 
 use crate::budget::policy::{BudgetCapability, BudgetPolicy, BudgetStatus};
 
@@ -52,7 +54,7 @@ impl CgroupScope {
         #[cfg(not(target_os = "linux"))]
         {
             let _ = (pid, policy);
-            return None;
+            None
         }
         #[cfg(target_os = "linux")]
         {
@@ -223,6 +225,7 @@ fn enable_controllers(cg: &Path, controllers: &[&str]) -> std::io::Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
 fn write_knob(path: &Path, value: &str) -> std::io::Result<()> {
     let mut f = fs::OpenOptions::new().write(true).open(path)?;
     f.write_all(value.as_bytes())?;
@@ -240,7 +243,7 @@ fn write_knob(path: &Path, value: &str) -> std::io::Result<()> {
 pub fn cgroup_v2_memory_writable() -> bool {
     #[cfg(not(target_os = "linux"))]
     {
-        return false;
+        false
     }
     #[cfg(target_os = "linux")]
     {

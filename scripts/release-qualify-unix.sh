@@ -135,12 +135,22 @@ if [ "$QUICK" -eq 1 ]; then
   run_gate "1.6: workspace_symlink_safety" cargo test --test workspace_symlink_safety -- --quiet || true
   run_gate "1.6: portable_v2_references" cargo test --test portable_v2_references -- --quiet || true
   run_gate "1.6: pagination_filtered_scale" cargo test --test pagination_filtered_scale -- --quiet || true
+  run_gate "1.7: boundary + incident suite" cargo test \
+    --test boundary_contract --test boundary_1_7_full \
+    --test boundary_trust_integration --test boundary_detector_quality \
+    --test incident_pagination --test auto_provenance \
+    --test evidence_adversarial -- --quiet || true
 else
   run_gate "cargo test --all-targets" cargo test --all-targets -- --quiet || true
   run_gate "docs first-run + envelope + commands" \
     cargo test --test docs_first_run --test docs_cli_envelope --test docs_commands -- --quiet || true
   # 1.6 integrity + verification suite (non-endurance)
   run_gate "1.6: integrity suite" cargo test --test fsck_corruption --test ingest_spool_recovery --test verification_receipts --test experiment_reports --test regression_gate --test capsule_integrity --test workspace_symlink_safety --test portable_v2_references --test pagination_filtered_scale --test blob_reference_rewrite --test aggregate_semantics --test mcp_record_e2e --test budget_cgroup_linux -- --quiet || true
+  run_gate "1.7: boundary + incident suite" cargo test \
+    --test boundary_contract --test boundary_1_7_full \
+    --test boundary_trust_integration --test boundary_detector_quality \
+    --test incident_pagination --test auto_provenance \
+    --test evidence_adversarial -- --quiet || true
   # Real 100k-event endurance (ignored by default unit filter; force with --ignored)
   run_gate "1.6: endurance_100k" cargo test --test endurance_100k -- --quiet || true
 fi
@@ -224,6 +234,16 @@ fi
   echo "| E | Capsules + MCP cassette (experimental limits explicit) |"
   echo "| F | Budgets (capability honesty) + adapter protocol + multi-project index |"
   echo "| L | 100k-event endurance qualification |"
+  echo
+  echo "## 1.7 Agent boundary bars"
+  echo
+  echo "| Id | Bar |"
+  echo "|---|---|"
+  echo "| A/B | Immutable pre-launch policy + evidence-bound containment receipts |"
+  echo "| C/D | Atomic external evidence import + authenticity-aware correlation |"
+  echo "| E | Evidence-time findings + detector quality gate |"
+  echo "| F | Observation-backed provenance |"
+  echo "| G/H | Chronological incidents + strict portable trust-artifact restore |"
   echo
   echo "## Host"
   echo

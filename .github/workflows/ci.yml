@@ -71,6 +71,15 @@ jobs:
             --test adapter_conformance --test endurance_100k \
             -- --quiet
 
+      # 1.7 agent-boundary evidence and incident reconstruction gates
+      - name: Boundary and incident gates (1.7)
+        run: |
+          cargo test \
+            --test boundary_contract --test boundary_1_7_full \
+            --test boundary_trust_integration --test boundary_detector_quality \
+            --test incident_pagination --test auto_provenance \
+            --test evidence_adversarial -- --quiet
+
   # 1.5 Q1: lightweight macOS runtime gate on every PR (not only tag-time build).
   macos:
     name: macOS runtime gate
@@ -105,6 +114,16 @@ jobs:
 
       - name: Clippy (lib + bins)
         run: cargo clippy --all-targets -- -D warnings
+
+      - name: Boundary and incident subset (1.7)
+        run: |
+          cargo test \
+            --test boundary_contract \
+            --test boundary_trust_integration \
+            --test boundary_detector_quality \
+            --test auto_provenance \
+            --test evidence_adversarial \
+            -- --quiet
 
   # Soft matrix note: full release binaries are built on tag via release.yml
   # (Linux x86_64/ARM64 + macOS ARM64/x86_64). Ubuntu remains primary full suite.

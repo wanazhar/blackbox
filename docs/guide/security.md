@@ -250,8 +250,8 @@ SSE streams and JSON APIs share the same auth middleware.
 | Kubernetes/cloud audit | Provider IDs, principals, workloads, objects, outcomes, and clocks are preserved; malformed recognized records are rejected |
 | Process `object` paths | Absolute exe paths are allowed as labels (never opened) |
 | Containment “verified” | Requires verified+held on a real control — process-only absence of egress does **not** satisfy |
-| Forensic packs | `SecretScanner` + substring patterns + truncation; model claims need citations and model/prompt/configuration fingerprints |
-| Incident exchange | Shared secret scanner, transformation ledger, attachment hashes, unresolved references, and document integrity hash |
+| Forensic packs | Recursive string/key scanning across the complete serialized pack; exact typed citations; input hash validation; Blackbox-computed model prompt/configuration hashes |
+| Incident exchange | Recursive string scanning with reference-stable opaque tokens, exact scanned/redacted ledger counts, attachment hashes, unresolved references, and document integrity hash |
 | Incidents / dashboard | Same auth as other `serve` APIs; HTML escapes free text; graph v2 reports exact totals and truncation |
 
 Guide: [boundaries-and-incidents.md](boundaries-and-incidents.md).
@@ -261,7 +261,7 @@ Guide: [boundaries-and-incidents.md](boundaries-and-incidents.md).
 | Risk | Closure |
 |---|---|
 | Unverified sensor feed treated as proof | Payload hashes prove consistency only; Confirmed requires trusted signature verification |
-| Forensic pack leaks fixture secrets | Packs run the same `SecretScanner` as capture/export before write |
+| Forensic pack leaks fixture secrets | Serialization-boundary scanning covers edges, pointers, optional graphs, model identity/output/refusal/failure, nested values, and keys before each hash |
 | Anonymous loopback `serve` | Token auto-generated unless `--allow-anonymous` (loopback-only danger) |
 | Forged cooperative `trace_id` → Confirmed | Permanent unit gates; multi-signal + integrity required |
 | Secret-bearing incident title/summary | Sanitized exchange uses the shared `SecretScanner`, not marker-only replacement |
@@ -272,7 +272,7 @@ Treat Kubernetes and cloud audit records as assertions from their collection pat
 
 An import-context run ID, workload label, principal, or cooperative trace ID is not authenticated attribution. Use a trusted verification step for source authenticity and corroborate identities across independent sensors. Clock skew and collection delay can change apparent event order; inspect `occurred_at`, `observed_at`, and clock uncertainty before claiming causality.
 
-Sanitization lowers disclosure risk but is not declassification. Validate `export_hash`, review the transformation and unresolved-reference ledgers, apply recipient-specific access controls, and share attachment bodies separately only when their policy permits it. Model-derived forensic claims are untrusted derived content even when their citations and reproducibility fingerprints validate.
+Sanitization lowers disclosure risk but is not declassification. Validate `export_hash`, review exact `redacted` versus `scanned_unchanged` counts and unresolved references, apply recipient-specific access controls, and share attachment bodies separately only when their policy permits it. Model-derived forensic claims are untrusted derived content even when their exact typed citations and Blackbox-computed input fingerprints validate.
 
 ---
 

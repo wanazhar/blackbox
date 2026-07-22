@@ -1,6 +1,7 @@
 //! Bounded, redacted forensic packs for on-premise analysis.
 
 #![allow(missing_docs)]
+use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use chrono::{DateTime, Utc};
@@ -206,17 +207,23 @@ pub fn build_forensic_pack(
     // Deterministic claims from detectors (citations validated).
     let mut derived_claims = Vec::new();
     for f in &findings {
-        let mut citations = f.evidence_event_ids.clone();
-        citations.extend(f.external_evidence_ids.iter().cloned());
-        citations.push(f.id.clone());
+        let mut citations: Vec<String> = f
+            .evidence_event_ids
+            .iter()
+            .map(|id| format!("event:{id}"))
+            .collect();
+        citations.extend(
+            f.external_evidence_ids
+                .iter()
+                .map(|id| format!("external:{id}")),
+        );
+        citations.push(format!("finding:{}", f.id));
         // Drop claims with empty citations.
         if citations.is_empty() {
             continue;
         }
         // Validate citations resolve to pack pointers or finding id.
-        let ok = citations
-            .iter()
-            .all(|c| original_pointers.iter().any(|p| p.ends_with(c)) || c == &f.id);
+        let ok = citations.iter().all(|c| original_pointers.contains(c));
         if !ok {
             coverage_gaps.push(format!("invalid_citation_on_finding_{}", f.id));
             continue;
@@ -250,6 +257,7 @@ pub fn build_forensic_pack(
         incident_graph: None,
         pack_hash: String::new(),
     };
+    sanitize_pack_content(&mut pack, opts);
     pack.pack_hash = hash_pack(&pack);
     pack
 }
@@ -262,6 +270,25 @@ fn hash_pack(pack: &ForensicPack) -> String {
     let mut h = Sha256::new();
     h.update(s.as_bytes());
     hex::encode(h.finalize())
+}
+
+/// Validate the pack schema, content hash, and exact typed citations.
+pub fn validate_forensic_pack(pack: &ForensicPack) -> Result<(), Vec<String>> {
+    let mut errors = Vec::new();
+    if pack.schema != FORENSIC_PACK_SCHEMA {
+        errors.push(format!("unsupported forensic pack schema {}", pack.schema));
+    }
+    if hash_pack(pack) != pack.pack_hash {
+        errors.push("pack_hash mismatch".into());
+    }
+    if let Err(mut citation_errors) = validate_claim_citations(pack) {
+        errors.append(&mut citation_errors);
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
 }
 
 fn pack_scanner() -> &'static SecretScanner {
@@ -285,6 +312,101 @@ fn redact_str(s: &str, opts: &ForensicPackOpts) -> String {
         out.push('…');
     }
     out
+}
+
+struct StablePackRedactor<'a> {
+    opts: &'a ForensicPackOpts,
+    replacements: HashMap<String, String>,
+    namespace: String,
+    next_replacement: usize,
+}
+
+impl<'a> StablePackRedactor<'a> {
+    fn new(opts: &'a ForensicPackOpts) -> Self {
+        Self {
+            opts,
+            replacements: HashMap::new(),
+            namespace: uuid::Uuid::new_v4().simple().to_string()[..8].to_string(),
+            next_replacement: 0,
+        }
+    }
+
+    fn redact(&mut self, value: &str) -> String {
+        let mut spans = pack_scanner().find_spans(value);
+        for pattern in &self.opts.redact_patterns {
+            if pattern.is_empty() {
+                continue;
+            }
+            spans.extend(
+                value
+                    .match_indices(pattern)
+                    .map(|(start, matched)| (start, start + matched.len())),
+            );
+        }
+        spans.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| right.1.cmp(&left.1)));
+        let mut merged: Vec<(usize, usize)> = Vec::new();
+        for span in spans {
+            if let Some(previous) = merged.last_mut() {
+                if span.0 <= previous.1 {
+                    previous.1 = previous.1.max(span.1);
+                    continue;
+                }
+            }
+            merged.push(span);
+        }
+        if merged.is_empty() {
+            return value.to_string();
+        }
+
+        let mut output = String::with_capacity(value.len());
+        let mut cursor = 0;
+        for (start, end) in merged {
+            output.push_str(&value[cursor..start]);
+            let secret = &value[start..end];
+            let replacement = self
+                .replacements
+                .entry(secret.to_string())
+                .or_insert_with(|| {
+                    self.next_replacement += 1;
+                    format!("[REDACTED:{}:{:04}]", self.namespace, self.next_replacement)
+                });
+            output.push_str(replacement);
+            cursor = end;
+        }
+        output.push_str(&value[cursor..]);
+        output
+    }
+}
+
+fn sanitize_json_value(value: &mut serde_json::Value, redactor: &mut StablePackRedactor<'_>) {
+    match value {
+        serde_json::Value::String(text) => *text = redactor.redact(text),
+        serde_json::Value::Array(items) => {
+            for item in items {
+                sanitize_json_value(item, redactor);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            let entries = std::mem::take(map);
+            for (key, mut child) in entries {
+                let safe_key = redactor.redact(&key);
+                sanitize_json_value(&mut child, redactor);
+                map.insert(safe_key, child);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn sanitize_pack_content(pack: &mut ForensicPack, opts: &ForensicPackOpts) {
+    let existing_hash = std::mem::take(&mut pack.pack_hash);
+    let mut value = serde_json::to_value(&*pack)
+        .expect("ForensicPack serialization to serde_json::Value is infallible");
+    let mut redactor = StablePackRedactor::new(opts);
+    sanitize_json_value(&mut value, &mut redactor);
+    *pack =
+        serde_json::from_value(value).expect("sanitized ForensicPack must retain its schema shape");
+    pack.pack_hash = existing_hash;
 }
 
 fn redact_value(v: &serde_json::Value, opts: &ForensicPackOpts) -> serde_json::Value {
@@ -317,8 +439,10 @@ fn short_hash(s: &str) -> String {
 #[derive(Debug, Clone)]
 pub struct ModelAnalysisInput {
     pub model: String,
-    pub prompt_fingerprint: String,
-    pub configuration_fingerprint: String,
+    /// Exact prompt bytes; Blackbox computes the recorded SHA-256 fingerprint.
+    pub prompt: Vec<u8>,
+    /// Exact configuration bytes; Blackbox computes the recorded SHA-256 fingerprint.
+    pub configuration: Vec<u8>,
     /// Free-form model claims as (text, citation ids).
     pub claims: Vec<(String, Vec<String>)>,
     /// Model refused to analyze.
@@ -332,51 +456,77 @@ pub fn apply_model_analysis(
     pack: &mut ForensicPack,
     input: &ModelAnalysisInput,
 ) -> Result<(), Vec<String>> {
+    validate_forensic_pack(pack)?;
+
     let mut provenance_errors = Vec::new();
     if input.model.trim().is_empty() {
         provenance_errors.push("model identifier is empty".into());
     }
-    if input.prompt_fingerprint.trim().is_empty() {
-        provenance_errors.push("model prompt fingerprint is empty".into());
+    if input.prompt.is_empty() {
+        provenance_errors.push("model prompt input is empty".into());
     }
-    if input.configuration_fingerprint.trim().is_empty() {
-        provenance_errors.push("model configuration fingerprint is empty".into());
+    if input.configuration.is_empty() {
+        provenance_errors.push("model configuration input is empty".into());
     }
     if !provenance_errors.is_empty() {
         return Err(provenance_errors);
     }
 
+    if (input.refused || input.failure.is_some()) && pack.original_pointers.is_empty() {
+        return Err(vec![
+            "model refusal/failure requires at least one original evidence pointer".into(),
+        ]);
+    }
+
+    let prompt_fingerprint = sha256_fingerprint(&input.prompt);
+    let configuration_fingerprint = sha256_fingerprint(&input.configuration);
+    let mut candidate = pack.clone();
+
     if input.refused {
-        pack.derived_claims.push(ForensicClaim {
+        candidate.derived_claims.push(ForensicClaim {
             claim: "model refused analysis".into(),
-            citations: pack.original_pointers.iter().take(1).cloned().collect(),
+            citations: candidate
+                .original_pointers
+                .iter()
+                .take(1)
+                .cloned()
+                .collect(),
             origin: "model".into(),
             confidence: Some("unknown".into()),
             model: Some(input.model.clone()),
-            prompt_fingerprint: Some(input.prompt_fingerprint.clone()),
-            configuration_fingerprint: Some(input.configuration_fingerprint.clone()),
+            prompt_fingerprint: Some(prompt_fingerprint),
+            configuration_fingerprint: Some(configuration_fingerprint),
             refused: Some(true),
         });
-        if pack.derived_claims.last().unwrap().citations.is_empty() {
-            pack.coverage_gaps
-                .push("model_refusal_without_evidence_pointer".into());
-        }
-        pack.pack_hash = hash_pack(pack);
+        sanitize_pack_content(&mut candidate, &ForensicPackOpts::default());
+        candidate.pack_hash = hash_pack(&candidate);
+        validate_forensic_pack(&candidate)?;
+        *pack = candidate;
         return Ok(());
     }
     if let Some(ref fail) = input.failure {
-        pack.derived_claims.push(ForensicClaim {
+        candidate.derived_claims.push(ForensicClaim {
             claim: format!("model analysis failed: {fail}"),
-            citations: pack.original_pointers.iter().take(1).cloned().collect(),
+            citations: candidate
+                .original_pointers
+                .iter()
+                .take(1)
+                .cloned()
+                .collect(),
             origin: "model".into(),
             confidence: Some("unknown".into()),
             model: Some(input.model.clone()),
-            prompt_fingerprint: Some(input.prompt_fingerprint.clone()),
-            configuration_fingerprint: Some(input.configuration_fingerprint.clone()),
+            prompt_fingerprint: Some(prompt_fingerprint),
+            configuration_fingerprint: Some(configuration_fingerprint),
             refused: Some(false),
         });
-        pack.coverage_gaps.push("model_analysis_failure".into());
-        pack.pack_hash = hash_pack(pack);
+        candidate
+            .coverage_gaps
+            .push("model_analysis_failure".into());
+        sanitize_pack_content(&mut candidate, &ForensicPackOpts::default());
+        candidate.pack_hash = hash_pack(&candidate);
+        validate_forensic_pack(&candidate)?;
+        *pack = candidate;
         return Ok(());
     }
     let mut errs = Vec::new();
@@ -385,29 +535,27 @@ pub fn apply_model_analysis(
             errs.push(format!("model claim has no citations: {text}"));
             continue;
         }
-        let ok = cits.iter().all(|c| {
-            pack.original_pointers
-                .iter()
-                .any(|p| p.ends_with(c.as_str()))
-                || pack.findings.iter().any(|f| f.id == *c)
-        });
+        let ok = cits.iter().all(|c| pack.original_pointers.contains(c));
         if !ok {
             errs.push(format!("model claim has dangling citations: {text}"));
             continue;
         }
-        pack.derived_claims.push(ForensicClaim {
+        candidate.derived_claims.push(ForensicClaim {
             claim: text.clone(),
             citations: cits.clone(),
             origin: "model".into(),
             confidence: Some("weakly_correlated".into()),
             model: Some(input.model.clone()),
-            prompt_fingerprint: Some(input.prompt_fingerprint.clone()),
-            configuration_fingerprint: Some(input.configuration_fingerprint.clone()),
+            prompt_fingerprint: Some(prompt_fingerprint.clone()),
+            configuration_fingerprint: Some(configuration_fingerprint.clone()),
             refused: None,
         });
     }
-    pack.pack_hash = hash_pack(pack);
     if errs.is_empty() {
+        sanitize_pack_content(&mut candidate, &ForensicPackOpts::default());
+        candidate.pack_hash = hash_pack(&candidate);
+        validate_forensic_pack(&candidate)?;
+        *pack = candidate;
         Ok(())
     } else {
         Err(errs)
@@ -423,11 +571,7 @@ pub fn validate_claim_citations(pack: &ForensicPack) -> Result<(), Vec<String>> 
             continue;
         }
         for c in &claim.citations {
-            let ok = pack
-                .original_pointers
-                .iter()
-                .any(|p| p.ends_with(c.as_str()))
-                || pack.findings.iter().any(|f| f.id == *c);
+            let ok = pack.original_pointers.contains(c);
             if !ok {
                 errs.push(format!("dangling citation {c} for claim {}", claim.claim));
             }
@@ -436,11 +580,21 @@ pub fn validate_claim_citations(pack: &ForensicPack) -> Result<(), Vec<String>> 
         if claim.origin == "model" && claim.model.is_none() {
             errs.push("model claim missing model field".into());
         }
-        if claim.origin == "model" && claim.prompt_fingerprint.is_none() {
-            errs.push("model claim missing prompt fingerprint".into());
+        if claim.origin == "model"
+            && !claim
+                .prompt_fingerprint
+                .as_deref()
+                .is_some_and(is_sha256_fingerprint)
+        {
+            errs.push("model claim missing or invalid prompt fingerprint".into());
         }
-        if claim.origin == "model" && claim.configuration_fingerprint.is_none() {
-            errs.push("model claim missing configuration fingerprint".into());
+        if claim.origin == "model"
+            && !claim
+                .configuration_fingerprint
+                .as_deref()
+                .is_some_and(is_sha256_fingerprint)
+        {
+            errs.push("model claim missing or invalid configuration fingerprint".into());
         }
     }
     if errs.is_empty() {
@@ -450,11 +604,32 @@ pub fn validate_claim_citations(pack: &ForensicPack) -> Result<(), Vec<String>> 
     }
 }
 
+fn sha256_fingerprint(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    format!("sha256:{}", hex::encode(hasher.finalize()))
+}
+
+fn is_sha256_fingerprint(value: &str) -> bool {
+    value.strip_prefix("sha256:").is_some_and(|digest| {
+        digest.len() == 64
+            && digest
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::boundary::{BoundaryFinding, FindingKind, FindingSeverity};
-    use crate::core::event::{EventSource, TraceEvent};
+    use crate::boundary::{
+        BoundaryFinding, EntityKind, EvidenceRelation, FindingKind, FindingSeverity,
+    };
+    use crate::core::event::{Confidence, EventSource, TraceEvent};
+    use crate::evidence::{EvidenceAction, ExternalEvidenceEvent};
+    use crate::incident::{
+        attach_to_incident, build_incident_graph, GraphInputs, Incident, IncidentAttachmentKind,
+    };
 
     #[test]
     fn pack_redacts_and_cites() {
@@ -548,9 +723,12 @@ mod tests {
             &mut pack,
             &ModelAnalysisInput {
                 model: "local/model@sha256:1234".into(),
-                prompt_fingerprint: "sha256:prompt".into(),
-                configuration_fingerprint: "sha256:config".into(),
-                claims: vec![("derived observation".into(), vec![event_id])],
+                prompt: b"exact prompt bytes".to_vec(),
+                configuration: br#"{"temperature":0}"#.to_vec(),
+                claims: vec![(
+                    "derived observation".into(),
+                    vec![format!("event:{event_id}")],
+                )],
                 refused: false,
                 failure: None,
             },
@@ -560,13 +738,16 @@ mod tests {
         let claim = pack.derived_claims.last().unwrap();
         assert_eq!(claim.origin, "model");
         assert_eq!(claim.model.as_deref(), Some("local/model@sha256:1234"));
-        assert_eq!(claim.prompt_fingerprint.as_deref(), Some("sha256:prompt"));
+        assert_eq!(
+            claim.prompt_fingerprint.as_deref(),
+            Some(sha256_fingerprint(b"exact prompt bytes").as_str())
+        );
         assert_eq!(
             claim.configuration_fingerprint.as_deref(),
-            Some("sha256:config")
+            Some(sha256_fingerprint(br#"{"temperature":0}"#).as_str())
         );
         assert_ne!(pack.pack_hash, original_hash);
-        validate_claim_citations(&pack).unwrap();
+        validate_forensic_pack(&pack).unwrap();
     }
 
     #[test]
@@ -587,8 +768,8 @@ mod tests {
             &mut pack,
             &ModelAnalysisInput {
                 model: "local".into(),
-                prompt_fingerprint: String::new(),
-                configuration_fingerprint: String::new(),
+                prompt: Vec::new(),
+                configuration: Vec::new(),
                 claims: vec![],
                 refused: true,
                 failure: None,
@@ -596,10 +777,247 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(errors.iter().any(|e| e.contains("prompt fingerprint")));
+        assert!(errors.iter().any(|e| e.contains("prompt input")));
+        assert!(errors.iter().any(|e| e.contains("configuration input")));
+        assert_eq!(pack, before, "invalid analysis must be mutation-free");
+    }
+
+    #[test]
+    fn model_analysis_rejects_tampered_pack_and_suffix_citations() {
+        let ev = TraceEvent::new("r1", EventSource::Tool, "tool.call");
+        let mut pack = build_forensic_pack(
+            "r1",
+            None,
+            &[ev],
+            &[],
+            &[],
+            &[],
+            &ForensicPackOpts::default(),
+        );
+        let suffix = pack.original_pointers[0]
+            .chars()
+            .last()
+            .unwrap()
+            .to_string();
+        let before = pack.clone();
+        let errors = apply_model_analysis(
+            &mut pack,
+            &ModelAnalysisInput {
+                model: "local".into(),
+                prompt: b"prompt".to_vec(),
+                configuration: b"config".to_vec(),
+                claims: vec![("suffix-only".into(), vec![suffix])],
+                refused: false,
+                failure: None,
+            },
+        )
+        .unwrap_err();
         assert!(errors
             .iter()
-            .any(|e| e.contains("configuration fingerprint")));
-        assert_eq!(pack, before, "invalid analysis must be mutation-free");
+            .any(|error| error.contains("dangling citations")));
+        assert_eq!(pack, before);
+
+        pack.coverage_gaps.push("tampered".into());
+        let tampered = pack.clone();
+        let errors = apply_model_analysis(
+            &mut pack,
+            &ModelAnalysisInput {
+                model: "local".into(),
+                prompt: b"prompt".to_vec(),
+                configuration: b"config".to_vec(),
+                claims: vec![],
+                refused: true,
+                failure: None,
+            },
+        )
+        .unwrap_err();
+        assert!(errors.iter().any(|error| error == "pack_hash mismatch"));
+        assert_eq!(pack, tampered, "tampered input must remain untouched");
+    }
+
+    #[test]
+    fn prompt_and_configuration_bytes_determine_fingerprints() {
+        let event = TraceEvent::new("r1", EventSource::Tool, "tool.call");
+        let pointer = format!("event:{}", event.id);
+        let base = build_forensic_pack(
+            "r1",
+            None,
+            &[event],
+            &[],
+            &[],
+            &[],
+            &ForensicPackOpts::default(),
+        );
+        let mut first = base.clone();
+        let mut second = base;
+        for (pack, prompt, config) in [
+            (&mut first, b"prompt-a".as_slice(), b"config-a".as_slice()),
+            (&mut second, b"prompt-b".as_slice(), b"config-b".as_slice()),
+        ] {
+            apply_model_analysis(
+                pack,
+                &ModelAnalysisInput {
+                    model: "local".into(),
+                    prompt: prompt.to_vec(),
+                    configuration: config.to_vec(),
+                    claims: vec![("claim".into(), vec![pointer.clone()])],
+                    refused: false,
+                    failure: None,
+                },
+            )
+            .unwrap();
+        }
+        assert_ne!(
+            first.derived_claims[0].prompt_fingerprint,
+            second.derived_claims[0].prompt_fingerprint
+        );
+        assert_ne!(
+            first.derived_claims[0].configuration_fingerprint,
+            second.derived_claims[0].configuration_fingerprint
+        );
+
+        first.derived_claims[0].prompt_fingerprint = Some("not-a-hash".into());
+        first.pack_hash = hash_pack(&first);
+        let errors = validate_forensic_pack(&first).unwrap_err();
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("invalid prompt fingerprint")));
+    }
+
+    #[test]
+    fn complete_pack_serialization_redacts_every_hostile_field_family() {
+        let secret = "sk-abcdefghijklmnopqrstuvwxyz012345";
+        let mut event = TraceEvent::new(secret, EventSource::Tool, secret);
+        event.id = secret.into();
+        event.parent_event_id = Some(secret.into());
+        event
+            .metadata
+            .insert(secret.into(), serde_json::json!(secret));
+
+        let mut external =
+            ExternalEvidenceEvent::new(secret, secret, secret, EvidenceAction::CredentialAccess);
+        external.schema = secret.into();
+        external.id = secret.into();
+        external.destination = Some(secret.into());
+        external.object = Some(secret.into());
+        external.linked_run_id = Some(secret.into());
+        external.identity.principal = Some(secret.into());
+        external
+            .attributes
+            .insert(secret.into(), serde_json::json!(secret));
+
+        let finding = BoundaryFinding {
+            schema: secret.into(),
+            id: secret.into(),
+            run_id: secret.into(),
+            kind: FindingKind::BoundaryViolation,
+            detector: secret.into(),
+            severity: FindingSeverity::High,
+            summary: secret.into(),
+            evidence_event_ids: vec![secret.into()],
+            external_evidence_ids: vec![secret.into()],
+            token: Some(secret.into()),
+            disposition: None,
+            recommendation: Some(secret.into()),
+            created_at: Utc::now(),
+            confidence_note: secret.into(),
+        };
+        let mut edge = EvidenceEdge::new(
+            EntityKind::Other(secret.into()),
+            secret,
+            EntityKind::Other(secret.into()),
+            secret,
+            EvidenceRelation::Other(secret.into()),
+            Confidence::StronglyCorrelated,
+        );
+        edge.schema = secret.into();
+        edge.id = secret.into();
+        edge.reasons = vec![secret.into()];
+        edge.run_id = Some(secret.into());
+
+        let mut pack = build_forensic_pack(
+            secret,
+            None,
+            &[event],
+            &[external],
+            &[finding],
+            std::slice::from_ref(&edge),
+            &ForensicPackOpts::default(),
+        );
+        assert!(!serde_json::to_string(&pack).unwrap().contains(secret));
+        validate_forensic_pack(&pack).unwrap();
+
+        let mut incident = Incident::new(Some(secret.into()));
+        incident.id = secret.into();
+        attach_to_incident(
+            &mut incident,
+            IncidentAttachmentKind::Run,
+            secret,
+            Some(secret.into()),
+        );
+        let mut graph = build_incident_graph(
+            &incident,
+            &GraphInputs {
+                edges: vec![edge],
+                ..Default::default()
+            },
+        );
+        graph.schema = secret.into();
+        graph.incident_id = secret.into();
+        graph.earliest_signal = Some(crate::incident::IncidentSignal {
+            ref_id: secret.into(),
+            kind: secret.into(),
+            summary: secret.into(),
+            at: Utc::now(),
+            run_id: Some(secret.into()),
+        });
+        graph.techniques.push(crate::incident::TechniqueReuse {
+            technique: secret.into(),
+            first_run_id: secret.into(),
+            first_ref: secret.into(),
+            reused_by_runs: vec![secret.into()],
+        });
+        pack.incident_graph = Some(graph);
+        sanitize_pack_content(&mut pack, &ForensicPackOpts::default());
+        pack.pack_hash = hash_pack(&pack);
+        validate_forensic_pack(&pack).unwrap();
+
+        let pointer = pack.original_pointers[0].clone();
+        apply_model_analysis(
+            &mut pack,
+            &ModelAnalysisInput {
+                model: secret.into(),
+                prompt: b"prompt".to_vec(),
+                configuration: b"configuration".to_vec(),
+                claims: vec![(secret.into(), vec![pointer])],
+                refused: false,
+                failure: None,
+            },
+        )
+        .unwrap();
+        let serialized = serde_json::to_string(&pack).unwrap();
+        assert!(
+            !serialized.contains(secret),
+            "hostile pack leaked: {serialized}"
+        );
+        validate_forensic_pack(&pack).unwrap();
+
+        let mut failure_pack = pack.clone();
+        apply_model_analysis(
+            &mut failure_pack,
+            &ModelAnalysisInput {
+                model: secret.into(),
+                prompt: b"prompt".to_vec(),
+                configuration: b"configuration".to_vec(),
+                claims: vec![],
+                refused: false,
+                failure: Some(secret.into()),
+            },
+        )
+        .unwrap();
+        assert!(!serde_json::to_string(&failure_pack)
+            .unwrap()
+            .contains(secret));
+        validate_forensic_pack(&failure_pack).unwrap();
     }
 }

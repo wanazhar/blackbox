@@ -156,15 +156,15 @@ blackbox incident create --title "egress" --run r1 --run r2
 blackbox incident show <inc-id> --graph
 blackbox forensic pack <run> -o pack.json
 blackbox forensic analyze pack.json --model local/model@sha256:... \
-  --prompt-fingerprint sha256:... --configuration-fingerprint sha256:... \
-  --claim "derived claim" --cite <event-or-finding-id>
+  --prompt-file exact-prompt.txt --configuration-file inference-config.json \
+  --claim "derived claim" --cite event:<event-id>
 ```
 
 Incident graph schema `blackbox.incident.graph/v2` carries typed delegation, credential-use, and artifact-derivation flows. `edge_count`, `flow_count`, `flow_counts`, `technique_count`, and `reuse_count` are exact source totals when `counts_exact=true`. `detail_limits` and `truncation` distinguish totals from serialized details. Deserialized v1 graphs have `counts_exact=false`; their list lengths are lower bounds and truncation is unknown.
 
-Forensic packs run `SecretScanner` (same patterns as capture/export) plus optional substring tags, cite original evidence pointers, and keep model-derived claims (if any) as `origin=model` — never as raw evidence. Model claims require a model identifier and prompt/configuration fingerprints. Refusal and failure records carry the same provenance.
+Forensic packs recursively scan every serialized string and object key, including edges, pointers, optional incident graphs, external identity, findings, and model output. Citations must exactly equal a typed pointer already in `original_pointers`; suffix-only and ambiguous IDs reject. Before mutation, `analyze` validates schema, `pack_hash`, and citations. It computes SHA-256 fingerprints from exact `--prompt-file` and `--configuration-file` bytes; refusal and failure records carry the same provenance. A hash mismatch leaves the input file unchanged.
 
-`blackbox.incident.export/v1` records sanitization steps, supplied attachment payload hashes, unresolved references, and a document `export_hash`. Validate the hash before trusting a received exchange. Attachment bodies are not embedded, so hashes remain citations to separately retained originals.
+`blackbox.incident.export/v1` recursively scans every serialized incident/graph/reference string. Within one export, equal secret matches receive the same opaque token so structural links survive; tokens are namespaced per export and are not secret digests. The transformation ledger records scanned and actually redacted counts by field family. The document also records supplied attachment payload hashes, unresolved references, and `export_hash`. Validate the hash before trusting a received exchange. Attachment bodies are not embedded, so hashes remain citations to separately retained originals.
 
 ## CLI
 

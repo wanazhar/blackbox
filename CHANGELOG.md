@@ -7,7 +7,8 @@ All notable changes to **blackbox** are documented here.
 ### 1.7 — Agent boundary evidence & incident reconstruction
 
 Epic: [issue #5](https://github.com/wanazhar/blackbox/issues/5). Plan: [docs/plan/agent-boundary-1.7.md](docs/plan/agent-boundary-1.7.md).
-Implementation is complete and the all-target plus Unix quick qualification gates are green; release remains pending.
+Implementation and integration-review remediation are complete. The all-target
+and Unix quick qualification gates are green; release remains pending.
 
 #### Phase A/B — Boundary contracts & containment
 - **`blackbox.boundary/v1`**: purpose, allowed/prohibited, dispositions, required evidence, fail-closed
@@ -28,7 +29,7 @@ Implementation is complete and the all-target plus Unix quick qualification gate
 #### Phase F/H — Incidents & forensic packs
 - Multi-run **incidents** with graph (discovery, reuse, earliest signal, continued activity)
 - Typed delegation, credential-use, and artifact-derivation flows; bounded graph detail with exact totals and explicit truncation
-- Local **forensic packs** (redacted, citation-validated, no hosted provider required); model claims record model, prompt, and configuration fingerprints
+- Local **forensic packs** recursively scan all serialized strings/keys, use exact typed citations, validate input hashes, and compute model prompt/configuration hashes from exact files (no hosted provider required)
 
 #### CLI
 - `boundary validate|show|set|evaluate|receipt|detect|provenance`
@@ -43,7 +44,7 @@ Implementation is complete and the all-target plus Unix quick qualification gate
 - Portable export/import of boundary, containment, evidence, edges, findings, provenance, trace identity
 - Sensor adapters: Falco-like, HTTP proxy, process audit, Kubernetes audit, AWS CloudTrail, GCP Audit Log
 - Auto launch/post-run containment canaries + auto-detect on boundary runs
-- Incident sanitized export with integrity hash; forensic `analyze` for local model claims
+- Incident sanitized export recursively scans every incident/graph/reference string with a precise ledger and integrity hash; forensic `analyze` rejects tampered packs
 - MCP: `blackbox_boundary`, `blackbox_evidence`, `blackbox_incident`, `blackbox_forensic`
 - Dashboard API: `/api/runs/{id}/boundary|findings|evidence`, `/api/incidents`
 - Operator guide: [docs/guide/boundaries-and-incidents.md](docs/guide/boundaries-and-incidents.md)
@@ -52,7 +53,7 @@ Implementation is complete and the all-target plus Unix quick qualification gate
 - Detector **FP/FN quality gate** (`evaluate_detector_quality`, min recall 0.85 / precision 0.80; benign controls must be clean)
 - Expanded permanent corpus: escape, probe, credential, package/repository manipulation, privilege, poisoned instructions, persistence, swarm/delegation, telemetry deception, transitions, and benign controls
 - **Residual-risk closure:** payload-hash verify + `--reject-unverified` on evidence import; correlation caps on unverified integrity / cooperative `trace_id`; forensic packs use `SecretScanner`; `serve` auto-token by default (`--allow-anonymous` danger opt-in)
-- Incident **cursor pagination** (`list_incidents_page`, CLI `--cursor/--limit`) + **aggregates** on show; 10k-incident and graph-detail scale gates
+- Incident **cursor pagination** (`list_incidents_page`, CLI `--cursor/--limit`) + **aggregates** on show; 10k correctness gates plus Linux tracking-allocator peak-memory qualification (fixed wall-time checks removed)
 - Dashboard HTML: run trust panel + findings table; `/incidents` and `/incidents/{id}` pages
 - Incident page **reconstruction graph** (SVG runs + reuse curves), earliest-signal banner, techniques/findings/edges tables
 - **Auto provenance** from experiment `dataset_case` / task_id on run end
@@ -62,7 +63,7 @@ Implementation is complete and the all-target plus Unix quick qualification gate
 #### Tests & fixtures
 - `tests/boundary_contract.rs`, `tests/boundary_1_7_full.rs`, `tests/boundary_trust_integration.rs`
 - `tests/boundary_detector_quality.rs`, `tests/incident_pagination.rs`, `tests/auto_provenance.rs`
-- `tests/evidence_orchestration.rs`, `tests/incident_graph_flow.rs`, `tests/incident_scale.rs`, `tests/boundary_1_7_completion.rs`
+- `tests/evidence_orchestration.rs`, `tests/incident_graph_flow.rs`, `tests/incident_scale.rs`, `tests/incident_memory_bound.rs`, `tests/boundary_1_7_completion.rs`
 - `tests/fixtures/boundary_1_7/` (proxy, credential, benign admin)
 
 ## [1.6.0] — 2026-07-21

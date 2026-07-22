@@ -596,12 +596,12 @@ pub enum ForensicAction {
         /// Model name (local identifier)
         #[arg(long, default_value = "local")]
         model: String,
-        /// Fingerprint of the exact prompt or prompt template
+        /// File containing the exact prompt bytes to fingerprint
         #[arg(long)]
-        prompt_fingerprint: String,
-        /// Fingerprint of inference and runtime configuration
+        prompt_file: PathBuf,
+        /// File containing exact inference/runtime configuration bytes
         #[arg(long)]
-        configuration_fingerprint: String,
+        configuration_file: PathBuf,
         /// Claim text (repeatable via multiple flags not supported — single claim)
         #[arg(long)]
         claim: String,
@@ -2517,17 +2517,21 @@ pub async fn cmd_forensic(
         ForensicAction::Analyze {
             pack: pack_path,
             model,
-            prompt_fingerprint,
-            configuration_fingerprint,
+            prompt_file,
+            configuration_file,
             claim,
             cite,
             refused,
             failure,
             output: out_path,
         } => {
-            use crate::forensic::{apply_model_analysis, ModelAnalysisInput};
+            use crate::forensic::{
+                apply_model_analysis, validate_forensic_pack, ModelAnalysisInput,
+            };
             let raw = std::fs::read_to_string(pack_path)?;
             let mut pack_doc: crate::forensic::ForensicPack = serde_json::from_str(&raw)?;
+            validate_forensic_pack(&pack_doc)
+                .map_err(|e| anyhow::anyhow!("invalid forensic pack: {}", e.join("; ")))?;
             let claims = if claim.is_empty() {
                 Vec::new()
             } else {
@@ -2535,8 +2539,8 @@ pub async fn cmd_forensic(
             };
             let input = ModelAnalysisInput {
                 model: model.clone(),
-                prompt_fingerprint: prompt_fingerprint.clone(),
-                configuration_fingerprint: configuration_fingerprint.clone(),
+                prompt: std::fs::read(prompt_file)?,
+                configuration: std::fs::read(configuration_file)?,
                 claims,
                 refused: *refused,
                 failure: failure.clone(),

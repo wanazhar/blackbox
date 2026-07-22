@@ -80,6 +80,7 @@ jobs:
             --test incident_pagination --test auto_provenance \
             --test evidence_adversarial --test evidence_orchestration \
             --test incident_graph_flow --test incident_scale \
+            --test incident_memory_bound \
             --test boundary_1_7_completion -- --quiet
 
   # 1.5 Q1: lightweight macOS runtime gate on every PR (not only tag-time build).

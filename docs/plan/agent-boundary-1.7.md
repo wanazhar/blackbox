@@ -4,7 +4,7 @@
 |---|---|
 | **Document** | Product + technical plan for 1.7 |
 | **Date** | 2026-07-22 |
-| **Status** | **Implementation complete** — issue #5 Definition of Done mapped to green executable evidence; tag pending |
+| **Status** | **Implementation complete** — issue #5 Definition of Done and integration review remediation mapped to green executable evidence; tag pending |
 | **Baseline** | 1.6.0 (verified runs & reproducibility) |
 | **Target tag** | **1.7.0** |
 | **Epic** | [Issue #5](https://github.com/wanazhar/blackbox/issues/5) |
@@ -59,7 +59,7 @@ Permanent 1.1–1.6 gates remain green.
 
 ### Completion audit result (2026-07-22)
 
-The completion sprint added executable coverage for the issue-level gaps:
+The completion sprint added executable coverage for these issue-level gaps:
 
 1. Kubernetes and cloud-audit sensor mapping, including a real correlation path.
 2. Incident reconstruction that explicitly identifies delegation,
@@ -70,9 +70,12 @@ The completion sprint added executable coverage for the issue-level gaps:
 4. Permanent adversarial detector cases for poisoned input, persistence,
    swarm/fan-out, and deceptive telemetry, alongside benign controls.
 
-All four are permanent CI and Unix qualification inputs. The complete issue
-matrix is in [analysis/boundary-17-completion.md](analysis/boundary-17-completion.md).
-Module review records remain under `docs/plan/reviews/`.
+Integration review 01's artifact-wide sanitization, verifiable model input
+provenance, exact citation, and bounded-memory blockers are remediated with
+permanent tests. All four completion areas and the remediation tests are CI and
+Unix qualification inputs. The complete issue matrix is in
+[analysis/boundary-17-completion.md](analysis/boundary-17-completion.md), and the
+review record remains under `docs/plan/reviews/`.
 
 ---
 
@@ -90,7 +93,7 @@ Module review records remain under `docs/plan/reviews/`.
 | 8 | Provenance records + benchmark gates | **G** ✅ |
 | 9 | Incident object + cross-run graph | **F** ✅ |
 | 10 | Local forensic pack | **H** ✅ |
-| 11 | Optional model-assisted analysis | **H** ✅ derived claims cite evidence and record model/prompt/configuration fingerprints; no hosted provider |
+| 11 | Optional model-assisted analysis | **H** ✅ exact citations, verified input pack, and computed prompt/config hashes; no hosted provider |
 | 12 | Scale, adversarial, portability, docs qualification | **I** ✅ fixtures + tests |
 
 ---

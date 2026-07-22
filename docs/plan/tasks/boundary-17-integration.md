@@ -15,7 +15,6 @@ documented non-goal consistent with the issue.
 
 - `docs/plan/agent-boundary-1.7.md`
 - `docs/plan/analysis/boundary-17-completion.md`
-- `docs/plan/analysis/boundary-17-completion.md`
 - `docs/ROADMAP.md`
 - `CHANGELOG.md`
 - `AGENTS.md`
@@ -38,6 +37,7 @@ documented non-goal consistent with the issue.
 - `CHANGELOG.md`
 - `.github/workflows/ci.yml`
 - `scripts/release-qualify-unix.sh`
+- `docs/plan/reviews/boundary-17-integration-01.md` (read-only review evidence)
 
 ## verification
 

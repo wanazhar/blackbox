@@ -8,8 +8,8 @@ use blackbox::boundary::{
 use blackbox::core::{Confidence, EventSource, TraceEvent};
 use blackbox::evidence::{import_evidence_ndjson_str, ImportOptions};
 use blackbox::forensic::{
-    apply_model_analysis, build_forensic_pack, validate_claim_citations, ForensicPackOpts,
-    ModelAnalysisInput,
+    apply_model_analysis, build_forensic_pack, validate_claim_citations, ForensicPack,
+    ForensicPackOpts, ModelAnalysisInput,
 };
 use blackbox::incident::{
     attach_to_incident, build_incident_export, build_incident_graph_with_limits,
@@ -145,9 +145,12 @@ fn governed_evidence_reconstructs_a_bounded_shareable_incident() {
         &mut pack,
         &ModelAnalysisInput {
             model: "local/model@sha256:1234".into(),
-            prompt_fingerprint: "sha256:prompt".into(),
-            configuration_fingerprint: "sha256:configuration".into(),
-            claims: vec![("credential use requires review".into(), vec![event_id])],
+            prompt: b"credential review prompt".to_vec(),
+            configuration: br#"{"temperature":0}"#.to_vec(),
+            claims: vec![(
+                "credential use requires review".into(),
+                vec![format!("event:{event_id}")],
+            )],
             refused: false,
             failure: None,
         },
@@ -193,7 +196,7 @@ fn governed_evidence_reconstructs_a_bounded_shareable_incident() {
     assert!(export
         .transformations
         .iter()
-        .any(|step| step == "sanitize=true"));
+        .any(|step| step == "sanitize:enabled"));
 
     let mut tampered = export;
     tampered.incident.title = Some("tampered".into());
@@ -201,7 +204,7 @@ fn governed_evidence_reconstructs_a_bounded_shareable_incident() {
 }
 
 #[test]
-fn forensic_cli_requires_model_reproducibility_fingerprints() {
+fn forensic_cli_requires_exact_model_input_files() {
     assert!(Cli::try_parse_from([
         "blackbox",
         "forensic",
@@ -213,6 +216,21 @@ fn forensic_cli_requires_model_reproducibility_fingerprints() {
         "event-1",
     ])
     .is_err());
+    assert!(Cli::try_parse_from([
+        "blackbox",
+        "forensic",
+        "analyze",
+        "pack.json",
+        "--prompt-fingerprint",
+        "not-a-hash",
+        "--configuration-fingerprint",
+        "also-not-a-hash",
+        "--claim",
+        "derived",
+        "--cite",
+        "event:event-1",
+    ])
+    .is_err());
 
     let cli = Cli::try_parse_from([
         "blackbox",
@@ -221,10 +239,10 @@ fn forensic_cli_requires_model_reproducibility_fingerprints() {
         "pack.json",
         "--model",
         "local/model@sha256:1234",
-        "--prompt-fingerprint",
-        "sha256:prompt",
-        "--configuration-fingerprint",
-        "sha256:configuration",
+        "--prompt-file",
+        "prompt.txt",
+        "--configuration-file",
+        "configuration.json",
         "--claim",
         "derived",
         "--cite",
@@ -236,13 +254,64 @@ fn forensic_cli_requires_model_reproducibility_fingerprints() {
         panic!("expected forensic command");
     };
     let ForensicAction::Analyze {
-        prompt_fingerprint,
-        configuration_fingerprint,
+        prompt_file,
+        configuration_file,
         ..
     } = args.action
     else {
         panic!("expected analyze action");
     };
-    assert_eq!(prompt_fingerprint, "sha256:prompt");
-    assert_eq!(configuration_fingerprint, "sha256:configuration");
+    assert_eq!(prompt_file, std::path::PathBuf::from("prompt.txt"));
+    assert_eq!(
+        configuration_file,
+        std::path::PathBuf::from("configuration.json")
+    );
+}
+
+#[test]
+fn forensic_cli_rejects_tampered_pack_without_rewriting_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let pack_path = directory.path().join("pack.json");
+    let prompt_path = directory.path().join("prompt.txt");
+    let configuration_path = directory.path().join("configuration.json");
+    let event = TraceEvent::new("run-cli", EventSource::Tool, "tool.call");
+    let mut pack = build_forensic_pack(
+        "run-cli",
+        None,
+        &[event],
+        &[],
+        &[],
+        &[],
+        &ForensicPackOpts::default(),
+    );
+    pack.coverage_gaps.push("tampered-after-hash".into());
+    let before = serde_json::to_vec_pretty(&pack).unwrap();
+    std::fs::write(&pack_path, &before).unwrap();
+    std::fs::write(&prompt_path, b"exact prompt").unwrap();
+    std::fs::write(&configuration_path, br#"{"temperature":0}"#).unwrap();
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_blackbox"))
+        .args([
+            "forensic",
+            "analyze",
+            pack_path.to_str().unwrap(),
+            "--prompt-file",
+            prompt_path.to_str().unwrap(),
+            "--configuration-file",
+            configuration_path.to_str().unwrap(),
+            "--claim",
+            "",
+            "--refused",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("pack_hash mismatch"));
+    assert_eq!(std::fs::read(&pack_path).unwrap(), before);
+    let unchanged: ForensicPack = serde_json::from_slice(&before).unwrap();
+    assert_eq!(
+        unchanged.coverage_gaps.last().unwrap(),
+        "tampered-after-hash"
+    );
 }

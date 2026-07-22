@@ -100,16 +100,20 @@ blackbox incident export <inc-id> -o incident.json --sanitize
 blackbox forensic pack latest -o pack.json
 # Optional local model claims (citations required; never replace evidence)
 blackbox forensic analyze pack.json --model local-llm \
-  --prompt-fingerprint sha256:<prompt> \
-  --configuration-fingerprint sha256:<config> \
-  --claim "public egress after probe" --cite find-...
+  --prompt-file exact-prompt.txt \
+  --configuration-file inference-config.json \
+  --claim "public egress after probe" --cite finding:find-...
 ```
 
 Dashboard: open `/incidents` and each run’s trust panel (findings + policy hash). Incident pages show a **reconstruction graph** (runs + technique reuse curves), earliest-signal banner, techniques table, findings timeline, and correlation edges. Graph v2 also exposes typed `delegation`, `credential_use`, and `artifact_derivation` flows. Serialized node, edge, flow, and technique detail is bounded; `counts_exact`, exact totals, limits, and `truncation` say what was omitted. Legacy v1 graphs provide included lower bounds only and cannot assert whether hidden detail was truncated.
 
-Forensic model claims remain derived data. Every claim records the model identifier plus prompt and configuration fingerprints and must cite a pointer already present in the pack. Blackbox records caller-supplied output; it does not invoke a hosted model or claim deterministic inference replay.
+Forensic model claims remain derived data. `analyze` first validates the incoming pack schema, content hash, and exact typed citations (`event:…`, `external:…`, or `finding:…`). It reads the exact prompt and configuration files and computes `sha256:<64 lowercase hex>` fingerprints inside Blackbox; arbitrary caller-supplied labels are not accepted. Every derived claim records those fingerprints and the sanitized model/output text. Blackbox does not invoke a hosted model or claim deterministic inference replay.
 
-Sanitized incident exports redact free text with the same secret scanner used by forensic packs, include hashes for supplied attachment payloads, record transformations and unresolved references, and protect the exchange document with `export_hash`. The export is an investigation copy, not a substitute for the original store. Keep the source store under the retention and access policy needed for citation resolution, and validate the export before sharing or importing it elsewhere.
+Sanitized incident exports recursively scan every serialized string in the incident, attachments, graph nodes/edges/flows, techniques, earliest signal, attachment-hash labels, and unresolved references. Secret matches receive opaque per-export tokens reused within that export, so references remain linked without exposing a reusable secret digest. The ledger reports per-field counts as `redacted` or `scanned_unchanged`; `export_hash` covers the complete result. The export is an investigation copy, not a substitute for the original store. Keep the source store under the retention and access policy needed for citation resolution, and validate the export before sharing or importing it elsewhere.
+
+Forensic packs apply the same serialization-boundary rule across event values and keys, external source/sensor identity, findings, edges, pointers, optional incident graphs, coverage notes, model identity, derived output, refusal, and failure text. `pack_hash` is recomputed after sanitization and after analysis. Any pre-analysis hash mismatch rejects without rewriting the input file.
+
+The 10k incident qualification separates host-independent correctness from performance diagnostics. Cursor/exact-total/truncation checks have no fixed wall-time assertion. On Linux, a tracking allocator measures incremental graph-assembly peak allocation for 10,000 evidence rows plus edges; the permanent budget is 32 MiB, excluding already-materialized inputs whose count and byte size are independently import-bounded.
 
 Detector quality is gated in CI (`tests/boundary_detector_quality.rs`): the permanent corpus covers escape, probing, credential abuse, package/repository manipulation, privilege attempts, poisoned instructions, persistence, swarm/delegation, telemetry deception, transitions, and benign controls (min recall 0.85 / precision 0.80).
 

@@ -141,6 +141,7 @@ if [ "$QUICK" -eq 1 ]; then
     --test incident_pagination --test auto_provenance \
     --test evidence_adversarial --test evidence_orchestration \
     --test incident_graph_flow --test incident_scale \
+    --test incident_memory_bound \
     --test boundary_1_7_completion -- --quiet || true
 else
   run_gate "cargo test --all-targets" cargo test --all-targets -- --quiet || true
@@ -154,6 +155,7 @@ else
     --test incident_pagination --test auto_provenance \
     --test evidence_adversarial --test evidence_orchestration \
     --test incident_graph_flow --test incident_scale \
+    --test incident_memory_bound \
     --test boundary_1_7_completion -- --quiet || true
   # Real 100k-event endurance (ignored by default unit filter; force with --ignored)
   run_gate "1.6: endurance_100k" cargo test --test endurance_100k -- --quiet || true

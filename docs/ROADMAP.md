@@ -216,5 +216,7 @@ Reference: [reference/boundary.md](reference/boundary.md). CLI: `boundary`, `evi
 
 The issue #5 Definition of Done is mapped to permanent executable evidence in
 [plan/analysis/boundary-17-completion.md](plan/analysis/boundary-17-completion.md).
-The full all-target matrix and `release-qualify-unix.sh --quick` were green on
-the completion candidate; publication remains a separate maintainer action.
+Integration review 01's artifact-wide sanitization, reproducibility provenance,
+citation, and memory-qualification blockers are remediated. The full all-target
+matrix and `release-qualify-unix.sh --quick` are green; publication remains a
+separate maintainer action.

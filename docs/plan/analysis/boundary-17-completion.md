@@ -1,9 +1,11 @@
 # Blackbox 1.7 issue-completion analysis
 
-Issue #5 is the acceptance source. This audit closed the sensor, incident-flow,
+Issue #5 is the acceptance source. This audit closes the sensor, incident-flow,
 adversarial-corpus, model-provenance, sanitized-exchange, and final-integration
-gaps. The all-target matrix and Unix quick qualification were green on the
-completion candidate; tagging and publication remain separate maintainer steps.
+gaps. Integration review 01's artifact-wide sanitization, computed-input-hash,
+exact-citation, pack-integrity, and bounded-memory blockers are remediated. The
+all-target matrix and Unix quick qualification are green; tagging and
+publication remain separate maintainer steps.
 
 ## Module decomposition
 
@@ -43,11 +45,11 @@ completion candidate; tagging and publication remain separate maintainer steps.
 | 7 | Violations and transitions link back to evidence | `boundary_1_7_full`, `boundary_detector_quality` |
 | 8 | Correct output can fail containment or provenance | `boundary_trust_integration`, `auto_provenance` |
 | 9 | Incidents reconstruct discovery, reuse, delegation, credential use, artifact derivation, and earliest signal | `boundary_1_7_full`, `incident_graph_flow` |
-| 10 | Forensic packs contain valid citations and no fixture secrets | forensic unit tests, `boundary_1_7_completion` |
-| 11 | Model findings stay derived and reproducible, never original evidence | forensic model-provenance unit tests, `boundary_1_7_completion` |
-| 12 | Sanitized exchange carries transformation and integrity evidence | incident export unit tests, `boundary_1_7_completion` |
+| 10 | Forensic packs contain valid citations and no fixture secrets | forensic hostile-serialization, exact-citation, and pack-hash unit tests; `boundary_1_7_completion` |
+| 11 | Model findings stay derived and reproducible, never original evidence | exact-byte fingerprint, malformed-input, tamper, and mutation-free forensic unit tests; `boundary_1_7_completion` |
+| 12 | Sanitized exchange carries transformation and integrity evidence | exhaustive hostile-field, ledger/reference, and tamper incident-export unit tests; `boundary_1_7_completion` |
 | 13 | Adversarial and benign families are permanent fixtures | `boundary_detector_quality`, `evidence_adversarial` |
-| 14 | High-volume incidents remain bounded and queryable | `incident_scale`, `incident_pagination`, `incident_graph_flow` |
+| 14 | High-volume incidents remain bounded and queryable | `incident_scale`, Linux `incident_memory_bound` tracking-allocator gate, `incident_pagination`, `incident_graph_flow`; timing remains diagnostic only |
 | 15 | Docs state sensor requirements, limits, retention, and non-prevention boundary | operator security and boundary guides plus `docs_first_run`/link checker |
 | 16 | Older trust and integrity gates stay green | full `cargo test --all-targets`; existing 1.4–1.6 gates in `release-qualify-unix.sh` |
 
@@ -55,6 +57,17 @@ The matrix names test binaries and stable test purposes rather than treating thi
 document as evidence. CI and the Unix qualification script execute the full 1.7
 set, including orchestration/cloud mapping, typed flows, scale, and the completion
 scenario.
+
+## Integration review remediation result
+
+Review 01's blockers are closed by recursive whole-artifact scanning with opaque
+per-artifact replacements, exact typed citations, pre-mutation pack validation,
+internally computed SHA-256 fingerprints over exact prompt/configuration bytes,
+and a 10,000-evidence/10,000-edge Linux peak-allocation gate. The final run
+passed `cargo test --all-targets`, clippy, formatting, documentation links, and
+`release-qualify-unix.sh --quick`. Qualification report:
+`release-artifacts/qualify-20260722T161252Z.md` (SHA-256
+`425f53c8754973a276fd2667409c548837037217cad32ec0715a9cc607ec0257`).
 
 ## Qualification commands
 

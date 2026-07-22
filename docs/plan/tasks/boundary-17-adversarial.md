@@ -1,6 +1,6 @@
 id: boundary-17-adversarial
 scope: deterministic adversarial detection qualification
-status: in-progress
+status: done
 depends-on: []
 
 ## objective

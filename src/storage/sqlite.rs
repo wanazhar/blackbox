@@ -2330,7 +2330,8 @@ impl TraceStore for SqliteStore {
         let payload_hash = event.original_payload_hash.clone();
         let result = {
             let conn = self.lock();
-            match conn.execute(
+            let tx = conn.unchecked_transaction()?;
+            let inserted: bool = match tx.execute(
                 "INSERT INTO external_evidence
                    (id, source, sensor, source_event_id, linked_run_id, occurred_at, ingested_at, action, payload_hash, payload)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
@@ -2347,14 +2348,52 @@ impl TraceStore for SqliteStore {
                     payload
                 ],
             ) {
-                Ok(_) => Ok(true),
+                Ok(_) => Ok::<bool, anyhow::Error>(true),
                 Err(rusqlite::Error::SqliteFailure(e, _))
                     if e.code == rusqlite::ErrorCode::ConstraintViolation =>
                 {
+                    let existing_payload = match tx.query_row(
+                        "SELECT payload FROM external_evidence WHERE source = ?1 AND source_event_id = ?2",
+                        params![event.source, event.source_event_id],
+                        |row| row.get::<_, String>(0),
+                    ) {
+                        Ok(payload) => Some(payload),
+                        Err(rusqlite::Error::QueryReturnedNoRows) => None,
+                        Err(error) => return Err(error.into()),
+                    };
+                    if let Some(existing_payload) = existing_payload {
+                        let existing: crate::evidence::ExternalEvidenceEvent =
+                            serde_json::from_str(&existing_payload)?;
+                        if existing.conflicts_with_source_observation(event) {
+                            let marker = crate::evidence::ExternalEvidenceEvent::source_identity_conflict_anomaly(
+                                &existing,
+                                event,
+                            )?;
+                            tx.execute(
+                                "INSERT OR IGNORE INTO external_evidence
+                                   (id, source, sensor, source_event_id, linked_run_id, occurred_at, ingested_at, action, payload_hash, payload)
+                                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                                params![
+                                    marker.id,
+                                    marker.source,
+                                    marker.sensor,
+                                    marker.source_event_id,
+                                    marker.linked_run_id,
+                                    marker.occurred_at.map(|time| time.to_rfc3339()),
+                                    marker.ingested_at.to_rfc3339(),
+                                    marker.action.as_str(),
+                                    marker.original_payload_hash,
+                                    serde_json::to_string(&marker)?,
+                                ],
+                            )?;
+                        }
+                    }
                     Ok(false)
                 }
                 Err(e) => Err(e.into()),
-            }
+            }?;
+            tx.commit()?;
+            Ok(inserted)
         };
         tokio::task::yield_now().await;
         result
@@ -2379,6 +2418,7 @@ impl TraceStore for SqliteStore {
                     event.action.as_str().to_string(),
                     event.original_payload_hash.clone(),
                     serde_json::to_string(event)?,
+                    event.clone(),
                 ))
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
@@ -2414,6 +2454,7 @@ impl TraceStore for SqliteStore {
                 action,
                 hash,
                 payload,
+                event,
             ) in event_rows
             {
                 let changed = tx.execute(
@@ -2424,6 +2465,43 @@ impl TraceStore for SqliteStore {
                 )?;
                 if changed == 1 {
                     inserted_ids.insert(id);
+                } else {
+                    let existing_payload = match tx.query_row(
+                        "SELECT payload FROM external_evidence WHERE source = ?1 AND source_event_id = ?2",
+                        params![source, source_event_id],
+                        |row| row.get::<_, String>(0),
+                    ) {
+                        Ok(payload) => Some(payload),
+                        Err(rusqlite::Error::QueryReturnedNoRows) => None,
+                        Err(error) => return Err(error.into()),
+                    };
+                    if let Some(existing_payload) = existing_payload {
+                        let existing: crate::evidence::ExternalEvidenceEvent =
+                            serde_json::from_str(&existing_payload)?;
+                        if existing.conflicts_with_source_observation(&event) {
+                            let marker = crate::evidence::ExternalEvidenceEvent::source_identity_conflict_anomaly(
+                                &existing,
+                                &event,
+                            )?;
+                            tx.execute(
+                                "INSERT OR IGNORE INTO external_evidence
+                                   (id, source, sensor, source_event_id, linked_run_id, occurred_at, ingested_at, action, payload_hash, payload)
+                                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                                params![
+                                    marker.id,
+                                    marker.source,
+                                    marker.sensor,
+                                    marker.source_event_id,
+                                    marker.linked_run_id,
+                                    marker.occurred_at.map(|time| time.to_rfc3339()),
+                                    marker.ingested_at.to_rfc3339(),
+                                    marker.action.as_str(),
+                                    marker.original_payload_hash,
+                                    serde_json::to_string(&marker)?,
+                                ],
+                            )?;
+                        }
+                    }
                 }
             }
 

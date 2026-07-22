@@ -19,7 +19,8 @@ mod import;
 pub use adapters::map_sensor_event;
 pub use event::{
     ClockUncertainty, EvidenceAction, EvidenceIntegrity, EvidenceOutcome, ExternalEvidenceEvent,
-    ExternalIdentity, EVIDENCE_EVENT_SCHEMA,
+    ExternalIdentity, EVIDENCE_EVENT_SCHEMA, TELEMETRY_ANOMALY_ATTRIBUTE,
+    TELEMETRY_ANOMALY_SIGNED_INVALID, TELEMETRY_ANOMALY_SOURCE_IDENTITY_CONFLICT,
 };
 pub use import::{
     import_evidence_ndjson, import_evidence_ndjson_str, ImportOptions, ImportReject, ImportReport,

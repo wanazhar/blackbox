@@ -69,6 +69,9 @@ pub struct ImportReport {
     pub accepted: usize,
     pub duplicates: usize,
     pub rejected: usize,
+    /// Sanitized anomaly records preserved for later deterministic detection.
+    #[serde(default)]
+    pub anomalies: usize,
     pub rejects: Vec<ImportReject>,
     /// Accepted event ids (new inserts only).
     pub event_ids: Vec<String>,
@@ -82,6 +85,7 @@ impl ImportReport {
             accepted: 0,
             duplicates: 0,
             rejected: 0,
+            anomalies: 0,
             rejects: Vec::new(),
             event_ids: Vec::new(),
             bytes_read: 0,
@@ -125,7 +129,7 @@ pub fn import_evidence_ndjson_str(
     }
 
     let mut accepted = Vec::new();
-    let mut seen_keys = std::collections::HashSet::new();
+    let mut seen = std::collections::HashMap::<String, ExternalEvidenceEvent>::new();
 
     for (idx, line) in raw.lines().enumerate() {
         let line_no = idx + 1;
@@ -153,6 +157,13 @@ pub fn import_evidence_ndjson_str(
                     });
                     continue;
                 }
+                if ev.linked_run_id.is_none() {
+                    if let Some(ref r) = opts.default_run_id {
+                        ev.linked_run_id = Some(r.clone());
+                    } else if let Some(ref r) = ev.identity.run_id {
+                        ev.linked_run_id = Some(r.clone());
+                    }
+                }
                 if opts.reject_invalid_signatures
                     && matches!(ev.integrity, EvidenceIntegrity::SignedInvalid)
                 {
@@ -161,6 +172,12 @@ pub fn import_evidence_ndjson_str(
                         line: line_no,
                         reason: "integrity signed_invalid".into(),
                     });
+                    let marker = ExternalEvidenceEvent::signed_invalid_anomaly(&ev)
+                        .map_err(|error| anyhow::anyhow!("build telemetry anomaly: {error}"))?;
+                    report.event_ids.push(marker.id.clone());
+                    report.accepted += 1;
+                    report.anomalies += 1;
+                    accepted.push(marker);
                     continue;
                 }
                 if let Err(reason) = apply_integrity_checks(&mut ev, opts) {
@@ -171,18 +188,23 @@ pub fn import_evidence_ndjson_str(
                     });
                     continue;
                 }
-                if ev.linked_run_id.is_none() {
-                    if let Some(ref r) = opts.default_run_id {
-                        ev.linked_run_id = Some(r.clone());
-                    } else if let Some(ref r) = ev.identity.run_id {
-                        ev.linked_run_id = Some(r.clone());
-                    }
-                }
                 let key = ev.idempotency_key();
-                if !seen_keys.insert(key) {
+                if let Some(previous) = seen.get(&key) {
                     report.duplicates += 1;
+                    if previous.conflicts_with_source_observation(&ev) {
+                        let marker =
+                            ExternalEvidenceEvent::source_identity_conflict_anomaly(previous, &ev)
+                                .map_err(|error| {
+                                    anyhow::anyhow!("build telemetry conflict anomaly: {error}")
+                                })?;
+                        report.event_ids.push(marker.id.clone());
+                        report.accepted += 1;
+                        report.anomalies += 1;
+                        accepted.push(marker);
+                    }
                     continue;
                 }
+                seen.insert(key, ev.clone());
                 report.event_ids.push(ev.id.clone());
                 accepted.push(ev);
                 report.accepted += 1;
@@ -464,13 +486,14 @@ fn payload_bytes_from_attrs(ev: &ExternalEvidenceEvent) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::evidence::{TELEMETRY_ANOMALY_ATTRIBUTE, TELEMETRY_ANOMALY_SIGNED_INVALID};
 
     #[test]
     fn imports_native_and_generic() {
         let ndjson = r#"
 {"schema":"blackbox.evidence.event/v1","id":"evext-1","source":"proxy","sensor":"proxy","source_event_id":"p1","ingested_at":"2026-07-22T00:00:00Z","action":"http_request","outcome":"denied","integrity":"unverified","destination":"evil.example"}
 {"id":"g1","action":"connect","destination":"10.0.0.1:443","host":"worker-1","run_id":"run-abc"}
-{"id":"g1","action":"connect","destination":"10.0.0.1:443"}
+{"id":"g1","action":"connect","destination":"10.0.0.1:443","host":"worker-1","run_id":"run-abc"}
 "#;
         let opts = ImportOptions {
             default_run_id: Some("run-default".into()),
@@ -479,8 +502,27 @@ mod tests {
         let (events, report) = import_evidence_ndjson_str(ndjson, &opts).unwrap();
         assert_eq!(report.accepted, 2);
         assert_eq!(report.duplicates, 1);
+        assert_eq!(report.anomalies, 0);
         assert_eq!(events[0].destination.as_deref(), Some("evil.example"));
         assert_eq!(events[1].linked_run_id.as_deref(), Some("run-abc"));
+    }
+
+    #[test]
+    fn rejected_invalid_signature_becomes_sanitized_anomaly() {
+        let ndjson = r#"{"schema":"blackbox.evidence.event/v1","id":"evext-invalid","source":"audit","sensor":"process","source_event_id":"sig-bad","ingested_at":"2026-07-22T00:00:00Z","action":"process_exec","outcome":"success","integrity":"signed_invalid"}"#;
+        let (events, report) =
+            import_evidence_ndjson_str(ndjson, &ImportOptions::default()).unwrap();
+        assert_eq!(report.rejected, 1);
+        assert_eq!(report.anomalies, 1);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].integrity, EvidenceIntegrity::Transformed);
+        assert_eq!(
+            events[0]
+                .attributes
+                .get(TELEMETRY_ANOMALY_ATTRIBUTE)
+                .and_then(serde_json::Value::as_str),
+            Some(TELEMETRY_ANOMALY_SIGNED_INVALID)
+        );
     }
 
     #[test]

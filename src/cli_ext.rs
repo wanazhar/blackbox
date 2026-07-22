@@ -2114,8 +2114,13 @@ pub async fn cmd_evidence(
                 );
             }
             println!(
-                "evidence import accepted={} inserted={} duplicates={} rejected={} edges={}",
-                report.accepted, inserted, report.duplicates, report.rejected, edges_n
+                "evidence import accepted={} inserted={} duplicates={} rejected={} anomalies={} edges={}",
+                report.accepted,
+                inserted,
+                report.duplicates,
+                report.rejected,
+                report.anomalies,
+                edges_n
             );
             for r in report.rejects.iter().take(10) {
                 println!("  reject line {}: {}", r.line, r.reason);

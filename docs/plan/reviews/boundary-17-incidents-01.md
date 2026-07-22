@@ -130,3 +130,118 @@ aggregate honesty is not complete in the production consumer, legacy v1 graph
 payloads acquire false zero totals, and the 10k gate misses the truncated
 technique/reuse path where the consumer defect occurs. Resolve the P1 and P2
 findings before merging this task into the 1.7 completion branch.
+
+---
+
+## Re-review after `4a0668ff885c98908903ee407955dcda38be9091`
+
+| Field | Value |
+|---|---|
+| Re-review date | 2026-07-22 |
+| Remediation | `4a0668ff885c98908903ee407955dcda38be9091` |
+| Final verdict | **Pass** |
+
+The remediation was inspected independently and every original finding is
+resolved.
+
+### P1 production aggregate understatement — resolved
+
+The graph now exposes optional pre-truncation totals and marks newly built
+graphs with `counts_exact = true` under the new
+`blackbox.incident.graph/v2` schema
+(`src/incident/graph.rs:187-265`, `src/incident/graph.rs:484-534`). Both
+production consumers call `compute_incident_aggregates_from_graph`, which uses
+`technique_total()` and `reuse_total()` rather than serialized vector lengths
+(`src/incident/page.rs:100-120`, `src/cli_ext.rs:2253-2258`,
+`src/serve.rs:971-980`). Human CLI and dashboard output also expose complete,
+truncated, or unknown-legacy detail state (`src/cli_ext.rs:2282-2314`,
+`src/serve.rs:981-1020`).
+
+The CLI-backed regression inserts 1,001 unique destination techniques into
+SQLite, runs the actual `blackbox incident show --graph` command, and verifies:
+
+- serialized detail contains 1,000 techniques;
+- graph and aggregate totals both report 1,001;
+- `counts_exact` is true;
+- JSON reports one truncated technique;
+- human output reports both `techniques=1001` and
+  `techniques=1000/1001`.
+
+This closes the production-consumer gap, not merely the graph-builder unit
+path (`tests/incident_scale.rs:169-255`).
+
+### P2 legacy v1 zero totals — resolved
+
+The changed aggregate contract is versioned as
+`blackbox.incident.graph/v2`. Aggregate fields, limits, and truncation are
+optional on decode; a pre-change v1 payload therefore retains included-vector
+lower bounds rather than acquiring asserted zeros. `counts_exact = false` and
+`is_detail_truncated() = None` explicitly represent the unknowable legacy
+remainder (`src/incident/graph.rs:205-265`). Aggregates propagate that honesty
+bit (`src/incident/page.rs:100-120`).
+
+The frozen v1 fixture contains one legacy edge and one reused technique, then
+asserts lower bounds of one edge, one flow, one technique, and one reuse while
+retaining unknown truncation and non-exact aggregates
+(`tests/incident_graph_flow.rs:183-230`). This is honest backward compatibility.
+
+### P2 10k technique/reuse truncation gate — resolved
+
+The scale fixture now creates 10,000 external records across two attached runs
+with 250 repeating destinations and four edge relations. Independent count
+verification matches the test:
+
+- 250 distinct destination techniques, all observed in both runs;
+- one `credential_use` technique, also observed in both runs;
+- 251 exact techniques and 251 exact reuse entries;
+- 7,500 typed flows, split evenly across delegation, credential use, and
+  artifact derivation;
+- only 32 technique details retained, with 219 explicitly truncated.
+
+The regression asserts those exact totals and passes the graph to the same
+aggregate helper used by CLI/dashboard consumers
+(`tests/incident_scale.rs:63-166`). Graph construction remained bounded and
+completed in 28.64 ms in this re-review run.
+
+### P3 deterministic tied edge/flow detail — resolved
+
+Graph construction sorts edges by `(created_at, id)` before applying edge and
+flow limits (`src/incident/graph.rs:439-503`), and SQLite retrieval uses the
+same stable tie-breaker (`src/storage/sqlite.rs:2541-2547`). Technique first
+discovery and earliest-signal selection also use stable reference-ID
+tie-breakers (`src/incident/graph.rs:278-320`, `src/incident/graph.rs:397-405`).
+
+The regression shuffles eight equal-timestamp edges and obtains the same
+`edge-00`, `edge-01`, `edge-02` prefix and matching flow prefix both times
+(`tests/incident_graph_flow.rs:232-288`). The 10,000-incident tied-timestamp
+storage cursor still exhausts every ID exactly once in descending ID order.
+
+## Re-review verification
+
+Commands executed from the isolated incident worktree:
+
+```text
+cargo test --lib incident::graph
+cargo test --test incident_graph_flow --test incident_scale -- --nocapture
+cargo clippy --all-targets -- -D warnings
+cargo fmt --check
+git diff 875b6de..4a0668f --check
+```
+
+Results:
+
+```text
+incident::graph: 2 passed; 0 failed
+incident_graph_flow: 4 passed; 0 failed
+incident_scale: 3 passed; 0 failed
+10k graph reconstruction: 28.641133 ms
+10k storage pagination: 1.064377496 s
+clippy, formatting, and diff checks: passed
+```
+
+## Final conclusion
+
+**Pass.** Exact production aggregates, legacy v1 honesty, high-volume
+technique/reuse truncation, and deterministic tied ordering now have direct
+executable coverage. No blocking or non-blocking findings remain from this
+review.

@@ -77,10 +77,7 @@ fn record_against_python_echo_server() {
         cassette.display()
     );
     let cass = CassetteFile::from_json(&std::fs::read_to_string(&cassette).unwrap()).unwrap();
-    assert!(
-        cass.experimental,
-        "cassette must be marked experimental"
-    );
+    assert!(cass.experimental, "cassette must be marked experimental");
     assert!(
         cass.entries.len() >= 2,
         "expected >=2 recorded tools/call entries, got {}: {:?}",

@@ -89,9 +89,7 @@ impl EvidenceStatus {
     pub fn is_gate_failure(self) -> bool {
         matches!(
             self,
-            Self::InsufficientEvidence
-                | Self::ContainmentUnproven
-                | Self::ContainmentViolated
+            Self::InsufficientEvidence | Self::ContainmentUnproven | Self::ContainmentViolated
         )
     }
 }
@@ -168,19 +166,22 @@ pub fn evaluate_required_evidence(
     let mut containment_violated = false;
 
     // Explicit violation always surfaces.
-    for r in &observed.containment_receipts {
+    for r in observed
+        .containment_receipts
+        .iter()
+        .filter(|r| r.policy_hash.as_deref() == Some(boundary.policy_hash.as_str()))
+    {
         if matches!(r.result, ContainmentResult::Violated) {
             containment_violated = true;
             reasons.push(format!(
                 "containment violated by receipt {} (control={:?})",
-                r.id,
-                r.scope.control
+                r.id, r.scope.control
             ));
         }
     }
 
     for class in &boundary.contract.required_evidence {
-        let availability = classify_requirement(class, observed);
+        let availability = classify_requirement(class, observed, Some(&boundary.policy_hash));
         if !availability.is_sufficient() {
             any_missing = true;
             reasons.push(format!(
@@ -194,14 +195,12 @@ pub fn evaluate_required_evidence(
             let has_verified = observed
                 .containment_receipts
                 .iter()
-                .any(|r| r.satisfies_required_containment());
+                .any(|r| r.satisfies_required_containment_for(&boundary.policy_hash));
             if !has_verified {
                 // If we only have configured/enforced claims, say unproven not just missing.
                 containment_unproven = true;
                 if !observed.containment_receipts.is_empty() {
-                    reasons.push(
-                        "containment receipts present but none are verified+held".into(),
-                    );
+                    reasons.push("containment receipts present but none are verified+held".into());
                     // Configured/enforced must never count as verified — note each.
                     for r in &observed.containment_receipts {
                         if matches!(
@@ -254,14 +253,18 @@ pub fn evaluate_required_evidence(
     }
 }
 
-fn classify_requirement(class: &str, observed: &ObservedEvidence) -> EvidenceAvailability {
+fn classify_requirement(
+    class: &str,
+    observed: &ObservedEvidence,
+    policy_hash: Option<&str>,
+) -> EvidenceAvailability {
     // Special classes mapped from structured fields.
     match class {
         "containment_receipt" => {
             if observed
                 .containment_receipts
                 .iter()
-                .any(|r| r.satisfies_required_containment())
+                .any(|r| policy_hash.is_some_and(|hash| r.satisfies_required_containment_for(hash)))
             {
                 EvidenceAvailability::Present
             } else if !observed.containment_receipts.is_empty() {
@@ -320,17 +323,17 @@ mod tests {
         let report = evaluate_required_evidence(Some(&b), &observed);
         assert_eq!(report.status, EvidenceStatus::ContainmentUnproven);
         assert!(report.gate_failed);
-        assert!(report.reasons.iter().any(|r| r.contains("process") || r.contains("containment")));
+        assert!(report
+            .reasons
+            .iter()
+            .any(|r| r.contains("process") || r.contains("containment")));
     }
 
     #[test]
     fn configured_receipt_does_not_satisfy() {
         let b = resolved_fail_closed();
         let mut observed = ObservedEvidence {
-            present_classes: vec![
-                "process".into(),
-                "network".into(),
-            ],
+            present_classes: vec!["process".into(), "network".into()],
             has_artifact_provenance: true,
             ..Default::default()
         };
@@ -354,13 +357,17 @@ mod tests {
             has_artifact_provenance: true,
             ..Default::default()
         };
-        observed.containment_receipts.push(ContainmentReceipt::new(
+        let mut receipt = ContainmentReceipt::new(
             "run-test",
             ContainmentClaimState::Verified,
             ContainmentResult::Held,
             "canary",
             "post_run_canary",
-        ));
+        );
+        receipt.scope.control = Some("network_egress".into());
+        receipt.policy_hash = Some(b.policy_hash.clone());
+        receipt.evidence_hashes.push("a".repeat(64));
+        observed.containment_receipts.push(receipt);
         let report = evaluate_required_evidence(Some(&b), &observed);
         assert_eq!(report.status, EvidenceStatus::Sufficient);
         assert!(!report.gate_failed);
@@ -374,13 +381,15 @@ mod tests {
             has_artifact_provenance: true,
             ..Default::default()
         };
-        observed.containment_receipts.push(ContainmentReceipt::new(
+        let mut receipt = ContainmentReceipt::new(
             "run-test",
             ContainmentClaimState::Verified,
             ContainmentResult::Violated,
             "canary",
             "post_run_canary",
-        ));
+        );
+        receipt.policy_hash = Some(b.policy_hash.clone());
+        observed.containment_receipts.push(receipt);
         let report = evaluate_required_evidence(Some(&b), &observed);
         assert_eq!(report.status, EvidenceStatus::ContainmentViolated);
         assert!(report.gate_failed);

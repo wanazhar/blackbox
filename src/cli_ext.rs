@@ -10,27 +10,29 @@ use crate::adapter_protocol::{
     run_live_conformance, validate_adapter_event, validate_adapter_manifest, AdapterManifest,
 };
 use crate::budget::{evaluate_budgets, BudgetPolicy, ObservedBudgets};
-use crate::capsule::{create_capsule, CapsuleCreateOpts};
 use crate::capsule::inspect_capsule;
+use crate::capsule::{create_capsule, CapsuleCreateOpts};
 use crate::cassette::CassetteFile;
 use crate::cassette::{match_request, MatchMode};
+use crate::experiment::{build_experiment_report, RunReportInput};
 use crate::experiment::{evaluate_gate, GateConfig};
 use crate::experiment::{ExperimentManifest, ExperimentRole, RunExperimentMeta};
-use crate::experiment::{build_experiment_report, RunReportInput};
 use crate::ingest::EventSpool;
 use crate::ingest::{recover_spool_on_open, RecoveryStats};
 use crate::integrity::{fsck_store, FsckMode, FsckOptions};
 use crate::output::{self, OutputMode};
-use crate::projects::{default_index_path, discover_project_stores, ProjectIndexQuery, ProjectRegistry};
+use crate::projects::{
+    default_index_path, discover_project_stores, ProjectIndexQuery, ProjectRegistry,
+};
 use crate::storage::sqlite::SqliteStore;
 use crate::storage::TraceStore;
+use crate::verification::build_outcome_view;
 use crate::verification::verify_command;
 use crate::verification::{parse_junit_xml, receipt_from_junit};
-use crate::verification::build_outcome_view;
+use crate::verification::{parse_tap, receipt_from_tap};
 use crate::verification::{
     VerificationConfidence, VerificationReceipt, VerificationStatus, VerifierType,
 };
-use crate::verification::{parse_tap, receipt_from_tap};
 
 // ── Arg structs ───────────────────────────────────────────────────
 
@@ -422,6 +424,9 @@ pub enum BoundaryAction {
         /// Backend (e.g. bwrap, none)
         #[arg(long)]
         backend: Option<String>,
+        /// SHA-256 hash of supporting evidence (repeatable)
+        #[arg(long = "evidence-hash")]
+        evidence_hashes: Vec<String>,
         /// Summary text
         #[arg(long)]
         summary: Option<String>,
@@ -769,11 +774,7 @@ pub async fn cmd_verify(
     {
         let errors = store.get_error_events(run_id, 8).await.unwrap_or_default();
         let failure = errors.last();
-        let domain = crate::verification::match_receipt_to_failure(
-            &receipt,
-            failure,
-            &[],
-        );
+        let domain = crate::verification::match_receipt_to_failure(&receipt, failure, &[]);
         receipt.confidence = crate::verification::confidence_from_domain(domain.class);
         if receipt.failure_fingerprint.is_none() {
             if let Some(ev) = failure {
@@ -933,8 +934,7 @@ pub async fn cmd_experiment(
                         existing.push(m);
                     }
                 }
-                meta.attempt =
-                    Some(crate::experiment::next_attempt_number(&existing, &meta));
+                meta.attempt = Some(crate::experiment::next_attempt_number(&existing, &meta));
             }
             meta = meta.with_fingerprint();
             store.put_run_experiment_meta(run_id, &meta).await?;
@@ -982,17 +982,17 @@ pub async fn cmd_report(
             receipts,
             capture_complete: true, // conservative default without coverage event
             duration_ms,
-            boundary_ok: trust.as_ref().map(|t| t.trust_ok && !t.evidence_gate_failed),
+            boundary_ok: trust
+                .as_ref()
+                .map(|t| t.trust_ok && !t.evidence_gate_failed),
             provenance_ok: trust.as_ref().map(|t| !t.provenance_gate_failed),
-            critical_findings: trust.as_ref().map(|t| t.critical_finding_count).unwrap_or(0),
+            critical_findings: trust
+                .as_ref()
+                .map(|t| t.critical_finding_count)
+                .unwrap_or(0),
         });
     }
-    let report = build_experiment_report(
-        &args.experiment,
-        &args.group_by,
-        &rows,
-        args.min_samples,
-    );
+    let report = build_experiment_report(&args.experiment, &args.group_by, &rows, args.min_samples);
     if json {
         return output::emit_ok("report", &report);
     }
@@ -1053,17 +1053,18 @@ pub async fn cmd_gate(
             receipts,
             capture_complete: true,
             duration_ms,
-            boundary_ok: trust.as_ref().map(|t| t.trust_ok && !t.evidence_gate_failed),
+            boundary_ok: trust
+                .as_ref()
+                .map(|t| t.trust_ok && !t.evidence_gate_failed),
             provenance_ok: trust.as_ref().map(|t| !t.provenance_gate_failed),
-            critical_findings: trust.as_ref().map(|t| t.critical_finding_count).unwrap_or(0),
+            critical_findings: trust
+                .as_ref()
+                .map(|t| t.critical_finding_count)
+                .unwrap_or(0),
         });
     }
-    let report = build_experiment_report(
-        &args.experiment,
-        &args.group_by,
-        &rows,
-        args.min_attempts,
-    );
+    let report =
+        build_experiment_report(&args.experiment, &args.group_by, &rows, args.min_attempts);
     let mut config = GateConfig {
         min_attempts: Some(args.min_attempts),
         min_verified_rate: args.min_verified_rate,
@@ -1205,10 +1206,9 @@ pub async fn cmd_capsule(
             // Re-attach receipts from capsule when present.
             if let Some(arr) = root.get("receipts").and_then(|v| v.as_array()) {
                 for r in arr {
-                    if let Ok(mut receipt) =
-                        serde_json::from_value::<crate::verification::VerificationReceipt>(
-                            r.clone(),
-                        )
+                    if let Ok(mut receipt) = serde_json::from_value::<
+                        crate::verification::VerificationReceipt,
+                    >(r.clone())
                     {
                         receipt.run_id = imported.run_id.clone();
                         receipt.id = format!("verify-{}", uuid::Uuid::new_v4());
@@ -1296,8 +1296,7 @@ pub async fn cmd_cassette(args: &CassetteArgs, json: bool) -> anyhow::Result<()>
             tool,
         } => {
             let cass = CassetteFile::from_json(&std::fs::read_to_string(path)?)?;
-            let req: serde_json::Value =
-                serde_json::from_str(&std::fs::read_to_string(request)?)?;
+            let req: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(request)?)?;
             let mode = match mode.as_str() {
                 "strict" => MatchMode::Strict,
                 "ordered" => MatchMode::Ordered,
@@ -1321,9 +1320,7 @@ pub async fn cmd_cassette(args: &CassetteArgs, json: bool) -> anyhow::Result<()>
             redact,
             server,
         } => {
-            use crate::cassette::{
-                run_mcp_proxy, ProxyConfig, ProxyMode, UnknownPolicy,
-            };
+            use crate::cassette::{run_mcp_proxy, ProxyConfig, ProxyMode, UnknownPolicy};
             let match_mode = match mode.as_str() {
                 "strict" => MatchMode::Strict,
                 "ordered" => MatchMode::Ordered,
@@ -1512,7 +1509,8 @@ pub async fn cmd_projects(args: &ProjectsArgs, json: bool) -> anyhow::Result<()>
     match &args.action {
         ProjectsAction::Scan { roots } => {
             let found = discover_project_stores(roots);
-            let mut reg = ProjectRegistry::load(&index_path).unwrap_or_else(|_| ProjectRegistry::empty());
+            let mut reg =
+                ProjectRegistry::load(&index_path).unwrap_or_else(|_| ProjectRegistry::empty());
             for e in found {
                 reg.upsert(e);
             }
@@ -1528,7 +1526,8 @@ pub async fn cmd_projects(args: &ProjectsArgs, json: bool) -> anyhow::Result<()>
             println!("note: index is metadata-only; stores remain authoritative");
         }
         ProjectsAction::List { query, limit } => {
-            let reg = ProjectRegistry::load(&index_path).unwrap_or_else(|_| ProjectRegistry::empty());
+            let reg =
+                ProjectRegistry::load(&index_path).unwrap_or_else(|_| ProjectRegistry::empty());
             let q = ProjectIndexQuery {
                 name_substr: query.clone(),
                 limit: Some(*limit),
@@ -1570,7 +1569,9 @@ pub async fn cmd_projects(args: &ProjectsArgs, json: bool) -> anyhow::Result<()>
         ProjectsAction::Remove { project_root } => {
             let mut reg =
                 ProjectRegistry::load(&index_path).unwrap_or_else(|_| ProjectRegistry::empty());
-            let root = project_root.canonicalize().unwrap_or_else(|_| project_root.clone());
+            let root = project_root
+                .canonicalize()
+                .unwrap_or_else(|_| project_root.clone());
             let removed = reg.remove_root(&root) || reg.remove_root(project_root);
             reg.save(&index_path)?;
             if json {
@@ -1610,10 +1611,7 @@ pub fn store_arc(store: SqliteStore) -> Arc<dyn TraceStore> {
 /// // `spool_dir_from_blob_dir` — see module docs for full workflow.
 /// ```
 pub fn spool_dir_from_blob_dir(blob_dir: &std::path::Path) -> PathBuf {
-    blob_dir
-        .parent()
-        .unwrap_or(blob_dir)
-        .join("spool")
+    blob_dir.parent().unwrap_or(blob_dir).join("spool")
 }
 
 /// Recovery artifacts directory.
@@ -1625,10 +1623,7 @@ pub fn spool_dir_from_blob_dir(blob_dir: &std::path::Path) -> PathBuf {
 /// // `recovery_dir_from_blob_dir` — see module docs for full workflow.
 /// ```
 pub fn recovery_dir_from_blob_dir(blob_dir: &std::path::Path) -> PathBuf {
-    blob_dir
-        .parent()
-        .unwrap_or(blob_dir)
-        .join("recovery")
+    blob_dir.parent().unwrap_or(blob_dir).join("recovery")
 }
 
 /// Ensure spool exists (best-effort).
@@ -1817,11 +1812,7 @@ pub async fn cmd_boundary(
                 println!("  policy_hash={}", &h[..16.min(h.len())]);
             }
             for req in &report.requirements {
-                println!(
-                    "  evidence {} → {}",
-                    req.class,
-                    req.availability.as_str()
-                );
+                println!("  evidence {} → {}", req.class, req.availability.as_str());
             }
             for r in &report.reasons {
                 println!("  reason: {r}");
@@ -1839,6 +1830,7 @@ pub async fn cmd_boundary(
             method,
             control,
             backend,
+            evidence_hashes,
             summary,
         } => {
             store
@@ -1860,6 +1852,7 @@ pub async fn cmd_boundary(
                 sandbox_id: None,
                 label: None,
             };
+            receipt.evidence_hashes = evidence_hashes.clone();
             receipt.summary = summary.clone();
             if let Ok(Some(b)) = store.get_run_boundary(run_id).await {
                 receipt.policy_hash = Some(b.policy_hash);
@@ -1914,12 +1907,7 @@ pub async fn cmd_boundary(
             }
             println!("boundary detect: {} finding(s)", findings.len());
             for f in &findings {
-                println!(
-                    "  [{}] {} — {}",
-                    f.severity.as_str(),
-                    f.detector,
-                    f.summary
-                );
+                println!("  [{}] {} — {}", f.severity.as_str(), f.detector, f.summary);
             }
             Ok(())
         }
@@ -1930,9 +1918,7 @@ pub async fn cmd_boundary(
             task_passed,
             gate,
         } => {
-            use crate::boundary::{
-                evaluate_provenance, record_from_observations,
-            };
+            use crate::boundary::{evaluate_provenance, record_from_observations};
             store
                 .get_run(run_id)
                 .await?
@@ -1955,14 +1941,8 @@ pub async fn cmd_boundary(
             let record = record_from_observations(run_id, declared, &observed);
             store.insert_provenance_record(&record).await?;
             let records = store.list_provenance_records(run_id).await?;
-            let report = evaluate_provenance(
-                run_id,
-                &records,
-                &external,
-                declared,
-                *task_passed,
-                true,
-            );
+            let report =
+                evaluate_provenance(run_id, &records, &external, declared, *task_passed, true);
             if json {
                 if *gate && report.provenance_gate_failed {
                     let _ = output::emit_ok("boundary_provenance", &report);
@@ -2075,53 +2055,51 @@ pub async fn cmd_evidence(
                 ..Default::default()
             };
             let (events, mut report) = import_evidence_ndjson(file, &opts)?;
-            let mut inserted = 0usize;
-            let mut dup_store = 0usize;
-            for ev in &events {
-                match store.insert_external_evidence(ev).await? {
-                    true => inserted += 1,
-                    false => dup_store += 1,
-                }
-            }
-            report.duplicates += dup_store;
-            // Adjust accepted to store-new only for clarity.
-            let _ = inserted;
-
-            let mut edges_n = 0usize;
-            if *correlate {
+            let identity = if let Some(rid) = run {
+                store.get_trace_identity(rid).await?
+            } else {
+                None
+            };
+            let edges = if *correlate {
                 if let Some(ref rid) = run {
-                    let identity = store.get_trace_identity(rid).await?;
                     let ctx = CorrelationContext {
                         run_id: rid.clone(),
                         trace_id: identity.as_ref().map(|i| i.trace_id.clone()),
                         ..Default::default()
                     };
-                    let edges = correlate_external_batch(&events, &ctx);
-                    for e in &edges {
-                        let _ = store.insert_evidence_edge(e).await;
-                        edges_n += 1;
-                    }
-                    // Record that cooperative IDs were observed if present.
-                    if let Some(mut id) = identity {
-                        for ev in &events {
-                            if let Some(ref tid) = ev.identity.trace_id {
-                                let status = if Some(tid) == Some(&id.trace_id) {
-                                    PropagationStatus::Confirmed
-                                } else {
-                                    PropagationStatus::Forged
-                                };
-                                id.record_propagation(
-                                    PropagationChannel::OtelBaggage,
-                                    status,
-                                    Some(format!("import observed trace_id={tid}")),
-                                );
-                            }
+                    correlate_external_batch(&events, &ctx)
+                } else {
+                    Vec::new()
+                }
+            } else {
+                Vec::new()
+            };
+            let (inserted, edges_n) = store
+                .insert_external_evidence_batch(&events, &edges)
+                .await?;
+            report.duplicates += events.len().saturating_sub(inserted);
+
+            if let Some(ref rid) = run {
+                // Record that cooperative IDs were observed if present. This is
+                // correlation evidence, not proof that the child received an ID.
+                if let Some(mut id) = identity {
+                    for ev in &events {
+                        if let Some(ref tid) = ev.identity.trace_id {
+                            let status = if tid == &id.trace_id {
+                                PropagationStatus::Confirmed
+                            } else {
+                                PropagationStatus::Forged
+                            };
+                            id.record_propagation(
+                                PropagationChannel::OtelBaggage,
+                                status,
+                                Some(format!("import observed trace_id={tid}")),
+                            );
                         }
-                        let _ = store.put_trace_identity(&id).await;
-                    } else if store.get_run(rid).await?.is_some() {
-                        let id = TraceIdentity::mint(rid);
-                        let _ = store.put_trace_identity(&id).await;
                     }
+                    store.put_trace_identity(&id).await?;
+                } else if store.get_run(rid).await?.is_some() {
+                    store.put_trace_identity(&TraceIdentity::mint(rid)).await?;
                 }
             }
 
@@ -2210,9 +2188,7 @@ pub async fn cmd_incident(
                 ),
                 None => None,
             };
-            let page = store
-                .list_incidents_page(cur.as_ref(), *limit)
-                .await?;
+            let page = store.list_incidents_page(cur.as_ref(), *limit).await?;
             if json {
                 return output::emit_ok("incident_list", &page);
             }
@@ -2270,8 +2246,7 @@ pub async fn cmd_incident(
                 );
                 // Persist earliest signal fields.
                 let mut updated = inc.clone();
-                updated.earliest_signal_id =
-                    g.earliest_signal.as_ref().map(|s| s.ref_id.clone());
+                updated.earliest_signal_id = g.earliest_signal.as_ref().map(|s| s.ref_id.clone());
                 updated.continued_after_signal = g.continued_after_signal;
                 updated.updated_at = Some(chrono::Utc::now());
                 let _ = store.upsert_incident(&updated).await;
@@ -2310,7 +2285,11 @@ pub async fn cmd_incident(
                 inc.title
             );
             for a in &inc.attachments {
-                println!("  attach {} {}", a.kind.as_str(), crate::util::short_id(&a.ref_id));
+                println!(
+                    "  attach {} {}",
+                    a.kind.as_str(),
+                    crate::util::short_id(&a.ref_id)
+                );
             }
             if let Some(ref g) = graph_view {
                 println!(
@@ -2471,7 +2450,10 @@ pub async fn cmd_forensic(
                 .list_external_evidence_for_run(run_id)
                 .await
                 .unwrap_or_default();
-            let findings = store.list_boundary_findings(run_id).await.unwrap_or_default();
+            let findings = store
+                .list_boundary_findings(run_id)
+                .await
+                .unwrap_or_default();
             let edges = store.list_evidence_edges(run_id).await.unwrap_or_default();
             let opts = ForensicPackOpts {
                 max_events: *max_events,
@@ -2538,9 +2520,8 @@ pub async fn cmd_forensic(
                 refused: *refused,
                 failure: failure.clone(),
             };
-            apply_model_analysis(&mut pack_doc, &input).map_err(|e| {
-                anyhow::anyhow!("model analysis rejected: {}", e.join("; "))
-            })?;
+            apply_model_analysis(&mut pack_doc, &input)
+                .map_err(|e| anyhow::anyhow!("model analysis rejected: {}", e.join("; ")))?;
             let text = serde_json::to_string_pretty(&pack_doc)?;
             let dest = out_path.as_ref().unwrap_or(pack_path);
             std::fs::write(dest, &text)?;
@@ -2556,7 +2537,6 @@ pub async fn cmd_forensic(
         }
     }
 }
-
 
 async fn load_run_trust(
     store: &dyn TraceStore,

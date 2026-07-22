@@ -22,6 +22,6 @@ pub use event::{
     ExternalIdentity, EVIDENCE_EVENT_SCHEMA,
 };
 pub use import::{
-    import_evidence_ndjson, import_evidence_ndjson_str, ImportOptions, ImportReport,
-    ImportReject, MAX_EVIDENCE_IMPORT_BYTES, MAX_EVIDENCE_IMPORT_EVENTS,
+    import_evidence_ndjson, import_evidence_ndjson_str, ImportOptions, ImportReject, ImportReport,
+    MAX_EVIDENCE_IMPORT_BYTES, MAX_EVIDENCE_IMPORT_EVENTS,
 };

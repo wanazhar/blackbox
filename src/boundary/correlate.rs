@@ -224,10 +224,12 @@ pub fn correlate_external_event(
     // Cap confidence: never upgrade temporal-only to confirmed.
     // Cooperative trace_id alone never reaches confirmed (closed residual risk).
     // Integrity-unverified sensor data cannot become Confirmed either.
+    // A matching caller-supplied payload hash proves consistency, not source
+    // authenticity. Only evidence admitted by a trusted signature verifier may
+    // produce Confirmed attribution.
     let integrity_trusted = matches!(
         ev.integrity,
-        crate::evidence::EvidenceIntegrity::HashOk
-            | crate::evidence::EvidenceIntegrity::SignedVerified
+        crate::evidence::EvidenceIntegrity::SignedVerified
     );
     let confidence = if reasons.iter().any(|r| r == "matching_run_id") && integrity_trusted {
         Confidence::Confirmed
@@ -256,8 +258,7 @@ pub fn correlate_external_event(
         && matches!(
             confidence,
             Confidence::Confirmed | Confidence::StronglyCorrelated
-        )
-    {
+        ) {
         Confidence::WeaklyCorrelated
     } else {
         confidence
@@ -266,9 +267,7 @@ pub fn correlate_external_event(
     // Forged/conflict: never confirmed.
     let confidence = if reasons.iter().any(|r| r == "conflicting_trace_id") {
         match confidence {
-            Confidence::Confirmed | Confidence::StronglyCorrelated => {
-                Confidence::WeaklyCorrelated
-            }
+            Confidence::Confirmed | Confidence::StronglyCorrelated => Confidence::WeaklyCorrelated,
             other => other,
         }
     } else {
@@ -338,7 +337,7 @@ mod tests {
     }
 
     #[test]
-    fn run_id_match_can_confirm_when_integrity_ok() {
+    fn run_id_hash_consistency_does_not_authenticate_source() {
         use crate::evidence::EvidenceIntegrity;
         let mut ev = ExternalEvidenceEvent::new("proxy", "proxy", "2", EvidenceAction::ProxyDeny);
         ev.identity.run_id = Some("r1".into());
@@ -348,7 +347,7 @@ mod tests {
             ..Default::default()
         };
         let edge = correlate_external_event(&ev, &ctx).unwrap();
-        assert!(matches!(edge.confidence, Confidence::Confirmed));
+        assert!(matches!(edge.confidence, Confidence::StronglyCorrelated));
     }
 
     #[test]
@@ -387,6 +386,10 @@ mod tests {
         assert!(!matches!(edge.confidence, Confidence::Confirmed));
 
         ev.integrity = EvidenceIntegrity::HashOk;
+        let edge = correlate_external_event(&ev, &ctx).unwrap();
+        assert!(!matches!(edge.confidence, Confidence::Confirmed));
+
+        ev.integrity = EvidenceIntegrity::SignedVerified;
         let edge = correlate_external_event(&ev, &ctx).unwrap();
         assert!(matches!(edge.confidence, Confidence::Confirmed));
     }

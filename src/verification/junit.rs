@@ -68,7 +68,10 @@ pub fn receipt_from_junit(
     source_path: &str,
 ) -> VerificationReceipt {
     let failed = summary.failures.saturating_add(summary.errors);
-    let passed = summary.tests.saturating_sub(failed).saturating_sub(summary.skipped);
+    let passed = summary
+        .tests
+        .saturating_sub(failed)
+        .saturating_sub(summary.skipped);
     let status = if summary.tests == 0 {
         VerificationStatus::Inconclusive
     } else if failed == 0 {

@@ -78,9 +78,8 @@ pub async fn verify_command(
     receipt.status = status;
     receipt.confidence = VerificationConfidence::Confirmed;
     receipt.parent_receipt_id = parent_receipt_id;
-    receipt.limitations = vec![
-        "verification performed in workspace-only mode; does not claim containment".into(),
-    ];
+    receipt.limitations =
+        vec!["verification performed in workspace-only mode; does not claim containment".into()];
     receipt.summary = Some(format!(
         "command {:?} exited {exit_code}",
         argv.first().map(|s| s.as_str()).unwrap_or("?")

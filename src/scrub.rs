@@ -258,15 +258,7 @@ async fn scrub_workspace_manifest_blob(
         .filter_map(|e| e.content_hash.clone())
         .collect();
     for hash in hashes {
-        let _ = scrub_blob_key(
-            store,
-            scanner,
-            Some(&hash),
-            dry_run,
-            report,
-            key_remap,
-        )
-        .await?;
+        let _ = scrub_blob_key(store, scanner, Some(&hash), dry_run, report, key_remap).await?;
     }
 
     let mut nested_dirty = remap_manifest_blob_refs(&mut manifest, key_remap);

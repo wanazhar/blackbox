@@ -184,7 +184,11 @@ pub fn build_forensic_pack(
 
     let mut original_pointers: Vec<String> = event_window
         .iter()
-        .filter_map(|v| v.get("id").and_then(|x| x.as_str()).map(|s| format!("event:{s}")))
+        .filter_map(|v| {
+            v.get("id")
+                .and_then(|x| x.as_str())
+                .map(|s| format!("event:{s}"))
+        })
         .collect();
     for e in external.iter().take(opts.max_external) {
         original_pointers.push(format!("external:{}", e.id));
@@ -204,9 +208,9 @@ pub fn build_forensic_pack(
             continue;
         }
         // Validate citations resolve to pack pointers or finding id.
-        let ok = citations.iter().all(|c| {
-            original_pointers.iter().any(|p| p.ends_with(c)) || c == &f.id
-        });
+        let ok = citations
+            .iter()
+            .all(|c| original_pointers.iter().any(|p| p.ends_with(c)) || c == &f.id);
         if !ok {
             coverage_gaps.push(format!("invalid_citation_on_finding_{}", f.id));
             continue;
@@ -355,7 +359,9 @@ pub fn apply_model_analysis(
             continue;
         }
         let ok = cits.iter().all(|c| {
-            pack.original_pointers.iter().any(|p| p.ends_with(c.as_str()))
+            pack.original_pointers
+                .iter()
+                .any(|p| p.ends_with(c.as_str()))
                 || pack.findings.iter().any(|f| f.id == *c)
         });
         if !ok {
@@ -392,7 +398,10 @@ pub fn validate_claim_citations(pack: &ForensicPack) -> Result<(), Vec<String>> 
             continue;
         }
         for c in &claim.citations {
-            let ok = pack.original_pointers.iter().any(|p| p.ends_with(c.as_str()))
+            let ok = pack
+                .original_pointers
+                .iter()
+                .any(|p| p.ends_with(c.as_str()))
                 || pack.findings.iter().any(|f| f.id == *c);
             if !ok {
                 errs.push(format!("dangling citation {c} for claim {}", claim.claim));
@@ -460,8 +469,10 @@ mod tests {
         let mut ev = TraceEvent::new("r1", EventSource::Tool, "tool.call");
         // OpenAI-shaped key (matches SecretScanner BASE_PATTERNS), not only substring tags.
         let secret = "sk-abcdefghijklmnopqrstuvwxyz012345";
-        ev.metadata
-            .insert("command".into(), serde_json::json!(format!("export KEY={secret}")));
+        ev.metadata.insert(
+            "command".into(),
+            serde_json::json!(format!("export KEY={secret}")),
+        );
         let pack = build_forensic_pack(
             "r1",
             None,
@@ -481,7 +492,8 @@ mod tests {
             "forensic pack must not leak API key material: {dumped}"
         );
         assert!(
-            dumped.contains("REDACTED") || pack.fingerprints.iter().any(|fp| fp.contains("REDACTED")),
+            dumped.contains("REDACTED")
+                || pack.fingerprints.iter().any(|fp| fp.contains("REDACTED")),
             "expected SecretScanner redaction markers"
         );
     }

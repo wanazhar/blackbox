@@ -67,13 +67,7 @@ pub fn launch_containment_receipts(
             "no isolation backend (recorder neutrality; containment not enforced)",
         )
     };
-    let mut iso = ContainmentReceipt::new(
-        run_id,
-        state,
-        result,
-        "blackbox",
-        "launch_record",
-    );
+    let mut iso = ContainmentReceipt::new(run_id, state, result, "blackbox", "launch_record");
     iso.scope = ContainmentScope {
         control: Some("process_isolation".into()),
         backend: Some(backend.backend.clone()),
@@ -131,10 +125,7 @@ pub fn post_run_canary_receipts(
     let policy_hash = boundary.map(|b| b.policy_hash.clone());
     let prohibits_public = boundary
         .map(|b| {
-            b.contract
-                .prohibited
-                .iter()
-                .any(|p| p == "public_network")
+            b.contract.prohibited.iter().any(|p| p == "public_network")
                 || matches!(
                     b.contract.disposition_of("public_network"),
                     crate::boundary::Disposition::HardProhibition

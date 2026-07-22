@@ -259,11 +259,7 @@ impl EventSpool {
         fs::read_dir(&self.pending_dir)
             .map(|rd| {
                 rd.filter_map(|e| e.ok())
-                    .filter(|e| {
-                        e.file_name()
-                            .to_string_lossy()
-                            .ends_with(".spool")
-                    })
+                    .filter(|e| e.file_name().to_string_lossy().ends_with(".spool"))
                     .count()
             })
             .unwrap_or(0)
@@ -272,7 +268,12 @@ impl EventSpool {
 
 fn new_batch_id(events: &[TraceEvent]) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0).to_le_bytes());
+    hasher.update(
+        chrono::Utc::now()
+            .timestamp_nanos_opt()
+            .unwrap_or(0)
+            .to_le_bytes(),
+    );
     for e in events {
         hasher.update(e.id.as_bytes());
         hasher.update(e.sequence.to_le_bytes());

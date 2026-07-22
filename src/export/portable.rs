@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::Context;
 use base64::Engine;
+use serde::de::DeserializeOwned;
 
 use crate::core::blob::{is_valid_blob_key, BlobReference};
 use crate::core::event::TraceEvent;
@@ -69,14 +70,14 @@ pub async fn export_portable(
 
     let mut events_val: Vec<serde_json::Value> = events
         .iter()
-        .filter_map(|e| {
-            let mut v = serde_json::to_value(e).ok()?;
+        .map(|e| {
+            let mut v = serde_json::to_value(e)?;
             if redact {
                 redact_event(&mut v);
             }
-            Some(v)
+            Ok(v)
         })
-        .collect();
+        .collect::<anyhow::Result<_>>()?;
 
     events_val.sort_by_key(|v| v["sequence"].as_u64().unwrap_or(0));
 
@@ -110,11 +111,7 @@ pub async fn export_portable(
     }
 
     // 1.6: typed experiment metadata (optional; survives export/import).
-    let experiment_meta = store
-        .get_run_experiment_meta(&run.id)
-        .await
-        .ok()
-        .flatten();
+    let experiment_meta = store.get_run_experiment_meta(&run.id).await.ok().flatten();
     let experiment_manifest = if let Some(ref meta) = experiment_meta {
         if let Some(ref eid) = meta.experiment_id {
             store.get_experiment(eid).await.ok().flatten()
@@ -130,25 +127,13 @@ pub async fn export_portable(
         .unwrap_or_default();
 
     // 1.7: boundary trust artifacts (survive export/import).
-    let boundary = store.get_run_boundary(&run.id).await.ok().flatten();
-    let containment_receipts = store
-        .list_containment_receipts(&run.id)
-        .await
-        .unwrap_or_default();
-    let external_evidence = store
-        .list_external_evidence_for_run(&run.id)
-        .await
-        .unwrap_or_default();
-    let evidence_edges = store.list_evidence_edges(&run.id).await.unwrap_or_default();
-    let boundary_findings = store
-        .list_boundary_findings(&run.id)
-        .await
-        .unwrap_or_default();
-    let provenance_records = store
-        .list_provenance_records(&run.id)
-        .await
-        .unwrap_or_default();
-    let trace_identity = store.get_trace_identity(&run.id).await.ok().flatten();
+    let boundary = store.get_run_boundary(&run.id).await?;
+    let containment_receipts = store.list_containment_receipts(&run.id).await?;
+    let external_evidence = store.list_external_evidence_for_run(&run.id).await?;
+    let evidence_edges = store.list_evidence_edges(&run.id).await?;
+    let boundary_findings = store.list_boundary_findings(&run.id).await?;
+    let provenance_records = store.list_provenance_records(&run.id).await?;
+    let trace_identity = store.get_trace_identity(&run.id).await?;
 
     let output = serde_json::json!({
         "version": PORTABLE_VERSION,
@@ -424,6 +409,51 @@ pub struct ImportResult {
     pub remapped: bool,
 }
 
+fn optional_portable_field<T: DeserializeOwned>(
+    root: &serde_json::Value,
+    key: &str,
+) -> anyhow::Result<Option<T>> {
+    let Some(value) = root.get(key) else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    serde_json::from_value(value.clone())
+        .with_context(|| format!("invalid portable field {key}"))
+        .map(Some)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn remap_evidence_endpoint(
+    id: &mut String,
+    kind: &crate::boundary::EntityKind,
+    old_run_id: &str,
+    new_run_id: &str,
+    event_ids: &HashMap<String, String>,
+    external_ids: &HashMap<String, String>,
+    containment_ids: &HashMap<String, String>,
+    provenance_ids: &HashMap<String, String>,
+) -> anyhow::Result<()> {
+    use crate::boundary::EntityKind;
+    let replacement = match kind {
+        EntityKind::Run if id == old_run_id => Some(new_run_id.to_string()),
+        EntityKind::Event => event_ids.get(id).cloned(),
+        EntityKind::ExternalEvidence => external_ids.get(id).cloned(),
+        EntityKind::ContainmentReceipt => containment_ids.get(id).cloned(),
+        EntityKind::ProvenanceRecord => provenance_ids.get(id).cloned(),
+        EntityKind::Run
+        | EntityKind::Credential
+        | EntityKind::Artifact
+        | EntityKind::Incident
+        | EntityKind::Other(_) => return Ok(()),
+    };
+    *id = replacement.ok_or_else(|| {
+        anyhow::anyhow!("malformed evidence edge endpoint {}:{}", kind.as_str(), id)
+    })?;
+    Ok(())
+}
+
 /// Import a portable JSON archive (v1 or v2) into the store.
 ///
 /// If `new_ids` is true, assigns a fresh run id and regenerates event ids.
@@ -507,9 +537,11 @@ pub async fn import_portable(
     validate_event_blob_refs(&events, &blob_key_set, version)?;
 
     // ── ID remapping (in memory) ──
+    let old_run_id = run.id.clone();
+    let mut event_id_map = HashMap::new();
     let remapped;
     if new_ids {
-        let old_id = run.id.clone();
+        let old_id = old_run_id.clone();
         run.id = uuid::Uuid::new_v4().to_string();
         run.parent_run_id = run.parent_run_id.or(Some(old_id.clone()));
         if let Some(notes) = run.notes.take() {
@@ -520,16 +552,15 @@ pub async fn import_portable(
         if !run.tags.iter().any(|t| t == "imported") {
             run.tags.push("imported".into());
         }
-        let mut id_map = HashMap::new();
         for ev in &mut events {
             let old_ev_id = ev.id.clone();
             ev.id = uuid::Uuid::new_v4().to_string();
             ev.run_id = run.id.clone();
-            id_map.insert(old_ev_id, ev.id.clone());
+            event_id_map.insert(old_ev_id, ev.id.clone());
         }
         for ev in &mut events {
             if let Some(pid) = &ev.parent_event_id {
-                if let Some(new_pid) = id_map.get(pid) {
+                if let Some(new_pid) = event_id_map.get(pid) {
                     ev.parent_event_id = Some(new_pid.clone());
                 } else {
                     anyhow::bail!(
@@ -591,18 +622,12 @@ pub async fn import_portable(
     }
 
     // ── Parse optional 1.6 experiment + receipt payloads (before permanent writes) ──
-    let experiment_meta: Option<crate::experiment::RunExperimentMeta> = root
-        .get("experiment_meta")
-        .filter(|v| !v.is_null())
-        .and_then(|v| serde_json::from_value(v.clone()).ok());
-    let experiment_manifest: Option<crate::experiment::ExperimentManifest> = root
-        .get("experiment")
-        .filter(|v| !v.is_null())
-        .and_then(|v| serde_json::from_value(v.clone()).ok());
-    let mut verification_receipts: Vec<crate::verification::VerificationReceipt> = root
-        .get("verification_receipts")
-        .and_then(|v| serde_json::from_value(v.clone()).ok())
-        .unwrap_or_default();
+    let experiment_meta: Option<crate::experiment::RunExperimentMeta> =
+        optional_portable_field(&root, "experiment_meta")?;
+    let experiment_manifest: Option<crate::experiment::ExperimentManifest> =
+        optional_portable_field(&root, "experiment")?;
+    let mut verification_receipts: Vec<crate::verification::VerificationReceipt> =
+        optional_portable_field(&root, "verification_receipts")?.unwrap_or_default();
 
     // Remap receipt run_ids (and parent refs are left as-is — receipt ids stay stable).
     for r in &mut verification_receipts {
@@ -615,70 +640,109 @@ pub async fn import_portable(
     }
 
     // 1.7 optional artifacts
-    let mut boundary: Option<crate::boundary::ResolvedBoundary> = root
-        .get("boundary")
-        .filter(|v| !v.is_null())
-        .and_then(|v| serde_json::from_value(v.clone()).ok());
+    let mut boundary: Option<crate::boundary::ResolvedBoundary> =
+        optional_portable_field(&root, "boundary")?;
     if let Some(ref mut b) = boundary {
         b.run_id = run.id.clone();
     }
-    let mut containment_receipts: Vec<crate::boundary::ContainmentReceipt> = root
-        .get("containment_receipts")
-        .and_then(|v| serde_json::from_value(v.clone()).ok())
-        .unwrap_or_default();
+    let mut containment_receipts: Vec<crate::boundary::ContainmentReceipt> =
+        optional_portable_field(&root, "containment_receipts")?.unwrap_or_default();
+    let mut containment_id_map = HashMap::new();
     for r in &mut containment_receipts {
         r.run_id = run.id.clone();
         if new_ids {
+            let old = r.id.clone();
             r.id = format!("contain-{}", uuid::Uuid::new_v4());
-            r.parent_receipt_id = None;
+            containment_id_map.insert(old, r.id.clone());
         }
     }
-    let mut external_evidence: Vec<crate::evidence::ExternalEvidenceEvent> = root
-        .get("external_evidence")
-        .and_then(|v| serde_json::from_value(v.clone()).ok())
-        .unwrap_or_default();
+    if new_ids {
+        for receipt in &mut containment_receipts {
+            if let Some(parent) = receipt.parent_receipt_id.clone() {
+                receipt.parent_receipt_id =
+                    Some(containment_id_map.get(&parent).cloned().ok_or_else(|| {
+                        anyhow::anyhow!("malformed containment parent reference: {parent}")
+                    })?);
+            }
+        }
+    }
+    let mut external_evidence: Vec<crate::evidence::ExternalEvidenceEvent> =
+        optional_portable_field(&root, "external_evidence")?.unwrap_or_default();
+    let mut external_id_map = HashMap::new();
     for e in &mut external_evidence {
         e.linked_run_id = Some(run.id.clone());
         if new_ids {
+            let old = e.id.clone();
             e.id = format!("evext-{}", uuid::Uuid::new_v4());
+            external_id_map.insert(old, e.id.clone());
             // Keep source_event_id; idempotency key may collide on re-import — suffix.
             e.source_event_id = format!("{}#{}", e.source_event_id, &run.id[..8.min(run.id.len())]);
         }
     }
-    let mut evidence_edges: Vec<crate::boundary::EvidenceEdge> = root
-        .get("evidence_edges")
-        .and_then(|v| serde_json::from_value(v.clone()).ok())
-        .unwrap_or_default();
+    let mut evidence_edges: Vec<crate::boundary::EvidenceEdge> =
+        optional_portable_field(&root, "evidence_edges")?.unwrap_or_default();
     for e in &mut evidence_edges {
         e.run_id = Some(run.id.clone());
         if new_ids {
             e.id = format!("edge-{}", uuid::Uuid::new_v4());
         }
     }
-    let mut boundary_findings: Vec<crate::boundary::BoundaryFinding> = root
-        .get("boundary_findings")
-        .and_then(|v| serde_json::from_value(v.clone()).ok())
-        .unwrap_or_default();
+    let mut boundary_findings: Vec<crate::boundary::BoundaryFinding> =
+        optional_portable_field(&root, "boundary_findings")?.unwrap_or_default();
     for f in &mut boundary_findings {
         f.run_id = run.id.clone();
         if new_ids {
             f.id = format!("find-{}", uuid::Uuid::new_v4());
+            for id in &mut f.evidence_event_ids {
+                *id = event_id_map
+                    .get(id)
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("malformed finding event reference: {id}"))?;
+            }
+            for id in &mut f.external_evidence_ids {
+                *id = external_id_map.get(id).cloned().ok_or_else(|| {
+                    anyhow::anyhow!("malformed finding external evidence reference: {id}")
+                })?;
+            }
         }
     }
-    let mut provenance_records: Vec<crate::boundary::ProvenanceRecord> = root
-        .get("provenance_records")
-        .and_then(|v| serde_json::from_value(v.clone()).ok())
-        .unwrap_or_default();
+    let mut provenance_records: Vec<crate::boundary::ProvenanceRecord> =
+        optional_portable_field(&root, "provenance_records")?.unwrap_or_default();
+    let mut provenance_id_map = HashMap::new();
     for p in &mut provenance_records {
         p.run_id = run.id.clone();
         if new_ids {
+            let old = p.id.clone();
             p.id = format!("prov-{}", uuid::Uuid::new_v4());
+            provenance_id_map.insert(old, p.id.clone());
         }
     }
-    let mut trace_identity: Option<crate::boundary::TraceIdentity> = root
-        .get("trace_identity")
-        .filter(|v| !v.is_null())
-        .and_then(|v| serde_json::from_value(v.clone()).ok());
+    if new_ids {
+        for edge in &mut evidence_edges {
+            remap_evidence_endpoint(
+                &mut edge.from_id,
+                &edge.from_kind,
+                &old_run_id,
+                &run.id,
+                &event_id_map,
+                &external_id_map,
+                &containment_id_map,
+                &provenance_id_map,
+            )?;
+            remap_evidence_endpoint(
+                &mut edge.to_id,
+                &edge.to_kind,
+                &old_run_id,
+                &run.id,
+                &event_id_map,
+                &external_id_map,
+                &containment_id_map,
+                &provenance_id_map,
+            )?;
+        }
+    }
+    let mut trace_identity: Option<crate::boundary::TraceIdentity> =
+        optional_portable_field(&root, "trace_identity")?;
     if let Some(ref mut t) = trace_identity {
         t.run_id = run.id.clone();
         if new_ids {
@@ -808,41 +872,33 @@ async fn promote_import(
         }
     }
 
-    // 1.7: restore boundary trust artifacts (best-effort).
+    // 1.7 trust artifacts are part of the archive contract. A partial restore
+    // would produce a deceptively complete-looking run, so any failure rolls
+    // the import back.
     if let Some(b) = extras.boundary {
-        if let Err(e) = store.put_run_boundary(b).await {
-            tracing::warn!(error = %e, "portable import: boundary skipped");
-        }
+        store.put_run_boundary(b).await?;
     }
     for r in extras.containment_receipts {
-        if let Err(e) = store.insert_containment_receipt(r).await {
-            tracing::warn!(error = %e, "portable import: containment receipt skipped");
-        }
+        store.insert_containment_receipt(r).await?;
     }
     for e in extras.external_evidence {
-        if let Err(err) = store.insert_external_evidence(e).await {
-            tracing::warn!(error = %err, "portable import: external evidence skipped");
-        }
+        anyhow::ensure!(
+            store.insert_external_evidence(e).await?,
+            "portable external evidence conflicts with an existing source identity: {}",
+            e.id
+        );
     }
     for e in extras.evidence_edges {
-        if let Err(err) = store.insert_evidence_edge(e).await {
-            tracing::warn!(error = %err, "portable import: evidence edge skipped");
-        }
+        store.insert_evidence_edge(e).await?;
     }
     for f in extras.boundary_findings {
-        if let Err(err) = store.insert_boundary_finding(f).await {
-            tracing::warn!(error = %err, "portable import: finding skipped");
-        }
+        store.insert_boundary_finding(f).await?;
     }
     for p in extras.provenance_records {
-        if let Err(err) = store.insert_provenance_record(p).await {
-            tracing::warn!(error = %err, "portable import: provenance skipped");
-        }
+        store.insert_provenance_record(p).await?;
     }
     if let Some(t) = extras.trace_identity {
-        if let Err(e) = store.put_trace_identity(t).await {
-            tracing::warn!(error = %e, "portable import: trace identity skipped");
-        }
+        store.put_trace_identity(t).await?;
     }
 
     Ok(blobs_restored)
@@ -966,10 +1022,7 @@ fn validate_event_blob_refs(
             if !is_valid_blob_key(s) {
                 // looks_like allows uppercase; content keys are lowercase hex.
                 if version >= 2 {
-                    anyhow::bail!(
-                        "event {} metadata.{mk} has invalid blob key: {s}",
-                        ev.id
-                    );
+                    anyhow::bail!("event {} metadata.{mk} has invalid blob key: {s}", ev.id);
                 }
                 continue;
             }
@@ -1224,10 +1277,7 @@ mod tests {
             ..Default::default()
         }
         .with_fingerprint();
-        store
-            .put_run_experiment_meta(&run.id, &meta)
-            .await
-            .unwrap();
+        store.put_run_experiment_meta(&run.id, &meta).await.unwrap();
         let mut receipt = crate::verification::VerificationReceipt::new(
             &run.id,
             crate::verification::VerifierType::CommandExit,

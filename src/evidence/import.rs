@@ -6,7 +6,8 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use super::event::{
-    EvidenceAction, EvidenceIntegrity, EvidenceOutcome, ExternalEvidenceEvent, EVIDENCE_EVENT_SCHEMA,
+    EvidenceAction, EvidenceIntegrity, EvidenceOutcome, ExternalEvidenceEvent,
+    EVIDENCE_EVENT_SCHEMA,
 };
 
 /// Soft defaults for import bounds (override via [`ImportOptions`]).
@@ -93,8 +94,8 @@ pub fn import_evidence_ndjson(
     path: &Path,
     opts: &ImportOptions,
 ) -> anyhow::Result<(Vec<ExternalEvidenceEvent>, ImportReport)> {
-    let meta = std::fs::metadata(path)
-        .map_err(|e| anyhow::anyhow!("stat {}: {e}", path.display()))?;
+    let meta =
+        std::fs::metadata(path).map_err(|e| anyhow::anyhow!("stat {}: {e}", path.display()))?;
     if meta.len() > opts.max_bytes {
         anyhow::bail!(
             "evidence file {} is {} bytes (max {})",
@@ -213,8 +214,7 @@ fn parse_line(line: &str, opts: &ImportOptions) -> Result<ExternalEvidenceEvent,
     // Native schema path.
     if let Some(schema) = obj.get("schema").and_then(|v| v.as_str()) {
         if schema == EVIDENCE_EVENT_SCHEMA {
-            return serde_json::from_value(value)
-                .map_err(|e| format!("schema decode: {e}"));
+            return serde_json::from_value(value).map_err(|e| format!("schema decode: {e}"));
         }
         return Err(format!("unsupported schema {schema:?}"));
     }
@@ -336,8 +336,7 @@ fn map_generic(
         ev.attributes.insert(k.clone(), v.clone());
     }
     ev.integrity = EvidenceIntegrity::Unverified;
-    ev.transformations
-        .push("mapped_from_generic_jsonl".into());
+    ev.transformations.push("mapped_from_generic_jsonl".into());
     Ok(ev)
 }
 
@@ -378,6 +377,15 @@ fn apply_integrity_checks(
     opts: &ImportOptions,
 ) -> Result<(), String> {
     use sha2::{Digest, Sha256};
+
+    // The NDJSON schema intentionally has no signature material, signer
+    // identity, or configured trust root. Therefore an input document cannot
+    // authenticate itself merely by spelling `signed_verified`.
+    if matches!(ev.integrity, EvidenceIntegrity::SignedVerified) {
+        ev.integrity = EvidenceIntegrity::Unverified;
+        ev.transformations
+            .push("signed_verified_demoted_no_verifier".into());
+    }
 
     let mut hash_verified = false;
 
@@ -428,7 +436,7 @@ fn apply_integrity_checks(
             if hash_verified {
                 ""
             } else {
-                " (provide original_payload_hash + payload or signed_verified)"
+                " (provide original_payload_hash + payload; signed evidence requires a trusted verifier)"
             }
         ));
     }
@@ -485,9 +493,7 @@ mod tests {
     fn bounds_max_events() {
         let mut lines = String::new();
         for i in 0..10 {
-            lines.push_str(&format!(
-                r#"{{"id":"{i}","action":"exec"}}"#
-            ));
+            lines.push_str(&format!(r#"{{"id":"{i}","action":"exec"}}"#));
             lines.push('\n');
         }
         let opts = ImportOptions {
@@ -522,8 +528,7 @@ mod tests {
     #[test]
     fn rejects_payload_hash_mismatch() {
         let ndjson = r#"{"schema":"blackbox.evidence.event/v1","id":"evext-bad","source":"proxy","sensor":"proxy","source_event_id":"h2","ingested_at":"2026-07-22T00:00:00Z","action":"http_request","outcome":"denied","integrity":"unverified","original_payload_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","attributes":{"payload":"nope"}}"#;
-        let (_e, report) =
-            import_evidence_ndjson_str(ndjson, &ImportOptions::default()).unwrap();
+        let (_e, report) = import_evidence_ndjson_str(ndjson, &ImportOptions::default()).unwrap();
         assert_eq!(report.accepted, 0);
         assert_eq!(report.rejected, 1);
         assert!(report.rejects[0].reason.contains("payload hash mismatch"));
@@ -553,5 +558,25 @@ mod tests {
         assert_eq!(report.accepted, 0);
         assert_eq!(report.rejected, 1);
         assert!(report.rejects[0].reason.contains("reject_unverified"));
+    }
+
+    #[test]
+    fn self_asserted_signed_verified_is_demoted() {
+        let ndjson = r#"{"schema":"blackbox.evidence.event/v1","id":"evext-signed","source":"proxy","sensor":"proxy","source_event_id":"sig-1","ingested_at":"2026-07-22T00:00:00Z","action":"http_request","outcome":"denied","integrity":"signed_verified"}"#;
+        let (events, report) =
+            import_evidence_ndjson_str(ndjson, &ImportOptions::default()).unwrap();
+        assert_eq!(report.accepted, 1);
+        assert!(matches!(events[0].integrity, EvidenceIntegrity::Unverified));
+        assert!(events[0]
+            .transformations
+            .iter()
+            .any(|t| t == "signed_verified_demoted_no_verifier"));
+
+        let opts = ImportOptions {
+            reject_unverified: true,
+            ..Default::default()
+        };
+        let (_, report) = import_evidence_ndjson_str(ndjson, &opts).unwrap();
+        assert_eq!(report.rejected, 1);
     }
 }

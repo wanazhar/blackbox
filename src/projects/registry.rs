@@ -130,12 +130,7 @@ impl ProjectRegistry {
         let mut out: Vec<_> = self.entries.iter().collect();
         if let Some(ref sub) = q.name_substr {
             let s = sub.to_lowercase();
-            out.retain(|e| {
-                e.project_root
-                    .to_string_lossy()
-                    .to_lowercase()
-                    .contains(&s)
-            });
+            out.retain(|e| e.project_root.to_string_lossy().to_lowercase().contains(&s));
         }
         out.sort_by_key(|e| std::cmp::Reverse(e.indexed_at));
         if let Some(lim) = q.limit {
@@ -185,10 +180,7 @@ pub fn discover_project_stores(roots: &[PathBuf]) -> Vec<ProjectIndexEntry> {
     let mut out = Vec::new();
     let now = Utc::now();
     for root in roots {
-        let candidates = [
-            root.join(".blackbox/blackbox.db"),
-            root.join("blackbox.db"),
-        ];
+        let candidates = [root.join(".blackbox/blackbox.db"), root.join("blackbox.db")];
         for store_path in candidates {
             if store_path.is_file() {
                 out.push(ProjectIndexEntry {

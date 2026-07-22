@@ -160,9 +160,13 @@ pub fn evaluate_provenance(
     let mut status = ProvenanceStatus::Valid;
     let mut record_ids: Vec<String> = records.iter().map(|r| r.id.clone()).collect();
 
-    if records.is_empty() && require_observation {
+    let observation_missing = require_observation
+        && records
+            .iter()
+            .all(|record| record.observed_sources.is_empty() && record.content_hash.is_none());
+    if observation_missing {
         status = ProvenanceStatus::InsufficientEvidence;
-        reasons.push("no provenance records and observation required".into());
+        reasons.push("no observed provenance evidence and observation required".into());
     }
 
     for r in records {
@@ -189,6 +193,7 @@ pub fn evaluate_provenance(
                     ProvenanceStatus::InvalidUndeclaredSource
                         | ProvenanceStatus::InvalidNetwork
                         | ProvenanceStatus::InvalidCredential
+                        | ProvenanceStatus::InvalidLineage
                 ) {
                     status = ProvenanceStatus::InsufficientEvidence;
                 }
@@ -219,9 +224,9 @@ pub fn evaluate_provenance(
         ) {
             if let Some(ref dest) = ev.destination {
                 let allowed = allowed_sources.iter().any(|a| dest.contains(a))
-                    || records.iter().any(|r| {
-                        r.declared_sources.iter().any(|d| dest.contains(d))
-                    });
+                    || records
+                        .iter()
+                        .any(|r| r.declared_sources.iter().any(|d| dest.contains(d)));
                 if !allowed {
                     status = ProvenanceStatus::InvalidNetwork;
                     reasons.push(format!(
@@ -269,7 +274,11 @@ pub fn record_from_observations(
     r.observed_sources = observed.to_vec();
     let undeclared: Vec<_> = observed
         .iter()
-        .filter(|o| !declared.iter().any(|d| o.contains(d) || d.contains(o.as_str())))
+        .filter(|o| {
+            !declared
+                .iter()
+                .any(|d| o.contains(d) || d.contains(o.as_str()))
+        })
         .cloned()
         .collect();
     if undeclared.is_empty() {
@@ -297,12 +306,8 @@ mod tests {
         r.declared_sources.push("local-dataset".into());
         r.status = ProvenanceStatus::Valid;
 
-        let mut ext = ExternalEvidenceEvent::new(
-            "proxy",
-            "proxy",
-            "1",
-            EvidenceAction::HttpRequest,
-        );
+        let mut ext =
+            ExternalEvidenceEvent::new("proxy", "proxy", "1", EvidenceAction::HttpRequest);
         ext.destination = Some("https://answers.leaked.example/q1".into());
 
         let report = evaluate_provenance(
@@ -316,10 +321,7 @@ mod tests {
         assert!(report.task_passed.unwrap());
         assert!(report.provenance_gate_failed);
         assert!(!report.overall_passed);
-        assert_eq!(
-            report.provenance_status,
-            ProvenanceStatus::InvalidNetwork
-        );
+        assert_eq!(report.provenance_status, ProvenanceStatus::InvalidNetwork);
     }
 
     #[test]

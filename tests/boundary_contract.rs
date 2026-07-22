@@ -45,6 +45,10 @@ async fn containment_receipts_immutable_append() {
     let mut run = Run::new(vec!["true".into()], "/tmp".into());
     run.status = RunStatus::Succeeded;
     store.insert_run(&run).await.unwrap();
+    let resolved = resolve_boundary(&BoundaryContract::eval_example(), ResolveOpts::default())
+        .unwrap()
+        .with_run_id(&run.id);
+    store.put_run_boundary(&resolved).await.unwrap();
 
     let mut configured = ContainmentReceipt::new(
         &run.id,
@@ -55,6 +59,7 @@ async fn containment_receipts_immutable_append() {
     );
     configured.scope.control = Some("network_egress".into());
     configured.scope.backend = Some("none".into());
+    configured.policy_hash = Some(resolved.policy_hash.clone());
     store.insert_containment_receipt(&configured).await.unwrap();
 
     let mut verified = ContainmentReceipt::new(
@@ -64,13 +69,19 @@ async fn containment_receipts_immutable_append() {
         "canary",
         "post_run_canary",
     );
+    verified.scope.control = Some("network_egress".into());
+    verified.policy_hash = Some(resolved.policy_hash.clone());
+    verified.evidence_hashes.push("a".repeat(64));
     verified.parent_receipt_id = Some(configured.id.clone());
     store.insert_containment_receipt(&verified).await.unwrap();
 
     let list = store.list_containment_receipts(&run.id).await.unwrap();
     assert_eq!(list.len(), 2);
     assert_eq!(list[0].id, configured.id);
-    assert_eq!(list[1].parent_receipt_id.as_deref(), Some(configured.id.as_str()));
+    assert_eq!(
+        list[1].parent_receipt_id.as_deref(),
+        Some(configured.id.as_str())
+    );
     // Configured ≠ verified
     assert_ne!(list[0].claim_state, list[1].claim_state);
 }
@@ -83,12 +94,9 @@ async fn fail_closed_gate_rejects_missing_and_configured_only() {
     run.exit_code = Some(0);
     store.insert_run(&run).await.unwrap();
 
-    let resolved = resolve_boundary(
-        &BoundaryContract::eval_example(),
-        ResolveOpts::default(),
-    )
-    .unwrap()
-    .with_run_id(&run.id);
+    let resolved = resolve_boundary(&BoundaryContract::eval_example(), ResolveOpts::default())
+        .unwrap()
+        .with_run_id(&run.id);
     store.put_run_boundary(&resolved).await.unwrap();
 
     // Task succeeded, but only a configured receipt + partial sensors.
@@ -126,21 +134,21 @@ async fn verified_held_with_sensors_passes_gate() {
     run.status = RunStatus::Succeeded;
     store.insert_run(&run).await.unwrap();
 
-    let resolved = resolve_boundary(
-        &BoundaryContract::eval_example(),
-        ResolveOpts::default(),
-    )
-    .unwrap()
-    .with_run_id(&run.id);
+    let resolved = resolve_boundary(&BoundaryContract::eval_example(), ResolveOpts::default())
+        .unwrap()
+        .with_run_id(&run.id);
     store.put_run_boundary(&resolved).await.unwrap();
 
-    let verified = ContainmentReceipt::new(
+    let mut verified = ContainmentReceipt::new(
         &run.id,
         ContainmentClaimState::Verified,
         ContainmentResult::Held,
         "canary",
         "post_run_canary",
     );
+    verified.scope.control = Some("network_egress".into());
+    verified.policy_hash = Some(resolved.policy_hash.clone());
+    verified.evidence_hashes.push("a".repeat(64));
     store.insert_containment_receipt(&verified).await.unwrap();
 
     let observed = ObservedEvidence {
@@ -188,11 +196,16 @@ async fn policy_hash_stable_and_inheritance() {
     assert_eq!(r1.policy_hash, r2.policy_hash);
     assert!(r1.contract.fail_closed);
     assert!(r1.contract.prohibited.iter().any(|p| p == "public_network"));
-    assert!(r1.contract.allowed.targets.iter().any(|t| t == "local-range"));
+    assert!(r1
+        .contract
+        .allowed
+        .targets
+        .iter()
+        .any(|t| t == "local-range"));
 }
 
 #[tokio::test]
-async fn overwrite_boundary_replaces_payload() {
+async fn boundary_policy_is_immutable_after_first_write() {
     let store = Arc::new(SqliteStore::open_memory().unwrap());
     let run = Run::new(vec!["true".into()], "/tmp".into());
     store.insert_run(&run).await.unwrap();
@@ -210,10 +223,10 @@ async fn overwrite_boundary_replaces_payload() {
     let rb = resolve_boundary(&b, ResolveOpts::default())
         .unwrap()
         .with_run_id(&run.id);
-    store.put_run_boundary(&rb).await.unwrap();
+    let error = store.put_run_boundary(&rb).await.unwrap_err();
+    assert!(error.to_string().contains("immutable"));
 
     let loaded = store.get_run_boundary(&run.id).await.unwrap().unwrap();
-    assert_eq!(loaded.contract.purpose.as_deref(), Some("second"));
-    assert_eq!(loaded.policy_hash, rb.policy_hash);
-    assert_ne!(loaded.policy_hash, ra.policy_hash);
+    assert_eq!(loaded.contract.purpose.as_deref(), Some("first"));
+    assert_eq!(loaded.policy_hash, ra.policy_hash);
 }

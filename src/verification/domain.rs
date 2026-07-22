@@ -92,11 +92,13 @@ pub fn match_receipt_to_failure(
         }
     }
 
-    if matches!(receipt.verifier_type, crate::verification::VerifierType::CommandExit)
-        && receipt
-            .command_argv
-            .iter()
-            .any(|a| a.contains("test") || a.contains("cargo"))
+    if matches!(
+        receipt.verifier_type,
+        crate::verification::VerifierType::CommandExit
+    ) && receipt
+        .command_argv
+        .iter()
+        .any(|a| a.contains("test") || a.contains("cargo"))
     {
         score += 10;
         reasons.push("test-like verifier command".into());
@@ -190,8 +192,10 @@ mod tests {
     fn scope_match_is_confirmed() {
         let mut fail = TraceEvent::new("r", EventSource::Tool, "tool.result");
         fail.status = EventStatus::Error;
-        fail.metadata
-            .insert("message".into(), serde_json::json!("invalid_session failed"));
+        fail.metadata.insert(
+            "message".into(),
+            serde_json::json!("invalid_session failed"),
+        );
         let mut r = VerificationReceipt::new("r", VerifierType::CommandExit);
         r.status = VerificationStatus::Passed;
         r.verified_scope = Some("invalid_session".into());
@@ -212,6 +216,12 @@ mod tests {
         r.verified_scope = Some("unrelated-suite".into());
         r.command_argv = vec!["true".into()];
         let m = match_receipt_to_failure(&r, Some(&fail), &[]);
-        assert!(!satisfies_strict_gate(&r, &m) || matches!(m.class, DomainMatchClass::Unknown | DomainMatchClass::WeaklyCorrelated));
+        assert!(
+            !satisfies_strict_gate(&r, &m)
+                || matches!(
+                    m.class,
+                    DomainMatchClass::Unknown | DomainMatchClass::WeaklyCorrelated
+                )
+        );
     }
 }

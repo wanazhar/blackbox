@@ -89,16 +89,10 @@ pub mod backup;
 pub mod boundary;
 /// Execution budget policy and Linux enforcement.
 pub mod budget;
-/// External evidence ingestion (1.7).
-pub mod evidence;
-/// Local forensic analysis packs (1.7).
-pub mod forensic;
-/// Multi-run incident reconstruction (1.7).
-pub mod incident;
-/// Capture layers: PTY, git, filesystem, process.
-pub mod capture;
 /// Reproducibility capsules.
 pub mod capsule;
+/// Capture layers: PTY, git, filesystem, process.
+pub mod capture;
 /// Experimental MCP cassette record / replay.
 pub mod cassette;
 /// Clap CLI definition and command dispatch.
@@ -113,10 +107,16 @@ pub mod context;
 pub mod core;
 /// Content hashing and sealed-export crypto.
 pub mod crypto;
+/// External evidence ingestion (1.7).
+pub mod evidence;
 /// Experiments, multi-run reports, and CI gates.
 pub mod experiment;
 /// Export formats: portable JSON, JSONL, HTML.
 pub mod export;
+/// Local forensic analysis packs (1.7).
+pub mod forensic;
+/// Multi-run incident reconstruction (1.7).
+pub mod incident;
 /// Durable ingest spool and crash recovery.
 pub mod ingest;
 /// Store integrity checks (`fsck`) and repair.

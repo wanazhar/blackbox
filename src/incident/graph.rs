@@ -70,6 +70,47 @@ pub struct GraphInputs {
     pub run_end_times: Vec<(String, Option<DateTime<Utc>>)>,
 }
 
+fn record_technique(
+    techniques: &mut std::collections::BTreeMap<String, TechniqueReuse>,
+    first_seen: &mut std::collections::BTreeMap<String, DateTime<Utc>>,
+    technique: String,
+    run_id: String,
+    reference: String,
+    at: DateTime<Utc>,
+) {
+    match first_seen.get(&technique).copied() {
+        None => {
+            first_seen.insert(technique.clone(), at);
+            techniques.insert(
+                technique.clone(),
+                TechniqueReuse {
+                    technique,
+                    first_run_id: run_id,
+                    first_ref: reference,
+                    reused_by_runs: Vec::new(),
+                },
+            );
+        }
+        Some(previous) if at < previous => {
+            first_seen.insert(technique.clone(), at);
+            if let Some(entry) = techniques.get_mut(&technique) {
+                let old_first = std::mem::replace(&mut entry.first_run_id, run_id);
+                entry.first_ref = reference;
+                if old_first != entry.first_run_id && !entry.reused_by_runs.contains(&old_first) {
+                    entry.reused_by_runs.push(old_first);
+                }
+            }
+        }
+        Some(_) => {
+            if let Some(entry) = techniques.get_mut(&technique) {
+                if entry.first_run_id != run_id && !entry.reused_by_runs.contains(&run_id) {
+                    entry.reused_by_runs.push(run_id);
+                }
+            }
+        }
+    }
+}
+
 /// Build incident graph: first discovery, reuse, earliest signal, continued activity.
 pub fn build_incident_graph(incident: &Incident, inputs: &GraphInputs) -> IncidentGraph {
     let mut nodes = Vec::new();
@@ -91,6 +132,7 @@ pub fn build_incident_graph(incident: &Incident, inputs: &GraphInputs) -> Incide
 
     let mut techniques: std::collections::BTreeMap<String, TechniqueReuse> =
         std::collections::BTreeMap::new();
+    let mut first_seen = std::collections::BTreeMap::new();
     let mut signals: Vec<IncidentSignal> = Vec::new();
     let mut finding_count = 0usize;
 
@@ -104,28 +146,19 @@ pub fn build_incident_graph(incident: &Incident, inputs: &GraphInputs) -> Incide
                 label: Some(f.summary.clone()),
                 at: Some(f.created_at),
             });
-            let tech = f
-                .token
-                .clone()
-                .unwrap_or_else(|| f.detector.clone());
-            techniques
-                .entry(tech.clone())
-                .and_modify(|t| {
-                    if !t.reused_by_runs.contains(run_id) && t.first_run_id != *run_id {
-                        t.reused_by_runs.push(run_id.clone());
-                    }
-                })
-                .or_insert(TechniqueReuse {
-                    technique: tech,
-                    first_run_id: run_id.clone(),
-                    first_ref: f.id.clone(),
-                    reused_by_runs: Vec::new(),
-                });
+            let tech = f.token.clone().unwrap_or_else(|| f.detector.clone());
+            record_technique(
+                &mut techniques,
+                &mut first_seen,
+                tech,
+                run_id.clone(),
+                f.id.clone(),
+                f.created_at,
+            );
 
             if matches!(
                 f.severity,
-                crate::boundary::FindingSeverity::High
-                    | crate::boundary::FindingSeverity::Critical
+                crate::boundary::FindingSeverity::High | crate::boundary::FindingSeverity::Critical
             ) {
                 signals.push(IncidentSignal {
                     ref_id: f.id.clone(),
@@ -148,27 +181,19 @@ pub fn build_incident_graph(incident: &Incident, inputs: &GraphInputs) -> Incide
                 ev.action.as_str(),
                 ev.destination.as_deref().unwrap_or("")
             )),
-            at: ev.occurred_at.or(Some(ev.ingested_at)),
+            at: Some(ev.occurred_at.or(ev.observed_at).unwrap_or(ev.ingested_at)),
         });
         if let Some(ref dest) = ev.destination {
             let tech = format!("dest:{dest}");
-            let rid = ev
-                .linked_run_id
-                .clone()
-                .unwrap_or_else(|| "unknown".into());
-            techniques
-                .entry(tech.clone())
-                .and_modify(|t| {
-                    if !t.reused_by_runs.contains(&rid) && t.first_run_id != rid {
-                        t.reused_by_runs.push(rid.clone());
-                    }
-                })
-                .or_insert(TechniqueReuse {
-                    technique: tech,
-                    first_run_id: rid,
-                    first_ref: ev.id.clone(),
-                    reused_by_runs: Vec::new(),
-                });
+            let rid = ev.linked_run_id.clone().unwrap_or_else(|| "unknown".into());
+            record_technique(
+                &mut techniques,
+                &mut first_seen,
+                tech,
+                rid,
+                ev.id.clone(),
+                ev.occurred_at.or(ev.observed_at).unwrap_or(ev.ingested_at),
+            );
         }
     }
 
@@ -180,39 +205,37 @@ pub fn build_incident_graph(incident: &Incident, inputs: &GraphInputs) -> Incide
         ) {
             let tech = e.relation.as_str().to_string();
             let rid = e.run_id.clone().unwrap_or_else(|| "unknown".into());
-            techniques
-                .entry(tech.clone())
-                .and_modify(|t| {
-                    if !t.reused_by_runs.contains(&rid) && t.first_run_id != rid {
-                        t.reused_by_runs.push(rid.clone());
-                    }
-                })
-                .or_insert(TechniqueReuse {
-                    technique: tech,
-                    first_run_id: rid,
-                    first_ref: e.id.clone(),
-                    reused_by_runs: Vec::new(),
-                });
+            record_technique(
+                &mut techniques,
+                &mut first_seen,
+                tech,
+                rid,
+                e.id.clone(),
+                e.created_at,
+            );
         }
     }
 
     signals.sort_by_key(|s| s.at);
     let earliest_signal = signals.into_iter().next();
     let continued_after_signal = earliest_signal.as_ref().map(|sig| {
-        // Any finding or external evidence after signal, or run end after signal.
+        // A run ending after a signal is not itself evidence of continued
+        // execution. Require a later finding or external observation.
         let after_finding = inputs.findings_by_run.iter().any(|(_, fs)| {
             fs.iter()
                 .any(|f| f.created_at > sig.at && f.id != sig.ref_id)
         });
-        let after_ext = inputs.external.iter().any(|e| {
-            e.occurred_at.unwrap_or(e.ingested_at) > sig.at
-        });
-        let after_run_end = inputs
-            .run_end_times
+        let after_ext = inputs
+            .external
             .iter()
-            .any(|(_, end)| end.map(|t| t > sig.at).unwrap_or(false));
-        after_finding || after_ext || after_run_end
+            .any(|e| e.occurred_at.or(e.observed_at).unwrap_or(e.ingested_at) > sig.at);
+        after_finding || after_ext
     });
+
+    for technique in techniques.values_mut() {
+        technique.reused_by_runs.sort();
+        technique.reused_by_runs.dedup();
+    }
 
     IncidentGraph {
         schema: "blackbox.incident.graph/v1".into(),
@@ -231,9 +254,7 @@ pub fn build_incident_graph(incident: &Incident, inputs: &GraphInputs) -> Incide
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::boundary::{
-        BoundaryFinding, FindingKind, FindingSeverity,
-    };
+    use crate::boundary::{BoundaryFinding, FindingKind, FindingSeverity};
     use crate::incident::{attach_to_incident, Incident, IncidentAttachmentKind};
 
     #[test]
@@ -267,10 +288,7 @@ mod tests {
         let graph = build_incident_graph(
             &inc,
             &GraphInputs {
-                findings_by_run: vec![
-                    ("r1".into(), vec![f1]),
-                    ("r2".into(), vec![f2]),
-                ],
+                findings_by_run: vec![("r2".into(), vec![f2]), ("r1".into(), vec![f1])],
                 ..Default::default()
             },
         );
@@ -284,5 +302,42 @@ mod tests {
             Some("find-1")
         );
         assert_eq!(graph.continued_after_signal, Some(true));
+    }
+
+    #[test]
+    fn run_end_alone_is_not_continued_activity() {
+        let mut incident = Incident::new(Some("single".into()));
+        attach_to_incident(
+            &mut incident,
+            IncidentAttachmentKind::Run,
+            "r1",
+            None::<String>,
+        );
+        let at = Utc::now();
+        let finding = BoundaryFinding {
+            schema: "blackbox.boundary.finding/v1".into(),
+            id: "find-1".into(),
+            run_id: "r1".into(),
+            kind: FindingKind::BoundaryViolation,
+            detector: "credential_access".into(),
+            severity: FindingSeverity::Critical,
+            summary: "credential access".into(),
+            evidence_event_ids: vec![],
+            external_evidence_ids: vec![],
+            token: None,
+            disposition: None,
+            recommendation: None,
+            created_at: at,
+            confidence_note: "deterministic_detector".into(),
+        };
+        let graph = build_incident_graph(
+            &incident,
+            &GraphInputs {
+                findings_by_run: vec![("r1".into(), vec![finding])],
+                run_end_times: vec![("r1".into(), Some(at + chrono::Duration::seconds(10)))],
+                ..Default::default()
+            },
+        );
+        assert_eq!(graph.continued_after_signal, Some(false));
     }
 }

@@ -88,9 +88,7 @@ pub async fn fsck_store(
         report.repair_plan = Some(plan.clone());
         super::repair::apply_repair_plan(store.as_ref(), &plan).await?;
         // Re-check aggregates after repair.
-        report
-            .sections_checked
-            .push("repair_applied".into());
+        report.sections_checked.push("repair_applied".into());
     } else if report.repairable_count > 0 {
         report.repair_plan = Some(plan_repairs(&report));
     }
@@ -198,10 +196,7 @@ async fn check_runs_and_events(
                             section: "blobs".into(),
                             severity: FsckSeverity::Error,
                             code: "invalid_blob_key".into(),
-                            message: format!(
-                                "event {} has invalid {field} key",
-                                short(&ev.id)
-                            ),
+                            message: format!("event {} has invalid {field} key", short(&ev.id)),
                             run_id: Some(run.id.clone()),
                             event_id: Some(ev.id.clone()),
                             checkpoint_id: None,
@@ -296,9 +291,7 @@ async fn check_aggregates(store: &dyn TraceStore, report: &mut FsckReport) -> an
 
 async fn check_checkpoints(store: &dyn TraceStore, report: &mut FsckReport) -> anyhow::Result<()> {
     report.sections_checked.push("checkpoints".into());
-    report
-        .sections_checked
-        .push("workspace manifests".into());
+    report.sections_checked.push("workspace manifests".into());
     let runs = store.list_runs().await?;
     for run in &runs {
         for cp in store.get_checkpoints(&run.id).await? {

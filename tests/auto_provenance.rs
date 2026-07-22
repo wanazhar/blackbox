@@ -23,25 +23,14 @@ async fn auto_provenance_from_dataset_case_and_observed_network() {
         role: ExperimentRole::Candidate,
         ..Default::default()
     };
-    store
-        .put_run_experiment_meta(&run.id, &meta)
-        .await
-        .unwrap();
+    store.put_run_experiment_meta(&run.id, &meta).await.unwrap();
 
-    let mut ext = ExternalEvidenceEvent::new(
-        "proxy",
-        "proxy",
-        "x1",
-        EvidenceAction::HttpRequest,
-    );
+    let mut ext = ExternalEvidenceEvent::new("proxy", "proxy", "x1", EvidenceAction::HttpRequest);
     ext.destination = Some("https://answers.leaked.example/q".into());
     ext.linked_run_id = Some(run.id.clone());
     store.insert_external_evidence(&ext).await.unwrap();
 
-    let external = store
-        .list_external_evidence_for_run(&run.id)
-        .await
-        .unwrap();
+    let external = store.list_external_evidence_for_run(&run.id).await.unwrap();
     let rec = auto_provenance_record(&run.id, Some(&meta), &external).unwrap();
     assert!(rec
         .declared_sources
@@ -56,11 +45,11 @@ async fn auto_provenance_from_dataset_case_and_observed_network() {
 }
 
 #[tokio::test]
-async fn auto_provenance_valid_when_only_declared() {
+async fn auto_provenance_insufficient_when_only_declared() {
     let meta = RunExperimentMeta {
         dataset_case: Some("local-only".into()),
         ..Default::default()
     };
     let rec = auto_provenance_record("r1", Some(&meta), &[]).unwrap();
-    assert_eq!(rec.status, ProvenanceStatus::Valid);
+    assert_eq!(rec.status, ProvenanceStatus::InsufficientEvidence);
 }

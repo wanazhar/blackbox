@@ -22,9 +22,13 @@ fn filesystem_events_count_as_file_ops() {
         agg.observe(&e);
     }
     // Non-ops
-    for (i, kind) in ["filesystem.snapshot", "filesystem.overflow", "filesystem.out_of_scope"]
-        .iter()
-        .enumerate()
+    for (i, kind) in [
+        "filesystem.snapshot",
+        "filesystem.overflow",
+        "filesystem.out_of_scope",
+    ]
+    .iter()
+    .enumerate()
     {
         let mut e = TraceEvent::new("r", EventSource::Filesystem, kind);
         e.sequence = 10 + i as u64;

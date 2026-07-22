@@ -123,10 +123,7 @@ pub fn evaluate_gate(report: &ExperimentReport, config: &GateConfig) -> GateResu
             if v.run_count < min {
                 failures.push(GateRuleFailure {
                     rule: "min_attempts".into(),
-                    message: format!(
-                        "variant {} has {} runs; need >= {min}",
-                        v.key, v.run_count
-                    ),
+                    message: format!("variant {} has {} runs; need >= {min}", v.key, v.run_count),
                     contributing_runs: vec![],
                 });
             }
@@ -175,10 +172,7 @@ pub fn evaluate_gate(report: &ExperimentReport, config: &GateConfig) -> GateResu
             } else if config.fail_on_insufficient_evidence {
                 failures.push(GateRuleFailure {
                     rule: "require_provenance_ok".into(),
-                    message: format!(
-                        "variant {} missing provenance trust data",
-                        v.key
-                    ),
+                    message: format!("variant {} missing provenance trust data", v.key),
                     contributing_runs: vec![],
                 });
             }
@@ -204,9 +198,7 @@ pub fn evaluate_gate(report: &ExperimentReport, config: &GateConfig) -> GateResu
         for v in &report.variants {
             // Prefer domain-confirmed rate when the report provides it.
             let rate = if config.require_domain_confirmed {
-                v.domain_confirmed_rate
-                    .or(v.verified_rate)
-                    .unwrap_or(0.0)
+                v.domain_confirmed_rate.or(v.verified_rate).unwrap_or(0.0)
             } else {
                 v.verified_rate.unwrap_or(0.0)
             };

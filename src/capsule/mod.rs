@@ -4,5 +4,5 @@ pub mod create;
 pub mod inspect;
 
 pub use create::{create_capsule, CapsuleCreateOpts};
-pub use inspect::{inspect_capsule, verify_capsule_integrity, CapsuleInspectReport};
 pub use create::{CapsuleCompleteness, CapsuleManifest, TransformationEntry};
+pub use inspect::{inspect_capsule, verify_capsule_integrity, CapsuleInspectReport};

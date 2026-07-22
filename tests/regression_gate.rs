@@ -36,9 +36,12 @@ fn gate_fails_insufficient_evidence() {
     );
     assert!(!result.passed);
     assert_eq!(result.exit_code, 1);
-    assert!(result.failures.iter().any(|f| f.rule.contains("insufficient")
-        || f.rule == "min_attempts"
-        || f.rule == "insufficient_evidence"));
+    assert!(result
+        .failures
+        .iter()
+        .any(|f| f.rule.contains("insufficient")
+            || f.rule == "min_attempts"
+            || f.rule == "insufficient_evidence"));
 }
 
 #[test]
@@ -96,7 +99,8 @@ fn gate_min_verified_rate_ignores_execution_only() {
         },
     );
     assert!(!result.passed);
-    assert!(result.failures.iter().any(|f| {
-        f.rule == "min_verified_rate" || f.rule == "min_domain_confirmed_rate"
-    }));
+    assert!(result
+        .failures
+        .iter()
+        .any(|f| { f.rule == "min_verified_rate" || f.rule == "min_domain_confirmed_rate" }));
 }

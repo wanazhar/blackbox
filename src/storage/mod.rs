@@ -446,10 +446,7 @@ pub trait TraceStore: Send + Sync + 'static {
     }
 
     /// List run ids linked to an experiment (stable order).
-    async fn list_runs_for_experiment(
-        &self,
-        _experiment_id: &str,
-    ) -> anyhow::Result<Vec<String>> {
+    async fn list_runs_for_experiment(&self, _experiment_id: &str) -> anyhow::Result<Vec<String>> {
         Ok(Vec::new())
     }
 
@@ -461,19 +458,16 @@ pub trait TraceStore: Send + Sync + 'static {
 
     // ── Boundary contracts & containment (1.7) ──
 
-    /// Store the immutable resolved boundary for a run (overwrite replaces prior).
-    async fn put_run_boundary(
-        &self,
-        _boundary: &ResolvedBoundary,
-    ) -> anyhow::Result<()> {
+    /// Store the immutable resolved boundary for a run.
+    ///
+    /// Repeating the same policy hash is idempotent. A different policy for an
+    /// already-governed run must be rejected rather than rewriting history.
+    async fn put_run_boundary(&self, _boundary: &ResolvedBoundary) -> anyhow::Result<()> {
         anyhow::bail!("run boundaries not supported by this store backend")
     }
 
     /// Load the resolved boundary for a run, if any.
-    async fn get_run_boundary(
-        &self,
-        _run_id: &str,
-    ) -> anyhow::Result<Option<ResolvedBoundary>> {
+    async fn get_run_boundary(&self, _run_id: &str) -> anyhow::Result<Option<ResolvedBoundary>> {
         Ok(None)
     }
 
@@ -509,6 +503,18 @@ pub trait TraceStore: Send + Sync + 'static {
         _event: &ExternalEvidenceEvent,
     ) -> anyhow::Result<bool> {
         anyhow::bail!("external evidence not supported by this store backend")
+    }
+
+    /// Atomically insert external evidence and correlation edges.
+    ///
+    /// Returns `(new_events, new_edges)`. Backends that cannot provide one
+    /// transaction must reject the operation rather than silently degrading.
+    async fn insert_external_evidence_batch(
+        &self,
+        _events: &[ExternalEvidenceEvent],
+        _edges: &[EvidenceEdge],
+    ) -> anyhow::Result<(usize, usize)> {
+        anyhow::bail!("atomic external evidence import not supported by this store backend")
     }
 
     /// List external evidence for a linked run (oldest first).
@@ -551,18 +557,12 @@ pub trait TraceStore: Send + Sync + 'static {
     }
 
     /// Load run trace identity.
-    async fn get_trace_identity(
-        &self,
-        _run_id: &str,
-    ) -> anyhow::Result<Option<TraceIdentity>> {
+    async fn get_trace_identity(&self, _run_id: &str) -> anyhow::Result<Option<TraceIdentity>> {
         Ok(None)
     }
 
     /// Insert a provenance record.
-    async fn insert_provenance_record(
-        &self,
-        _record: &ProvenanceRecord,
-    ) -> anyhow::Result<()> {
+    async fn insert_provenance_record(&self, _record: &ProvenanceRecord) -> anyhow::Result<()> {
         anyhow::bail!("provenance records not supported by this store backend")
     }
 
@@ -575,18 +575,12 @@ pub trait TraceStore: Send + Sync + 'static {
     }
 
     /// Insert a boundary finding.
-    async fn insert_boundary_finding(
-        &self,
-        _finding: &BoundaryFinding,
-    ) -> anyhow::Result<()> {
+    async fn insert_boundary_finding(&self, _finding: &BoundaryFinding) -> anyhow::Result<()> {
         anyhow::bail!("boundary findings not supported by this store backend")
     }
 
     /// List boundary findings for a run.
-    async fn list_boundary_findings(
-        &self,
-        _run_id: &str,
-    ) -> anyhow::Result<Vec<BoundaryFinding>> {
+    async fn list_boundary_findings(&self, _run_id: &str) -> anyhow::Result<Vec<BoundaryFinding>> {
         Ok(Vec::new())
     }
 

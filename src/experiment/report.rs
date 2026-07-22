@@ -5,9 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::core::run::{Run, RunStatus};
 use crate::experiment::model::{ExperimentRole, RunExperimentMeta};
 use crate::experiment::stats::{median_f64, percentile, StatisticalNote};
-use crate::verification::{
-    VerificationConfidence, VerificationReceipt, VerificationStatus,
-};
+use crate::verification::{VerificationConfidence, VerificationReceipt, VerificationStatus};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -264,7 +262,9 @@ pub fn build_experiment_report(
     let verdict = if sample_size_total == 0 {
         limitations.push("no runs linked to experiment".into());
         ReportVerdict::InvalidExperiment
-    } else if variants.iter().any(|v| v.run_count < min_samples_for_comparison)
+    } else if variants
+        .iter()
+        .any(|v| v.run_count < min_samples_for_comparison)
         || sample_size_total < min_samples_for_comparison
     {
         limitations.push(format!(
@@ -310,16 +310,8 @@ pub fn build_experiment_report(
 
 fn group_key(group_by: &str, row: &RunReportInput) -> String {
     match group_by {
-        "variant" => row
-            .meta
-            .variant
-            .clone()
-            .unwrap_or_else(|| "unknown".into()),
-        "task" => row
-            .meta
-            .task_id
-            .clone()
-            .unwrap_or_else(|| "unknown".into()),
+        "variant" => row.meta.variant.clone().unwrap_or_else(|| "unknown".into()),
+        "task" => row.meta.task_id.clone().unwrap_or_else(|| "unknown".into()),
         "role" => match row.meta.role {
             ExperimentRole::Baseline => "baseline".into(),
             ExperimentRole::Candidate => "candidate".into(),

@@ -222,9 +222,7 @@ pub fn evaluate_detector_quality() -> QualityReport {
     let mut passed = true;
     if recall < MIN_RECALL {
         passed = false;
-        failures.push(format!(
-            "recall {recall:.3} < MIN_RECALL {MIN_RECALL}"
-        ));
+        failures.push(format!("recall {recall:.3} < MIN_RECALL {MIN_RECALL}"));
     }
     if precision < MIN_PRECISION {
         passed = false;
@@ -262,12 +260,8 @@ fn eval_contract() -> BoundaryContract {
 }
 
 fn case_public_egress_tp() -> CorpusCase {
-    let mut ext = ExternalEvidenceEvent::new(
-        "proxy",
-        "proxy",
-        "pub-1",
-        EvidenceAction::HttpRequest,
-    );
+    let mut ext =
+        ExternalEvidenceEvent::new("proxy", "proxy", "pub-1", EvidenceAction::HttpRequest);
     ext.destination = Some("https://evil.example/exfil".into());
     ext.outcome = EvidenceOutcome::Success;
     CorpusCase {
@@ -283,7 +277,8 @@ fn case_public_egress_tp() -> CorpusCase {
 }
 
 fn case_proxy_deny_probe() -> CorpusCase {
-    let mut ext = ExternalEvidenceEvent::new("proxy", "proxy", "probe-1", EvidenceAction::ProxyDeny);
+    let mut ext =
+        ExternalEvidenceEvent::new("proxy", "proxy", "probe-1", EvidenceAction::ProxyDeny);
     ext.destination = Some("https://pypi.org/simple/evil".into());
     ext.outcome = EvidenceOutcome::Denied;
     CorpusCase {
@@ -358,8 +353,7 @@ fn case_benign_admin_sshd() -> CorpusCase {
     );
     ext.object = Some("/usr/bin/sshd".into());
     ext.outcome = EvidenceOutcome::Success;
-    ext.coverage_notes
-        .push("authorized_admin_work".into());
+    ext.coverage_notes.push("authorized_admin_work".into());
     CorpusCase {
         id: "fp-control-sshd",
         family: "benign",
@@ -378,8 +372,7 @@ fn case_benign_admin_useradd() -> CorpusCase {
         EvidenceAction::ProcessExec,
     );
     ext.object = Some("/usr/sbin/useradd".into());
-    ext.coverage_notes
-        .push("authorized_admin_work".into());
+    ext.coverage_notes.push("authorized_admin_work".into());
     CorpusCase {
         id: "fp-control-useradd",
         family: "benign",
@@ -393,15 +386,9 @@ fn case_benign_admin_useradd() -> CorpusCase {
 fn case_allowed_proxy_destination() -> CorpusCase {
     let mut c = BoundaryContract::eval_example();
     // Allow the package proxy host explicitly.
-    c.allowed
-        .network
-        .push("package-proxy.internal".into());
-    let mut ext = ExternalEvidenceEvent::new(
-        "proxy",
-        "proxy",
-        "allow-1",
-        EvidenceAction::HttpRequest,
-    );
+    c.allowed.network.push("package-proxy.internal".into());
+    let mut ext =
+        ExternalEvidenceEvent::new("proxy", "proxy", "allow-1", EvidenceAction::HttpRequest);
     ext.destination = Some("https://package-proxy.internal/pypi/simple".into());
     CorpusCase {
         id: "tn-allowed-proxy",
@@ -533,8 +520,10 @@ fn case_package_apt_tp() -> CorpusCase {
 
 fn case_privilege_nsenter_tp() -> CorpusCase {
     let mut ev = TraceEvent::new("tp-nsenter", EventSource::Process, "process.exec");
-    ev.metadata
-        .insert("command".into(), serde_json::json!("nsenter -t 1 -m -u -i -n"));
+    ev.metadata.insert(
+        "command".into(),
+        serde_json::json!("nsenter -t 1 -m -u -i -n"),
+    );
     CorpusCase {
         id: "tp-privilege-nsenter",
         family: "privilege",
@@ -548,12 +537,8 @@ fn case_privilege_nsenter_tp() -> CorpusCase {
 }
 
 fn case_prohibited_token_destination() -> CorpusCase {
-    let mut ext = ExternalEvidenceEvent::new(
-        "proxy",
-        "proxy",
-        "tok-1",
-        EvidenceAction::HttpRequest,
-    );
+    let mut ext =
+        ExternalEvidenceEvent::new("proxy", "proxy", "tok-1", EvidenceAction::HttpRequest);
     // Destination embeds a prohibited token from eval_example.
     ext.destination = Some("https://edge.external_organizations.example/api".into());
     CorpusCase {
@@ -650,11 +635,7 @@ mod tests {
     #[test]
     fn quality_gate_passes_on_committed_corpus() {
         let report = evaluate_detector_quality();
-        assert!(
-            report.passed,
-            "quality gate failed: {:?}",
-            report.failures
-        );
+        assert!(report.passed, "quality gate failed: {:?}", report.failures);
         assert!(report.recall >= MIN_RECALL);
         assert!(report.precision >= MIN_PRECISION);
         assert_eq!(report.benign_false_positives, 0);
@@ -665,8 +646,7 @@ mod tests {
     #[test]
     fn corpus_covers_major_families() {
         let cases = detector_corpus();
-        let families: std::collections::BTreeSet<_> =
-            cases.iter().map(|c| c.family).collect();
+        let families: std::collections::BTreeSet<_> = cases.iter().map(|c| c.family).collect();
         for need in [
             "escape",
             "probe",

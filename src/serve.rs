@@ -822,7 +822,11 @@ fn boundary_trust_html(
     if !trust.has_boundary && findings.is_empty() && external.is_empty() {
         return String::new();
     }
-    let ok = if trust.trust_ok { "trust-ok" } else { "trust-bad" };
+    let ok = if trust.trust_ok {
+        "trust-ok"
+    } else {
+        "trust-bad"
+    };
     let mut finding_rows = String::new();
     for f in findings.iter().take(20) {
         finding_rows.push_str(&format!(
@@ -899,7 +903,11 @@ async fn incidents_page(State(state): State<AppState>) -> Result<Html<String>, A
   <tbody>{rows}</tbody>
 </table>"#,
             n = page.incidents.len(),
-            more = if page.has_more { " (more available via API cursor)" } else { "" },
+            more = if page.has_more {
+                " (more available via API cursor)"
+            } else {
+                ""
+            },
             rows = rows,
         ),
     )))
@@ -957,10 +965,7 @@ async fn incident_page(
         && (inc.earliest_signal_id.is_none() || inc.continued_after_signal.is_none())
     {
         let mut updated = inc.clone();
-        updated.earliest_signal_id = graph
-            .earliest_signal
-            .as_ref()
-            .map(|s| s.ref_id.clone());
+        updated.earliest_signal_id = graph.earliest_signal.as_ref().map(|s| s.ref_id.clone());
         updated.continued_after_signal = graph.continued_after_signal;
         updated.updated_at = Some(chrono::Utc::now());
         let _ = state.store.upsert_incident(&updated).await;
@@ -1094,8 +1099,7 @@ fn incident_attach_rows(inc: &crate::incident::Incident) -> String {
         ));
     }
     if attach_rows.is_empty() {
-        attach_rows =
-            r#"<tr><td colspan="3" class="muted">No attachments</td></tr>"#.into();
+        attach_rows = r#"<tr><td colspan="3" class="muted">No attachments</td></tr>"#.into();
     }
     attach_rows
 }
@@ -1132,7 +1136,9 @@ fn incident_technique_rows(graph: &crate::incident::IncidentGraph) -> String {
     rows
 }
 
-fn incident_finding_rows(findings_by_run: &[(String, Vec<crate::boundary::BoundaryFinding>)]) -> String {
+fn incident_finding_rows(
+    findings_by_run: &[(String, Vec<crate::boundary::BoundaryFinding>)],
+) -> String {
     let mut all: Vec<(&str, &crate::boundary::BoundaryFinding)> = Vec::new();
     for (rid, fs) in findings_by_run {
         for f in fs {
@@ -1176,7 +1182,9 @@ fn incident_edge_rows(edges: &[crate::boundary::EvidenceEdge]) -> String {
     rows
 }
 
-fn incident_run_list(findings_by_run: &[(String, Vec<crate::boundary::BoundaryFinding>)]) -> String {
+fn incident_run_list(
+    findings_by_run: &[(String, Vec<crate::boundary::BoundaryFinding>)],
+) -> String {
     let mut out = String::new();
     for (rid, fs) in findings_by_run {
         out.push_str(&format!(
@@ -1932,10 +1940,7 @@ async fn api_incidents(
         ),
         None => None,
     };
-    let page = state
-        .store
-        .list_incidents_page(cur.as_ref(), limit)
-        .await?;
+    let page = state.store.list_incidents_page(cur.as_ref(), limit).await?;
     Ok(Json(page).into_response())
 }
 

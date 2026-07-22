@@ -557,9 +557,7 @@ pub async fn build_summary(
     let latest_verification_status = receipts.last().map(|r| format!("{:?}", r.status));
     let quality = capture_coverage.as_ref().map(|c| c.quality_score as u32);
     let outcome = Some(crate::verification::build_outcome_view(
-        run,
-        &receipts,
-        quality,
+        run, &receipts, quality,
     ));
 
     // 1.7: boundary trust rollup (findings, containment, provenance, evidence gate).

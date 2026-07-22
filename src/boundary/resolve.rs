@@ -188,7 +188,12 @@ mod tests {
         )
         .unwrap();
         assert_eq!(r.contract.purpose.as_deref(), Some("run"));
-        assert!(r.contract.allowed.targets.iter().any(|t| t == "local-range"));
+        assert!(r
+            .contract
+            .allowed
+            .targets
+            .iter()
+            .any(|t| t == "local-range"));
         assert!(r.contract.prohibited.iter().any(|p| p == "public_network"));
         assert_eq!(
             r.contract.required_evidence,

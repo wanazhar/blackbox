@@ -30,10 +30,7 @@ pub fn parse_tap(text: &str) -> TapSummary {
     for line in text.lines() {
         let line = line.trim();
         if let Some(rest) = line.strip_prefix("1..") {
-            s.planned = rest
-                .split_whitespace()
-                .next()
-                .and_then(|n| n.parse().ok());
+            s.planned = rest.split_whitespace().next().and_then(|n| n.parse().ok());
         } else if line.starts_with("ok ") {
             if line.contains("# SKIP") || line.contains("# skip") {
                 s.skipped += 1;

@@ -161,7 +161,8 @@ pub fn run_live_conformance(m: &AdapterManifest, timeout: Duration) -> Validatio
         for (i, line) in reader.lines().enumerate() {
             if std::time::Instant::now() > deadline {
                 let _ = child.kill();
-                r.warnings.push("live conformance: timed out reading stdout".into());
+                r.warnings
+                    .push("live conformance: timed out reading stdout".into());
                 break;
             }
             let Ok(line) = line else {

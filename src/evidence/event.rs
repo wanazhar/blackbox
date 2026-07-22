@@ -306,15 +306,14 @@ impl ExternalEvidenceEvent {
         // payload_blob is a content-addressed key, not a filesystem path.
         if let Some(ref key) = self.payload_blob {
             if !is_plausible_blob_key(key) {
-                errs.push(format!("payload_blob is not a plausible content key: {key:?}"));
+                errs.push(format!(
+                    "payload_blob is not a plausible content key: {key:?}"
+                ));
             }
         }
         // Bound attribute map size (DoS).
         if self.attributes.len() > 128 {
-            errs.push(format!(
-                "too many attributes ({})",
-                self.attributes.len()
-            ));
+            errs.push(format!("too many attributes ({})", self.attributes.len()));
         }
         if errs.is_empty() {
             Ok(())
@@ -395,8 +394,10 @@ mod tests {
     #[test]
     fn validate_rejects_windows_path_attr() {
         let mut e = ExternalEvidenceEvent::new("proxy", "proxy", "1", EvidenceAction::HttpRequest);
-        e.attributes
-            .insert("file_path".into(), serde_json::json!(r"C:\Windows\System32\config"));
+        e.attributes.insert(
+            "file_path".into(),
+            serde_json::json!(r"C:\Windows\System32\config"),
+        );
         assert!(e.validate().is_err());
     }
 
@@ -409,7 +410,8 @@ mod tests {
 
     #[test]
     fn validate_allows_absolute_process_object() {
-        let mut e = ExternalEvidenceEvent::new("audit", "process", "1", EvidenceAction::ProcessExec);
+        let mut e =
+            ExternalEvidenceEvent::new("audit", "process", "1", EvidenceAction::ProcessExec);
         e.object = Some("/usr/bin/sshd".into());
         e.validate().unwrap();
     }

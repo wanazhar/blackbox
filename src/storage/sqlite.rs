@@ -1198,6 +1198,17 @@ impl TraceStore for SqliteStore {
                 "DELETE FROM run_aggregates WHERE run_id = ?1",
                 params![run_id],
             );
+            // V10 evidence tables intentionally permit external/unlinked rows,
+            // so they do not have run foreign keys. Explicitly remove imported
+            // run-scoped artifacts to make rollback complete.
+            let _ = tx.execute(
+                "DELETE FROM evidence_edges WHERE run_id = ?1",
+                params![run_id],
+            );
+            let _ = tx.execute(
+                "DELETE FROM external_evidence WHERE linked_run_id = ?1",
+                params![run_id],
+            );
             let n = tx
                 .execute("DELETE FROM runs WHERE id = ?1", params![run_id])
                 .context("failed to delete run")?;
@@ -2112,19 +2123,44 @@ impl TraceStore for SqliteStore {
         &self,
         boundary: &crate::boundary::ResolvedBoundary,
     ) -> anyhow::Result<()> {
+        if let Err(errors) = boundary.contract.validate() {
+            anyhow::bail!("invalid boundary contract: {}", errors.join("; "));
+        }
+        let computed_hash = crate::boundary::policy_hash_of(&boundary.contract)?;
+        anyhow::ensure!(
+            computed_hash == boundary.policy_hash,
+            "boundary policy hash mismatch (declared {}, computed {})",
+            boundary.policy_hash,
+            computed_hash
+        );
         let payload = serde_json::to_string(boundary)?;
         let resolved = boundary.resolved_at.to_rfc3339();
         let run_id = boundary.run_id.clone();
         let policy_hash = boundary.policy_hash.clone();
         {
             let conn = self.lock();
+            let existing = match conn.query_row(
+                "SELECT policy_hash FROM run_boundaries WHERE run_id = ?1",
+                params![run_id],
+                |row| row.get::<_, String>(0),
+            ) {
+                Ok(hash) => Some(hash),
+                Err(rusqlite::Error::QueryReturnedNoRows) => None,
+                Err(e) => return Err(e.into()),
+            };
+            if let Some(existing) = existing {
+                anyhow::ensure!(
+                    existing == policy_hash,
+                    "boundary policy for run {} is immutable (existing {}, attempted {})",
+                    run_id,
+                    existing,
+                    policy_hash
+                );
+                return Ok(());
+            }
             conn.execute(
                 "INSERT INTO run_boundaries (run_id, policy_hash, resolved_at, payload)
-                 VALUES (?1, ?2, ?3, ?4)
-                 ON CONFLICT(run_id) DO UPDATE SET
-                   policy_hash = excluded.policy_hash,
-                   resolved_at = excluded.resolved_at,
-                   payload = excluded.payload",
+                 VALUES (?1, ?2, ?3, ?4)",
                 params![run_id, policy_hash, resolved, payload],
             )?;
         }
@@ -2139,8 +2175,7 @@ impl TraceStore for SqliteStore {
         let run_id = run_id.to_string();
         let result = {
             let conn = self.lock();
-            let mut stmt =
-                conn.prepare("SELECT payload FROM run_boundaries WHERE run_id = ?1")?;
+            let mut stmt = conn.prepare("SELECT payload FROM run_boundaries WHERE run_id = ?1")?;
             match stmt.query_row(params![run_id], |row| row.get::<_, String>(0)) {
                 Ok(p) => Ok(Some(serde_json::from_str(&p)?)),
                 Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
@@ -2155,6 +2190,17 @@ impl TraceStore for SqliteStore {
         &self,
         receipt: &crate::boundary::ContainmentReceipt,
     ) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            receipt.schema == crate::boundary::CONTAINMENT_RECEIPT_SCHEMA,
+            "unsupported containment receipt schema {}",
+            receipt.schema
+        );
+        for hash in &receipt.evidence_hashes {
+            anyhow::ensure!(
+                hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit()),
+                "containment evidence hash must be 64 hexadecimal characters"
+            );
+        }
         let payload = serde_json::to_string(receipt)?;
         let claim_state = serde_json::to_string(&receipt.claim_state)?;
         let result = serde_json::to_string(&receipt.result)?;
@@ -2166,6 +2212,45 @@ impl TraceStore for SqliteStore {
         let method = receipt.method.clone();
         {
             let conn = self.lock();
+            let active_policy = match conn.query_row(
+                "SELECT policy_hash FROM run_boundaries WHERE run_id = ?1",
+                params![run_id],
+                |row| row.get::<_, String>(0),
+            ) {
+                Ok(hash) => Some(hash),
+                Err(rusqlite::Error::QueryReturnedNoRows) => None,
+                Err(e) => return Err(e.into()),
+            };
+            if let Some(ref claimed) = policy_hash {
+                anyhow::ensure!(
+                    active_policy.as_deref() == Some(claimed.as_str()),
+                    "containment receipt policy hash does not match the run boundary"
+                );
+            }
+            if receipt.is_verified_held() {
+                anyhow::ensure!(
+                    active_policy.is_some() && policy_hash == active_policy,
+                    "verified-held containment receipt must bind to the active boundary"
+                );
+                anyhow::ensure!(
+                    !receipt.evidence_hashes.is_empty(),
+                    "verified-held containment receipt requires supporting evidence hashes"
+                );
+            }
+            if let Some(ref parent_id) = parent {
+                let parent_run = conn.query_row(
+                    "SELECT run_id, policy_hash FROM containment_receipts WHERE id = ?1",
+                    params![parent_id],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+                );
+                let (parent_run, parent_policy) = parent_run.with_context(|| {
+                    format!("containment parent receipt not found: {parent_id}")
+                })?;
+                anyhow::ensure!(
+                    parent_run == run_id && parent_policy == policy_hash,
+                    "containment receipt parent must belong to the same run and policy"
+                );
+            }
             conn.execute(
                 "INSERT INTO containment_receipts
                    (id, run_id, created_at, claim_state, result, method, parent_receipt_id, policy_hash, payload)
@@ -2275,6 +2360,94 @@ impl TraceStore for SqliteStore {
         result
     }
 
+    async fn insert_external_evidence_batch(
+        &self,
+        events: &[crate::evidence::ExternalEvidenceEvent],
+        edges: &[crate::boundary::EvidenceEdge],
+    ) -> anyhow::Result<(usize, usize)> {
+        let event_rows = events
+            .iter()
+            .map(|event| {
+                Ok((
+                    event.id.clone(),
+                    event.source.clone(),
+                    event.sensor.clone(),
+                    event.source_event_id.clone(),
+                    event.linked_run_id.clone(),
+                    event.occurred_at.map(|t| t.to_rfc3339()),
+                    event.ingested_at.to_rfc3339(),
+                    event.action.as_str().to_string(),
+                    event.original_payload_hash.clone(),
+                    serde_json::to_string(event)?,
+                ))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let edge_rows = edges
+            .iter()
+            .map(|edge| {
+                Ok((
+                    edge.id.clone(),
+                    edge.run_id.clone(),
+                    edge.relation.as_str().to_string(),
+                    edge.confidence.as_str().to_string(),
+                    edge.created_at.to_rfc3339(),
+                    edge.to_id.clone(),
+                    serde_json::to_string(edge)?,
+                ))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+
+        let result = {
+            let conn = self.lock();
+            let tx = conn
+                .unchecked_transaction()
+                .context("failed to start external evidence import transaction")?;
+            let mut inserted_ids = std::collections::HashSet::new();
+            for (
+                id,
+                source,
+                sensor,
+                source_event_id,
+                linked,
+                occurred,
+                ingested,
+                action,
+                hash,
+                payload,
+            ) in event_rows
+            {
+                let changed = tx.execute(
+                    "INSERT OR IGNORE INTO external_evidence
+                       (id, source, sensor, source_event_id, linked_run_id, occurred_at, ingested_at, action, payload_hash, payload)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                    params![id, source, sensor, source_event_id, linked, occurred, ingested, action, hash, payload],
+                )?;
+                if changed == 1 {
+                    inserted_ids.insert(id);
+                }
+            }
+
+            let mut inserted_edges = 0usize;
+            for (id, run_id, relation, confidence, created, to_id, payload) in edge_rows {
+                // Batch correlation targets imported evidence. Do not manufacture
+                // duplicate edges when the evidence row was deduplicated.
+                if !inserted_ids.contains(&to_id) {
+                    continue;
+                }
+                inserted_edges += tx.execute(
+                    "INSERT INTO evidence_edges (id, run_id, relation, confidence, created_at, payload)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![id, run_id, relation, confidence, created, payload],
+                )?;
+            }
+            tx.commit()
+                .context("failed to commit external evidence import")?;
+            (inserted_ids.len(), inserted_edges)
+        };
+        tokio::task::yield_now().await;
+        Ok(result)
+    }
+
     async fn list_external_evidence_for_run(
         &self,
         run_id: &str,
@@ -2327,8 +2500,7 @@ impl TraceStore for SqliteStore {
         let id = id.to_string();
         let result = {
             let conn = self.lock();
-            let mut stmt =
-                conn.prepare("SELECT payload FROM external_evidence WHERE id = ?1")?;
+            let mut stmt = conn.prepare("SELECT payload FROM external_evidence WHERE id = ?1")?;
             match stmt.query_row(params![id], |row| row.get::<_, String>(0)) {
                 Ok(p) => Ok(Some(serde_json::from_str(&p)?)),
                 Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
@@ -2393,6 +2565,22 @@ impl TraceStore for SqliteStore {
         let trace_id = identity.trace_id.clone();
         {
             let conn = self.lock();
+            let existing = match conn.query_row(
+                "SELECT trace_id FROM run_trace_identity WHERE run_id = ?1",
+                params![run_id],
+                |row| row.get::<_, String>(0),
+            ) {
+                Ok(value) => Some(value),
+                Err(rusqlite::Error::QueryReturnedNoRows) => None,
+                Err(e) => return Err(e.into()),
+            };
+            if let Some(existing) = existing {
+                anyhow::ensure!(
+                    existing == trace_id,
+                    "trace identity for run {} is immutable",
+                    run_id
+                );
+            }
             conn.execute(
                 "INSERT INTO run_trace_identity (run_id, trace_id, payload)
                  VALUES (?1, ?2, ?3)
@@ -2516,10 +2704,7 @@ impl TraceStore for SqliteStore {
         result
     }
 
-    async fn upsert_incident(
-        &self,
-        incident: &crate::incident::Incident,
-    ) -> anyhow::Result<()> {
+    async fn upsert_incident(&self, incident: &crate::incident::Incident) -> anyhow::Result<()> {
         let payload = serde_json::to_string(incident)?;
         let created = incident.created_at.to_rfc3339();
         let updated = incident.updated_at.map(|t| t.to_rfc3339());
@@ -2541,10 +2726,7 @@ impl TraceStore for SqliteStore {
         Ok(())
     }
 
-    async fn get_incident(
-        &self,
-        id: &str,
-    ) -> anyhow::Result<Option<crate::incident::Incident>> {
+    async fn get_incident(&self, id: &str) -> anyhow::Result<Option<crate::incident::Incident>> {
         let id = id.to_string();
         let result = {
             let conn = self.lock();
@@ -2680,9 +2862,7 @@ impl TraceStore for SqliteStore {
         result
     }
 
-    async fn list_experiments(
-        &self,
-    ) -> anyhow::Result<Vec<crate::experiment::ExperimentManifest>> {
+    async fn list_experiments(&self) -> anyhow::Result<Vec<crate::experiment::ExperimentManifest>> {
         let result = {
             let conn = self.lock();
             let mut stmt =
@@ -3446,5 +3626,66 @@ mod tests {
             50,
             "all 50 concurrent inserts should be persisted"
         );
+    }
+
+    #[tokio::test]
+    async fn external_evidence_batch_is_atomic_and_idempotent() {
+        use crate::boundary::{EntityKind, EvidenceEdge, EvidenceRelation};
+        use crate::core::event::Confidence;
+        use crate::evidence::{EvidenceAction, ExternalEvidenceEvent};
+
+        let store = SqliteStore::open_memory().unwrap();
+        let run = Run::new(vec!["true".into()], "/tmp".into());
+        store.insert_run(&run).await.unwrap();
+
+        let mut first = ExternalEvidenceEvent::new(
+            "proxy",
+            "network",
+            "source-1",
+            EvidenceAction::NetworkConnect,
+        );
+        first.linked_run_id = Some(run.id.clone());
+        let mut first_edge = EvidenceEdge::new(
+            EntityKind::Run,
+            &run.id,
+            EntityKind::ExternalEvidence,
+            &first.id,
+            EvidenceRelation::NetworkConnection,
+            Confidence::StronglyCorrelated,
+        );
+        first_edge.run_id = Some(run.id.clone());
+        assert_eq!(
+            store
+                .insert_external_evidence_batch(&[first.clone()], &[first_edge.clone()])
+                .await
+                .unwrap(),
+            (1, 1)
+        );
+        assert_eq!(
+            store
+                .insert_external_evidence_batch(&[first.clone()], &[first_edge.clone()])
+                .await
+                .unwrap(),
+            (0, 0)
+        );
+
+        let mut second = ExternalEvidenceEvent::new(
+            "proxy",
+            "network",
+            "source-2",
+            EvidenceAction::NetworkConnect,
+        );
+        second.linked_run_id = Some(run.id.clone());
+        let mut colliding_edge = first_edge;
+        colliding_edge.to_id = second.id.clone();
+        assert!(store
+            .insert_external_evidence_batch(&[second.clone()], &[colliding_edge])
+            .await
+            .is_err());
+        assert!(store
+            .get_external_evidence(&second.id)
+            .await
+            .unwrap()
+            .is_none());
     }
 }

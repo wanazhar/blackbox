@@ -952,8 +952,8 @@ fn normalize_path(path: &Path) -> PathBuf {
 
 /// Read a path only when it is a regular file (never follow a symlink).
 fn read_regular_file_no_follow(path: &Path) -> anyhow::Result<Vec<u8>> {
-    let meta = std::fs::symlink_metadata(path)
-        .with_context(|| format!("lstat {}", path.display()))?;
+    let meta =
+        std::fs::symlink_metadata(path).with_context(|| format!("lstat {}", path.display()))?;
     if meta.file_type().is_symlink() {
         anyhow::bail!("refusing to follow symlink");
     }

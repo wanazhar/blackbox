@@ -31,10 +31,7 @@ async fn experiment_meta_survives_round_trip() {
         dataset_case: Some("case-1".into()),
         ..Default::default()
     };
-    store
-        .put_run_experiment_meta(&run.id, &meta)
-        .await
-        .unwrap();
+    store.put_run_experiment_meta(&run.id, &meta).await.unwrap();
 
     let loaded = store
         .get_run_experiment_meta(&run.id)

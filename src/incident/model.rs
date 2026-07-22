@@ -120,7 +120,12 @@ mod tests {
     #[test]
     fn attach_run() {
         let mut i = Incident::new(Some("test".into()));
-        attach_to_incident(&mut i, IncidentAttachmentKind::Run, "r1", Some("seed".into()));
+        attach_to_incident(
+            &mut i,
+            IncidentAttachmentKind::Run,
+            "r1",
+            Some("seed".into()),
+        );
         assert_eq!(i.run_ids(), vec!["r1"]);
     }
 }

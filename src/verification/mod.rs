@@ -13,10 +13,6 @@ pub use domain::{
     DomainMatchReport,
 };
 pub use junit::{parse_junit_xml, receipt_from_junit};
-pub use outcome::{
-    build_outcome_view, CaptureStatus, ExecutionStatus, RunOutcomeView,
-};
-pub use receipt::{
-    VerificationConfidence, VerificationReceipt, VerificationStatus, VerifierType,
-};
+pub use outcome::{build_outcome_view, CaptureStatus, ExecutionStatus, RunOutcomeView};
+pub use receipt::{VerificationConfidence, VerificationReceipt, VerificationStatus, VerifierType};
 pub use tap::{parse_tap, receipt_from_tap};

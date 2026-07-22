@@ -245,7 +245,10 @@ fn run_replay(config: ProxyConfig) -> anyhow::Result<ProxyReport> {
     let mut unmatched = 0usize;
     let mut live_passthrough = 0usize;
 
-    type LiveIo = (std::process::ChildStdin, BufReader<std::process::ChildStdout>);
+    type LiveIo = (
+        std::process::ChildStdin,
+        BufReader<std::process::ChildStdout>,
+    );
     let mut live_child: Option<Child> = None;
     let live_io: Arc<Mutex<Option<LiveIo>>> = Arc::new(Mutex::new(None));
 
@@ -309,7 +312,10 @@ fn run_replay(config: ProxyConfig) -> anyhow::Result<ProxyReport> {
             stdout.flush()?;
             continue;
         }
-        if method == "ping" || method == "notifications/initialized" || method.starts_with("notifications/") {
+        if method == "ping"
+            || method == "notifications/initialized"
+            || method.starts_with("notifications/")
+        {
             if id.is_some() && !id.as_ref().map(|v| v.is_null()).unwrap_or(true) {
                 let resp = serde_json::json!({"jsonrpc":"2.0","id": id, "result": {}});
                 writeln!(stdout, "{}", serde_json::to_string(&resp)?)?;
@@ -353,8 +359,13 @@ fn run_replay(config: ProxyConfig) -> anyhow::Result<ProxyReport> {
             method.to_string()
         };
 
-        let (mres, new_cursor) =
-            match_request(config.match_mode, &cassette.entries, cursor, &msg, &tool_name);
+        let (mres, new_cursor) = match_request(
+            config.match_mode,
+            &cassette.entries,
+            cursor,
+            &msg,
+            &tool_name,
+        );
 
         if mres.matched {
             matched += 1;

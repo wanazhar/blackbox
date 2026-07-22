@@ -86,8 +86,9 @@ pub fn auto_provenance_record(
         r.observed_sources = observed;
         if r.observed_sources.is_empty() {
             r.status = ProvenanceStatus::InsufficientEvidence;
-            r.reasons
-                .push("experiment linked but no declared dataset_case and no observed sources".into());
+            r.reasons.push(
+                "experiment linked but no declared dataset_case and no observed sources".into(),
+            );
         } else {
             r.status = ProvenanceStatus::InvalidUndeclaredSource;
             r.reasons
@@ -97,6 +98,11 @@ pub fn auto_provenance_record(
     } else {
         record_from_observations(run_id, &declared, &observed)
     };
+    if observed_n == 0 {
+        rec.status = ProvenanceStatus::InsufficientEvidence;
+        rec.reasons
+            .push("declared provenance has no observed source evidence".into());
+    }
     rec.summary = Some(format!(
         "auto from experiment meta (dataset_case={:?}, observed={})",
         meta.dataset_case, observed_n
@@ -127,24 +133,20 @@ mod tests {
             dataset_case: Some("case-1".into()),
             ..Default::default()
         };
-        let mut ext = ExternalEvidenceEvent::new(
-            "proxy",
-            "proxy",
-            "1",
-            EvidenceAction::HttpRequest,
-        );
+        let mut ext =
+            ExternalEvidenceEvent::new("proxy", "proxy", "1", EvidenceAction::HttpRequest);
         ext.destination = Some("https://cheat.example/a".into());
         let rec = auto_provenance_record("r1", Some(&meta), &[ext]).unwrap();
         assert_eq!(rec.status, ProvenanceStatus::InvalidUndeclaredSource);
     }
 
     #[test]
-    fn declared_only_valid_when_no_extra() {
+    fn declared_only_is_insufficient_without_observation() {
         let meta = RunExperimentMeta {
             dataset_case: Some("case-1".into()),
             ..Default::default()
         };
         let rec = auto_provenance_record("r1", Some(&meta), &[]).unwrap();
-        assert_eq!(rec.status, ProvenanceStatus::Valid);
+        assert_eq!(rec.status, ProvenanceStatus::InsufficientEvidence);
     }
 }

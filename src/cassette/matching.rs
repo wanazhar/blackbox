@@ -172,7 +172,8 @@ pub fn match_request(
             )
         }
         MatchMode::AllowExtra => {
-            let (mut r, c) = match_request(MatchMode::Ordered, entries, cursor, incoming, tool_name);
+            let (mut r, c) =
+                match_request(MatchMode::Ordered, entries, cursor, incoming, tool_name);
             if !r.matched {
                 r.diff = Some("unknown call under allow_extra — policy must pass/deny".into());
             }

@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use blackbox::boundary::{
     correlate_external_batch, detect_boundary_findings, evaluate_provenance,
-    record_from_observations, resolve_boundary, BoundaryContract, CorrelationContext,
-    DetectInputs, ResolveOpts, TraceIdentity,
+    record_from_observations, resolve_boundary, BoundaryContract, CorrelationContext, DetectInputs,
+    ResolveOpts, TraceIdentity,
 };
 use blackbox::core::run::{Run, RunStatus};
 use blackbox::evidence::{
@@ -29,12 +29,9 @@ async fn schema_v10_and_full_pipeline() {
     store.insert_run(&run).await.unwrap();
 
     // Boundary + identity
-    let resolved = resolve_boundary(
-        &BoundaryContract::eval_example(),
-        ResolveOpts::default(),
-    )
-    .unwrap()
-    .with_run_id(&run.id);
+    let resolved = resolve_boundary(&BoundaryContract::eval_example(), ResolveOpts::default())
+        .unwrap()
+        .with_run_id(&run.id);
     store.put_run_boundary(&resolved).await.unwrap();
     let identity = TraceIdentity::mint(&run.id);
     store.put_trace_identity(&identity).await.unwrap();
@@ -59,10 +56,7 @@ async fn schema_v10_and_full_pipeline() {
     // Idempotent re-import
     assert!(!store.insert_external_evidence(&events[0]).await.unwrap());
 
-    let loaded = store
-        .list_external_evidence_for_run(&run.id)
-        .await
-        .unwrap();
+    let loaded = store.list_external_evidence_for_run(&run.id).await.unwrap();
     assert!(loaded.len() >= 2);
 
     // Correlation
@@ -118,12 +112,7 @@ async fn schema_v10_and_full_pipeline() {
     let mut run2 = Run::new(vec!["agent".into()], "/tmp".into());
     run2.status = RunStatus::Succeeded;
     store.insert_run(&run2).await.unwrap();
-    let mut ext2 = ExternalEvidenceEvent::new(
-        "proxy",
-        "proxy",
-        "p2",
-        EvidenceAction::HttpRequest,
-    );
+    let mut ext2 = ExternalEvidenceEvent::new("proxy", "proxy", "p2", EvidenceAction::HttpRequest);
     ext2.destination = Some("https://evil.example/answer".into());
     ext2.linked_run_id = Some(run2.id.clone());
     store.insert_external_evidence(&ext2).await.unwrap();
@@ -166,10 +155,7 @@ async fn schema_v10_and_full_pipeline() {
                     store.list_boundary_findings(&run2.id).await.unwrap(),
                 ),
             ],
-            external: store
-                .list_external_evidence_for_run(&run.id)
-                .await
-                .unwrap(),
+            external: store.list_external_evidence_for_run(&run.id).await.unwrap(),
             edges: store.list_evidence_edges(&run.id).await.unwrap(),
             run_end_times: vec![(run.id.clone(), run.ended_at), (run2.id.clone(), None)],
         },
@@ -194,8 +180,8 @@ async fn schema_v10_and_full_pipeline() {
 
 #[tokio::test]
 async fn forged_trace_id_not_confirmed() {
-    use blackbox::core::event::Confidence;
     use blackbox::boundary::correlate_external_event;
+    use blackbox::core::event::Confidence;
 
     let mut ev = ExternalEvidenceEvent::new("otel", "otel", "1", EvidenceAction::HttpRequest);
     ev.identity.trace_id = Some("forged".into());
@@ -213,8 +199,7 @@ async fn forged_trace_id_not_confirmed() {
 #[tokio::test]
 async fn evidence_import_rejects_malicious_paths() {
     let ndjson = r#"{"id":"x","action":"read","path":"../../etc/passwd"}"#;
-    let (_e, report) =
-        import_evidence_ndjson_str(ndjson, &ImportOptions::default()).unwrap();
+    let (_e, report) = import_evidence_ndjson_str(ndjson, &ImportOptions::default()).unwrap();
     assert_eq!(report.accepted, 0);
     assert!(report.rejected >= 1);
 }

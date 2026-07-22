@@ -42,7 +42,9 @@ pub fn apply_child_rlimits(pid: u32, policy: &BudgetPolicy) -> Vec<String> {
         if let Err(e) = set_prlimit(pid, libc::RLIMIT_CPU, secs, secs) {
             notes.push(format!("prlimit RLIMIT_CPU pid={pid}: {e}"));
         } else {
-            notes.push(format!("prlimit RLIMIT_CPU={secs}s on pid={pid} (CPU-time backstop)"));
+            notes.push(format!(
+                "prlimit RLIMIT_CPU={secs}s on pid={pid} (CPU-time backstop)"
+            ));
         }
     }
     if let Some(n) = policy.max_processes {

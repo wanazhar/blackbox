@@ -64,8 +64,8 @@ async fn soak_extended_multi_scenario() {
             claim_id_note: None,
             ambient: true,
             command: cmd,
-        ..Default::default()
-    };
+            ..Default::default()
+        };
         let run = supervisor.execute(&args).await.expect("ext soak run");
         assert!(
             run.notes.as_deref().unwrap_or("").contains("observe-only"),
@@ -112,8 +112,8 @@ async fn soak_observe_only_repeated_true() {
             claim_id_note: None,
             ambient: true,
             command: vec!["true".into()],
-        ..Default::default()
-    };
+            ..Default::default()
+        };
         let run = supervisor.execute(&args).await.expect("soak run");
         assert_eq!(run.exit_code, Some(0));
         assert!(

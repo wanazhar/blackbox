@@ -75,7 +75,9 @@ pub fn build_boundary_trust(
         let observed = ObservedEvidence {
             present_classes: present_classes.to_vec(),
             containment_receipts: receipts.to_vec(),
-            has_artifact_provenance: !provenance.is_empty(),
+            has_artifact_provenance: provenance
+                .iter()
+                .any(|record| !record.observed_sources.is_empty() || record.content_hash.is_some()),
             ..Default::default()
         };
         let ev = evaluate_required_evidence(Some(b), &observed);
@@ -109,9 +111,11 @@ pub fn build_boundary_trust(
     }
 
     view.containment_receipt_count = receipts.len();
-    view.containment_verified = receipts.iter().any(|r| {
-        matches!(r.claim_state, ContainmentClaimState::Verified)
-            && r.satisfies_required_containment()
+    view.containment_verified = boundary.is_some_and(|b| {
+        receipts.iter().any(|r| {
+            matches!(r.claim_state, ContainmentClaimState::Verified)
+                && r.satisfies_required_containment_for(&b.policy_hash)
+        })
     });
 
     if !provenance.is_empty() || !external.is_empty() {
@@ -167,7 +171,8 @@ pub fn build_boundary_trust(
     // Stricter: if fail_closed and evidence not sufficient → trust_ok false already via gate.
     if view.fail_closed && view.has_boundary {
         if let Some(ref st) = view.evidence_status {
-            if st != EvidenceStatus::Sufficient.as_str() && st != EvidenceStatus::NoBoundary.as_str()
+            if st != EvidenceStatus::Sufficient.as_str()
+                && st != EvidenceStatus::NoBoundary.as_str()
             {
                 view.trust_ok = false;
             }

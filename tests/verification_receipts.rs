@@ -60,10 +60,16 @@ async fn reverify_creates_new_receipt_with_lineage() {
 
     let receipts = store.list_verification_receipts(&run.id).await.unwrap();
     assert_eq!(receipts.len(), 2);
-    assert_eq!(receipts[1].parent_receipt_id.as_deref(), Some(first.id.as_str()));
+    assert_eq!(
+        receipts[1].parent_receipt_id.as_deref(),
+        Some(first.id.as_str())
+    );
     // Original run status unchanged.
     let loaded = store.get_run(&run.id).await.unwrap().unwrap();
     assert!(matches!(loaded.status, RunStatus::Failed));
     // Newest receipt is passed.
-    assert!(matches!(receipts.last().unwrap().status, VerificationStatus::Passed));
+    assert!(matches!(
+        receipts.last().unwrap().status,
+        VerificationStatus::Passed
+    ));
 }

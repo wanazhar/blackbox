@@ -152,7 +152,10 @@ mod tests {
         let cur = decode_incident_cursor(p1.next_cursor.as_deref().unwrap()).unwrap();
         let p2 = page_incidents(&items, Some(&cur), 10);
         assert_eq!(p2.incidents.len(), 10);
-        assert!(!p1.incidents.iter().any(|i| p2.incidents.iter().any(|j| j.id == i.id)));
+        assert!(!p1
+            .incidents
+            .iter()
+            .any(|i| p2.incidents.iter().any(|j| j.id == i.id)));
     }
 
     #[test]

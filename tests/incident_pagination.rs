@@ -30,10 +30,7 @@ async fn list_incidents_page_exhausts_with_cursor() {
     let mut cursor = None;
     let mut pages = 0;
     loop {
-        let page = store
-            .list_incidents_page(cursor.as_ref(), 5)
-            .await
-            .unwrap();
+        let page = store.list_incidents_page(cursor.as_ref(), 5).await.unwrap();
         pages += 1;
         for i in &page.incidents {
             assert!(seen.insert(i.id.clone()), "duplicate {}", i.id);

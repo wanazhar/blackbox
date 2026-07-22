@@ -707,8 +707,7 @@ mod tests {
         agg.observe(&spawned);
 
         for i in 0..10 {
-            let mut sample =
-                TraceEvent::new(run, EventSource::Process, "process.resource.sample");
+            let mut sample = TraceEvent::new(run, EventSource::Process, "process.resource.sample");
             sample.sequence = 2 + i;
             sample.metadata.insert("pid".into(), serde_json::json!(42));
             sample

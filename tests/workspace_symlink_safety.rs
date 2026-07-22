@@ -101,14 +101,19 @@ async fn restore_rejects_absolute_and_traversal_symlinks() {
 
     assert!(dest.path().join("rel_link").exists() || report.restored >= 1);
     // Absolute / traversal links must not be created.
-    assert!(!dest.path().join("abs_link").exists() || {
-        // If present, must not be a symlink to absolute path — we reject creation.
-        false
-    });
+    assert!(
+        !dest.path().join("abs_link").exists() || {
+            // If present, must not be a symlink to absolute path — we reject creation.
+            false
+        }
+    );
     assert!(!dest.path().join("abs_link").exists());
     assert!(!dest.path().join("trav_link").exists());
     assert!(
-        report.limitations.iter().any(|l| l.contains("symlink target rejected")),
+        report
+            .limitations
+            .iter()
+            .any(|l| l.contains("symlink target rejected")),
         "expected rejection limitations: {:?}",
         report.limitations
     );

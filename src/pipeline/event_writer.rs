@@ -323,13 +323,7 @@ impl EventWriter {
                 })
                 .ok()
         });
-        Self::with_start_batched_spool(
-            store,
-            run_id,
-            1,
-            BatchIngestConfig::default(),
-            spool,
-        )
+        Self::with_start_batched_spool(store, run_id, 1, BatchIngestConfig::default(), spool)
     }
 
     fn allocate_source_sequence(&self, source: &EventSource) -> u64 {

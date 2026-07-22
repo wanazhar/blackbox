@@ -31,12 +31,9 @@ fn is_falco_like(obj: &serde_json::Map<String, Value>) -> bool {
 }
 
 fn is_proxy_like(obj: &serde_json::Map<String, Value>) -> bool {
-    let has_url = obj.contains_key("url")
-        || obj.contains_key("request_url")
-        || obj.contains_key("dest_host");
-    let has_proxy_mark = obj
-        .get("proxy")
-        .is_some()
+    let has_url =
+        obj.contains_key("url") || obj.contains_key("request_url") || obj.contains_key("dest_host");
+    let has_proxy_mark = obj.get("proxy").is_some()
         || obj.get("sensor").and_then(|v| v.as_str()) == Some("proxy")
         || obj.get("type").and_then(|v| v.as_str()) == Some("http_proxy");
     has_url && (has_proxy_mark || obj.contains_key("status_code") || obj.contains_key("action"))
@@ -97,7 +94,8 @@ fn map_falco(obj: &serde_json::Map<String, Value>) -> ExternalEvidenceEvent {
     ev.outcome = EvidenceOutcome::Success;
     ev.integrity = EvidenceIntegrity::Unverified;
     ev.transformations.push("mapped_from_falco".into());
-    ev.attributes.insert("rule".into(), Value::String(rule.into()));
+    ev.attributes
+        .insert("rule".into(), Value::String(rule.into()));
     ev
 }
 
@@ -163,8 +161,12 @@ fn map_process_audit(obj: &serde_json::Map<String, Value>) -> ExternalEvidenceEv
         .and_then(|v| v.as_str())
         .unwrap_or("process")
         .to_string();
-    let mut ev =
-        ExternalEvidenceEvent::new("linux-audit", "process", source_event_id, EvidenceAction::ProcessExec);
+    let mut ev = ExternalEvidenceEvent::new(
+        "linux-audit",
+        "process",
+        source_event_id,
+        EvidenceAction::ProcessExec,
+    );
     ev.object = Some(exe);
     if let Some(pid) = obj.get("pid").and_then(|v| v.as_i64()) {
         ev.identity.pid = Some(pid);

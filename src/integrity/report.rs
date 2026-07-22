@@ -136,10 +136,7 @@ impl FsckReport {
             self.mode,
             if self.ok { "OK" } else { "ISSUES" }
         ));
-        out.push_str(&format!(
-            "sections: {}\n",
-            self.sections_checked.join(", ")
-        ));
+        out.push_str(&format!("sections: {}\n", self.sections_checked.join(", ")));
         out.push_str(&format!(
             "errors={} warnings={} repairable={}\n",
             self.error_count, self.warning_count, self.repairable_count
@@ -151,10 +148,7 @@ impl FsckReport {
             ));
         }
         if let Some(ref plan) = self.repair_plan {
-            out.push_str(&format!(
-                "repair plan: {} action(s)\n",
-                plan.actions.len()
-            ));
+            out.push_str(&format!("repair plan: {} action(s)\n", plan.actions.len()));
             for a in &plan.actions {
                 out.push_str(&format!("  - {}: {}\n", a.kind, a.description));
             }

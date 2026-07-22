@@ -1541,86 +1541,50 @@ async fn cmd_run(cli: &Cli, args: &RunArgs) -> anyhow::Result<()> {
         contained: args.contained,
         ..Default::default()
     };
-    let supervisor = RunSupervisor::new(Arc::clone(&store))
+    // Resolve the authored policy before allocating or launching a child. A
+    // malformed policy is a setup error even when the policy itself is not
+    // fail-closed: the user explicitly requested a governed run.
+    let prepared_boundary = if let Some(ref boundary_path) = args.boundary {
+        use crate::boundary::{load_boundary_file, resolve_boundary, ResolveOpts};
+        let leaf = load_boundary_file(boundary_path)?;
+        let mut parents = Vec::new();
+        for path in &args.boundary_parent {
+            parents.push(load_boundary_file(path)?);
+        }
+        Some(resolve_boundary(
+            &leaf,
+            ResolveOpts {
+                parents,
+                force_fail_closed: args.boundary_fail_closed.then_some(true),
+                ..Default::default()
+            },
+        )?)
+    } else {
+        None
+    };
+
+    let mut supervisor = RunSupervisor::new(Arc::clone(&store))
         .with_policy(policy)
         .with_budget(budget);
+    if let Some(boundary) = prepared_boundary {
+        supervisor = supervisor.with_boundary(boundary);
+    }
     let run = supervisor.execute(&args).await?;
 
-    // 1.7: mint trace identity for correlation (always for supervised runs).
+    // 1.7: post-run containment canaries and deterministic findings. Launch
+    // receipts were stored by RunSupervisor before the child was spawned.
     {
-        use crate::boundary::{PropagationChannel, PropagationStatus, TraceIdentity};
-        let mut identity = TraceIdentity::mint(&run.id);
-        identity.record_propagation(
-            PropagationChannel::ChildEnv,
-            PropagationStatus::Attempted,
-            Some("BLACKBOX_TRACE_ID not injected in recorder-neutral mode".into()),
-        );
-        if let Err(e) = store.put_trace_identity(&identity).await {
-            tracing::warn!(error = %e, "failed to store trace identity");
-        }
-    }
-
-    // 1.7: attach resolved boundary contract when --boundary is set.
-    let mut attached_boundary = None;
-    if let Some(ref boundary_path) = args.boundary {
-        match crate::cli_ext::attach_boundary_to_run(
-            store.as_ref(),
-            &run.id,
-            boundary_path,
-            &args.boundary_parent,
-            args.boundary_fail_closed,
-        )
-        .await
-        {
-            Ok(resolved) => {
-                if !cli.json {
-                    eprintln!(
-                        "boundary: attached policy_hash={} to {}",
-                        &resolved.policy_hash[..16.min(resolved.policy_hash.len())],
-                        crate::util::short_id(&run.id)
-                    );
-                }
-                attached_boundary = Some(resolved);
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "failed to attach boundary contract");
-                if !cli.json {
-                    eprintln!("warning: failed to attach boundary: {e}");
-                }
-            }
-        }
-    }
-
-    // 1.7: launch containment canaries (honest claims; not enforcement).
-    {
-        use crate::boundary::{launch_containment_receipts, post_run_canary_receipts, LaunchBackendInfo};
-        let backend = LaunchBackendInfo {
-            backend: if args.contained {
-                "contained".into()
-            } else {
-                "none".into()
-            },
-            isolation_active: args.contained,
-            network_restricted: false,
-            ..Default::default()
-        };
-        let boundary = if attached_boundary.is_some() {
-            attached_boundary.clone()
-        } else {
-            store.get_run_boundary(&run.id).await.ok().flatten()
-        };
-        for r in launch_containment_receipts(&run.id, boundary.as_ref(), &backend) {
-            let _ = store.insert_containment_receipt(&r).await;
-        }
+        use crate::boundary::post_run_canary_receipts;
+        let boundary = store.get_run_boundary(&run.id).await.ok().flatten();
         // Post-run canary from capture/external evidence.
         let events = store.get_events(&run.id).await.unwrap_or_default();
         let external = store
             .list_external_evidence_for_run(&run.id)
             .await
             .unwrap_or_default();
-        let process_present = events.iter().any(|e| {
-            matches!(e.source, crate::core::event::EventSource::Process)
-        });
+        let process_present = events
+            .iter()
+            .any(|e| matches!(e.source, crate::core::event::EventSource::Process));
         let public_egress = external.iter().any(|e| {
             e.destination
                 .as_deref()
@@ -1634,12 +1598,9 @@ async fn cmd_run(cli: &Cli, args: &RunArgs) -> anyhow::Result<()> {
                 .map(|d| d.starts_with("http://") || d.starts_with("https://"))
                 .unwrap_or(false)
         });
-        for r in post_run_canary_receipts(
-            &run.id,
-            boundary.as_ref(),
-            public_egress,
-            process_present,
-        ) {
+        for r in
+            post_run_canary_receipts(&run.id, boundary.as_ref(), public_egress, process_present)
+        {
             let _ = store.insert_containment_receipt(&r).await;
         }
         // Auto-detect findings when boundary present.
@@ -1674,10 +1635,7 @@ async fn cmd_run(cli: &Cli, args: &RunArgs) -> anyhow::Result<()> {
         // Ensure experiment row exists when id provided.
         if let Some(ref exp_id) = args.experiment {
             if store.get_experiment(exp_id).await?.is_none() {
-                let m = crate::experiment::ExperimentManifest::new(
-                    exp_id,
-                    exp_id,
-                );
+                let m = crate::experiment::ExperimentManifest::new(exp_id, exp_id);
                 let _ = store.upsert_experiment(&m).await;
             }
         }
@@ -1712,8 +1670,7 @@ async fn cmd_run(cli: &Cli, args: &RunArgs) -> anyhow::Result<()> {
                         existing.push(m);
                     }
                 }
-                meta.attempt =
-                    Some(crate::experiment::next_attempt_number(&existing, &meta));
+                meta.attempt = Some(crate::experiment::next_attempt_number(&existing, &meta));
             } else {
                 meta.attempt = Some(1);
             }
@@ -1723,7 +1680,10 @@ async fn cmd_run(cli: &Cli, args: &RunArgs) -> anyhow::Result<()> {
             tracing::warn!(error = %e, "failed to store experiment metadata");
         } else if !cli.json {
             if let Some(ref e) = args.experiment {
-                eprintln!("experiment: linked run {} → {e}", crate::util::short_id(&run.id));
+                eprintln!(
+                    "experiment: linked run {} → {e}",
+                    crate::util::short_id(&run.id)
+                );
             }
         }
 
@@ -3421,8 +3381,8 @@ async fn cmd_fork(cli: &Cli, args: &ForkArgs) -> anyhow::Result<()> {
             claim_id_note: None,
             ambient: false,
             command: cmd,
-        ..Default::default()
-    };
+            ..Default::default()
+        };
         return cmd_run(cli, &run_args).await;
     }
 
@@ -4316,8 +4276,8 @@ async fn cmd_setup(cli: &Cli, args: &SetupArgs) -> anyhow::Result<()> {
             claim_id_note: None,
             ambient: false,
             command: vec!["true".into()],
-        ..Default::default()
-    };
+            ..Default::default()
+        };
         match supervisor.execute(&run_args).await {
             Ok(run) => sample_run_id = Some(run.id),
             Err(e) => tracing::warn!(error = %e, "setup sample run failed"),

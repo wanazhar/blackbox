@@ -36,9 +36,7 @@ pub fn plan_repairs(report: &FsckReport) -> RepairPlan {
                 if let Some(ref run_id) = f.run_id {
                     actions.push(RepairAction {
                         kind: "mark_run_failed".into(),
-                        description: format!(
-                            "mark abandoned Running run {run_id} as Failed"
-                        ),
+                        description: format!("mark abandoned Running run {run_id} as Failed"),
                         run_id: Some(run_id.clone()),
                         blob_key: None,
                         auto_safe: true,
@@ -80,9 +78,7 @@ pub fn plan_repairs(report: &FsckReport) -> RepairPlan {
         }
     }
     // Dedup by kind+run_id
-    actions.sort_by(|a, b| {
-        (&a.kind, &a.run_id).cmp(&(&b.kind, &b.run_id))
-    });
+    actions.sort_by(|a, b| (&a.kind, &a.run_id).cmp(&(&b.kind, &b.run_id)));
     actions.dedup_by(|a, b| a.kind == b.kind && a.run_id == b.run_id);
 
     RepairPlan {
@@ -100,10 +96,7 @@ pub fn plan_repairs(report: &FsckReport) -> RepairPlan {
 /// # use blackbox as _;
 /// // `apply_repair_plan` — see module docs for full workflow.
 /// ```
-pub async fn apply_repair_plan(
-    store: &dyn TraceStore,
-    plan: &RepairPlan,
-) -> anyhow::Result<usize> {
+pub async fn apply_repair_plan(store: &dyn TraceStore, plan: &RepairPlan) -> anyhow::Result<usize> {
     let mut applied = 0usize;
     for action in &plan.actions {
         if !action.auto_safe {

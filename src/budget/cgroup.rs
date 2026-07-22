@@ -106,7 +106,10 @@ impl Drop for CgroupScope {
 }
 
 #[cfg(target_os = "linux")]
-fn create_for_pid_linux(pid: u32, policy: &BudgetPolicy) -> Option<(CgroupScope, CgroupApplyReport)> {
+fn create_for_pid_linux(
+    pid: u32,
+    policy: &BudgetPolicy,
+) -> Option<(CgroupScope, CgroupApplyReport)> {
     let needs = policy.max_memory_bytes.is_some()
         || policy.max_cpu_percent.is_some()
         || policy.max_processes.is_some();
@@ -299,7 +302,8 @@ pub fn enrich_capabilities_with_cgroup(
                     c.note = Some("cgroup v2 cpu.max".into());
                 } else if cfg!(target_os = "linux") {
                     c.capability = BudgetCapability::ObservedOnly;
-                    c.note = Some("cgroup cpu.max not applied; RLIMIT_CPU time backstop only".into());
+                    c.note =
+                        Some("cgroup cpu.max not applied; RLIMIT_CPU time backstop only".into());
                 } else {
                     c.capability = BudgetCapability::Unavailable;
                 }

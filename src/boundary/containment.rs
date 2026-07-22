@@ -193,12 +193,28 @@ impl ContainmentReceipt {
         if !self.is_verified_held() {
             return false;
         }
+        if self.policy_hash.as_deref().is_none_or(str::is_empty)
+            || self.evidence_hashes.is_empty()
+            || self.evidence_hashes.iter().any(|hash| !is_sha256(hash))
+        {
+            return false;
+        }
         match self.scope.control.as_deref() {
             None | Some("") => false,
             Some("process_observation") | Some("boundary_contract") => false,
             Some(_) => true,
         }
     }
+
+    /// As [`Self::satisfies_required_containment`], additionally bound to the
+    /// immutable policy currently attached to the run.
+    pub fn satisfies_required_containment_for(&self, policy_hash: &str) -> bool {
+        self.satisfies_required_containment() && self.policy_hash.as_deref() == Some(policy_hash)
+    }
+}
+
+fn is_sha256(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 #[cfg(test)]
@@ -216,8 +232,7 @@ mod tests {
         );
         r.scope.control = Some("network_egress".into());
         r.scope.backend = Some("none".into());
-        r.limitations
-            .push("no network sensor attached".into());
+        r.limitations.push("no network sensor attached".into());
         let json = serde_json::to_string(&r).unwrap();
         let back: ContainmentReceipt = serde_json::from_str(&json).unwrap();
         assert_eq!(r, back);
@@ -226,13 +241,16 @@ mod tests {
 
     #[test]
     fn verified_held_satisfies() {
-        let r = ContainmentReceipt::new(
+        let mut r = ContainmentReceipt::new(
             "run-1",
             ContainmentClaimState::Verified,
             ContainmentResult::Held,
             "canary",
             "post_run_canary",
         );
+        r.scope.control = Some("network_egress".into());
+        r.policy_hash = Some("a".repeat(64));
+        r.evidence_hashes.push("b".repeat(64));
         assert!(r.satisfies_required_containment());
     }
 

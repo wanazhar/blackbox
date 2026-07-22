@@ -63,6 +63,7 @@ pub struct RunSupervisor {
     store: Arc<dyn TraceStore>,
     policy: CapturePolicy,
     budget: crate::budget::BudgetPolicy,
+    boundary: Option<crate::boundary::ResolvedBoundary>,
 }
 
 impl RunSupervisor {
@@ -87,6 +88,7 @@ impl RunSupervisor {
             store,
             policy: CapturePolicy::default(),
             budget: crate::budget::BudgetPolicy::default(),
+            boundary: None,
         }
     }
 
@@ -140,6 +142,16 @@ impl RunSupervisor {
     /// ```
     pub fn with_budget(mut self, budget: crate::budget::BudgetPolicy) -> Self {
         self.budget = budget;
+        self
+    }
+
+    /// Attach a pre-resolved boundary before the run is persisted or launched.
+    ///
+    /// The boundary may have an empty `run_id`; the supervisor binds it to the
+    /// newly allocated run id before storing it. This keeps boundary setup on
+    /// the pre-launch side of the trust boundary.
+    pub fn with_boundary(mut self, boundary: crate::boundary::ResolvedBoundary) -> Self {
+        self.boundary = Some(boundary);
         self
     }
 
@@ -264,6 +276,62 @@ impl RunSupervisor {
             .insert_run(run)
             .await
             .context("failed to persist run record")?;
+
+        // A governed run must publish its immutable policy and correlation
+        // identity before capture starts or the child can be spawned. External
+        // sensors can now resolve both records while the run is live.
+        let boundary = self.boundary.clone().map(|b| b.with_run_id(run.id.clone()));
+        let setup_result = async {
+            if let Some(ref boundary) = boundary {
+                self.store
+                    .put_run_boundary(boundary)
+                    .await
+                    .context("failed to persist pre-launch boundary")?;
+            }
+
+            let mut trace_identity = crate::boundary::TraceIdentity::mint(&run.id);
+            trace_identity.record_propagation(
+                crate::boundary::PropagationChannel::ChildEnv,
+                crate::boundary::PropagationStatus::Missing,
+                Some(
+                    "not injected: recorder neutrality forbids child-visible BLACKBOX_* state"
+                        .into(),
+                ),
+            );
+            self.store
+                .put_trace_identity(&trace_identity)
+                .await
+                .context("failed to persist pre-launch trace identity")?;
+
+            let backend = crate::boundary::LaunchBackendInfo {
+                backend: if self.budget.contained {
+                    "contained".into()
+                } else {
+                    "none".into()
+                },
+                isolation_active: self.budget.contained,
+                network_restricted: false,
+                ..Default::default()
+            };
+            for receipt in
+                crate::boundary::launch_containment_receipts(&run.id, boundary.as_ref(), &backend)
+            {
+                self.store
+                    .insert_containment_receipt(&receipt)
+                    .await
+                    .context("failed to persist pre-launch containment receipt")?;
+            }
+            Ok::<(), anyhow::Error>(())
+        }
+        .await;
+        if let Err(error) = setup_result {
+            // No child exists yet. Remove the incomplete run and every v1.7
+            // artifact so setup failure cannot masquerade as an abandoned run.
+            if let Err(rollback) = self.store.delete_run(&run.id).await {
+                tracing::warn!(error = %rollback, run_id = %run.id, "pre-launch rollback failed");
+            }
+            return Err(error);
+        }
 
         // Nest guard for maybe-run / shell wrappers (1.4 N1):
         // PID marker in runtime dir — not child-visible BLACKBOX_ACTIVE_RUN.
@@ -594,10 +662,12 @@ impl RunSupervisor {
                 let probe = crate::replay::sandbox::probe_contained_backend();
                 be.metadata.insert(
                     "contained_preflight".into(),
-                    serde_json::to_value(&probe).unwrap_or_else(|_| serde_json::json!({
-                        "available": false,
-                        "reason": "probe serialize failed"
-                    })),
+                    serde_json::to_value(&probe).unwrap_or_else(|_| {
+                        serde_json::json!({
+                            "available": false,
+                            "reason": "probe serialize failed"
+                        })
+                    }),
                 );
             }
             let _ = writer.write(be).await;
@@ -828,19 +898,24 @@ impl RunSupervisor {
             let mut budget_breached = false;
             let mut coalescer = TerminalCoalescer::new(CoalescePolicy::default(), insecure_raw);
 
-            let fire_counter_budget =
-                |name: &str, detail: String, tx: &std::sync::Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<crate::budget::BudgetBreachKill>>>>| {
-                    let _ = crate::budget::kill_budget_pid(budget_child_pid);
-                    if let Ok(mut g) = tx.lock() {
-                        if let Some(sender) = g.take() {
-                            let _ = sender.send(crate::budget::BudgetBreachKill {
-                                name: name.into(),
-                                pid: budget_child_pid,
-                                detail,
-                            });
-                        }
+            let fire_counter_budget = |name: &str,
+                                       detail: String,
+                                       tx: &std::sync::Arc<
+                std::sync::Mutex<
+                    Option<tokio::sync::oneshot::Sender<crate::budget::BudgetBreachKill>>,
+                >,
+            >| {
+                let _ = crate::budget::kill_budget_pid(budget_child_pid);
+                if let Ok(mut g) = tx.lock() {
+                    if let Some(sender) = g.take() {
+                        let _ = sender.send(crate::budget::BudgetBreachKill {
+                            name: name.into(),
+                            pid: budget_child_pid,
+                            detail,
+                        });
                     }
-                };
+                }
+            };
             // Overlap-window redactor catches secrets split across PTY chunks.
             let mut stream_redactor = if do_redact {
                 Some(StreamRedactor::new(scanner_term.clone()))
@@ -883,16 +958,13 @@ impl RunSupervisor {
             while let Some(data) = pty_out_rx.recv().await {
                 segment_count += 1;
                 if !budget_breached {
-                    output_bytes_seen =
-                        output_bytes_seen.saturating_add(data.len() as u64);
+                    output_bytes_seen = output_bytes_seen.saturating_add(data.len() as u64);
                     if let Some(max) = max_output_bytes {
                         if max > 0 && output_bytes_seen > max {
                             budget_breached = true;
                             fire_counter_budget(
                                 "output_bytes",
-                                format!(
-                                    "output {output_bytes_seen} bytes exceeded limit {max}"
-                                ),
+                                format!("output {output_bytes_seen} bytes exceeded limit {max}"),
                                 &counter_budget_tx_reader,
                             );
                         }
@@ -1104,17 +1176,13 @@ impl RunSupervisor {
             let wall_fut = async {
                 match wall_watch {
                     Some(h) => h.await.ok().flatten(),
-                    None => {
-                        std::future::pending::<Option<crate::budget::BudgetBreachKill>>().await
-                    }
+                    None => std::future::pending::<Option<crate::budget::BudgetBreachKill>>().await,
                 }
             };
             let proc_fut = async {
                 match proc_watch {
                     Some(h) => h.await.ok().flatten(),
-                    None => {
-                        std::future::pending::<Option<crate::budget::BudgetBreachKill>>().await
-                    }
+                    None => std::future::pending::<Option<crate::budget::BudgetBreachKill>>().await,
                 }
             };
             let counter_fut = async { counter_budget_rx.await.ok() };
@@ -1154,18 +1222,12 @@ impl RunSupervisor {
         if let Some(ref k) = budget_kill {
             let mut be = TraceEvent::new(&run.id, EventSource::System, "run.budget.breach");
             be.status = EventStatus::Error;
-            be.metadata.insert(
-                "budget".into(),
-                serde_json::to_value(k).unwrap_or_default(),
-            );
-            be.metadata.insert(
-                "reason".into(),
-                serde_json::json!(k.detail),
-            );
-            be.metadata.insert(
-                "terminated_by_budget".into(),
-                serde_json::json!(true),
-            );
+            be.metadata
+                .insert("budget".into(), serde_json::to_value(k).unwrap_or_default());
+            be.metadata
+                .insert("reason".into(), serde_json::json!(k.detail));
+            be.metadata
+                .insert("terminated_by_budget".into(), serde_json::json!(true));
             let _ = writer.write(be).await;
             run.notes = Some(crate::util::merge_run_notes(
                 run.notes.take(),
@@ -1433,8 +1495,8 @@ mod tests {
             resume_injection: None,
             claim_id_note: None,
             ambient: false,
-        ..Default::default()
-    };
+            ..Default::default()
+        };
         assert!(args.observe_only);
     }
 }

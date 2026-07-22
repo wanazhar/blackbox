@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use blackbox::core::event::{EventSource, TraceEvent};
 use blackbox::core::run::Run;
-use blackbox::ingest::spool::EventSpool;
 use blackbox::ingest::recover_spool_on_open;
+use blackbox::ingest::spool::EventSpool;
 use blackbox::storage::sqlite::SqliteStore;
 use blackbox::storage::TraceStore;
 

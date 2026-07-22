@@ -99,7 +99,9 @@ fn cassette_secret_store_scan_fixture() {
     );
     // Redaction markers or truncated form should appear instead.
     assert!(
-        dumped.contains("REDACTED") || dumped.contains("***") || dumped.contains("[redacted]")
+        dumped.contains("REDACTED")
+            || dumped.contains("***")
+            || dumped.contains("[redacted]")
             || !dumped.contains("SUPERSECRET"),
         "expected redaction marker in cassette body"
     );

@@ -24,7 +24,9 @@ pub struct IncidentPage {
 
 /// Encode cursor as URL-safe base64 JSON.
 pub fn encode_incident_cursor(c: &IncidentPageCursor) -> String {
-    let json = serde_json::to_vec(c).unwrap_or_default();
+    // DateTime and String serialization are infallible for this concrete type;
+    // do not silently emit an empty, unusable cursor if that contract changes.
+    let json = serde_json::to_vec(c).expect("incident cursor serialization must succeed");
     base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, json)
 }
 

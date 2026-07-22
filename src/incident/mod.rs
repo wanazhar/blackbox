@@ -16,7 +16,9 @@ pub use export::{
     build_incident_export, validate_incident_export, IncidentExport, INCIDENT_EXPORT_SCHEMA,
 };
 pub use graph::{
-    build_incident_graph, GraphInputs, IncidentGraph, IncidentNode, IncidentSignal, TechniqueReuse,
+    build_incident_graph, build_incident_graph_with_limits, GraphInputs, IncidentDetailCount,
+    IncidentFlow, IncidentFlowCounts, IncidentFlowKind, IncidentGraph, IncidentGraphLimits,
+    IncidentGraphTruncation, IncidentNode, IncidentSignal, TechniqueReuse,
 };
 pub use model::{
     attach_to_incident, Incident, IncidentAttachment, IncidentAttachmentKind, INCIDENT_SCHEMA,

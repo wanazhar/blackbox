@@ -23,7 +23,10 @@ documented non-goal consistent with the issue.
 ## path
 
 - `tests/boundary_1_7_completion.rs`
+- `tests/incident_memory_bound.rs`
+- `tests/incident_scale.rs`
 - `src/forensic/pack.rs`
+- `src/forensic/mod.rs`
 - `src/incident/export.rs`
 - `src/cli_ext.rs`
 - `docs/plan/agent-boundary-1.7.md`

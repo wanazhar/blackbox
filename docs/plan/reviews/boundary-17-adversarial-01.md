@@ -162,3 +162,62 @@ the in-memory corpus, but the persistence detector has a material benign false
 positive and the telemetry-deception detectors are unreachable through the
 normal importer/store/detect path. Those P1 findings must be repaired and
 covered end to end before this task can satisfy the 1.7 issue-completion gate.
+
+## Remediation disposition
+
+| Field | Value |
+|---|---|
+| Remediation | `791b844ef4896a6d69c9f4ab8a182d74559ac2a2` |
+| Re-review | Independent inspection plus focused qualification |
+| Final verdict | **Pass** |
+
+The remediation resolves every finding above without weakening evidence
+rejection or idempotency:
+
+- **Ordinary child exit — resolved.** Persistence now requires an explicit
+  terminal lifecycle marker for a supervised root/agent parent/run root, a PID,
+  matching run or session identity, later activity, and `parent_pid` or
+  `ancestor_pid` linkage to that PID. The imported ordinary-child fixture has
+  same-run, same-session later activity and direct PID linkage, but lacks a
+  terminal-parent marker and remains clean.
+- **Telemetry reachability — resolved.** Invalid-signature records remain
+  rejected, and conflicting source-identity records remain deduplicated. The
+  importer/store instead persist bounded, deterministic anomaly records that
+  contain hashes rather than the rejected payload. Both same-batch and
+  across-import conflicts are exercised through import, SQLite persistence, and
+  detection; the rejected/conflicting ordinary records are not admitted.
+- **Fan-out control — resolved.** The NDJSON fixture supplies the parent grouping
+  field for both the eight-worker swarm and eight-process parallel build. The
+  30-second distinct-child window fires for the explicitly delegated swarm and
+  excludes the explicitly classified build group.
+- **Persistence chronology — resolved.** The finding retains the timestamp of
+  the later activity that completes the proof, and the imported fixture asserts
+  that timestamp directly.
+- **Independent fixtures — resolved.** The label-only manifest was replaced by
+  provider-neutral NDJSON inputs for persistence, ordinary child exit, fan-out,
+  and telemetry deception, all parsed by the production importer in the
+  permanent quality test.
+
+### Re-verification
+
+Commands run against the remediation commit:
+
+```text
+cargo test --lib boundary::detect
+cargo test --lib boundary::corpus
+cargo test --test boundary_detector_quality -- --nocapture
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+git diff b92ebef..791b844 --check
+```
+
+All commands passed. The focused quality gate reports 32 cases, 20 TP, 0 FP,
+0 FN, 12 TN, recall 1.000, precision 1.000, and zero benign false positives.
+
+## Final conclusion
+
+**Pass.** The original blockers are closed, the benign controls now traverse
+the risky detector branches, and the production import/store/detect path makes
+telemetry deception observable while retaining fail-closed rejection and
+deduplication behavior. This task no longer blocks the 1.7 issue-completion
+gate.

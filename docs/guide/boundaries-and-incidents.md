@@ -89,7 +89,9 @@ blackbox forensic analyze pack.json --model local-llm \
   --claim "public egress after probe" --cite find-...
 ```
 
-Dashboard: open `/incidents` and each run’s trust panel (findings + policy hash).
+Dashboard: open `/incidents` and each run’s trust panel (findings + policy hash). Incident pages show a **reconstruction graph** (runs + technique reuse curves), earliest-signal banner, techniques table, findings timeline, and correlation edges.
+
+Detector quality is gated in CI (`tests/boundary_detector_quality.rs`): expanded corpus covers escape, probe, credential, package, privilege, transition, and benign controls (min recall 0.85 / precision 0.80).
 
 ### Auto provenance from experiments
 

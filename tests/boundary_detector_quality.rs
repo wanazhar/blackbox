@@ -29,9 +29,28 @@ fn detector_quality_gate_min_recall_precision() {
     assert!(report.recall + f64::EPSILON >= MIN_RECALL);
     assert!(report.precision + f64::EPSILON >= MIN_PRECISION);
     assert_eq!(report.benign_false_positives, MAX_BENIGN_FALSE_POSITIVES);
-    assert!(report.true_positives >= 4, "need labeled positives");
+    assert!(report.true_positives >= 10, "need labeled positives");
+    assert!(report.cases >= 20, "expanded corpus expected");
+    let benign_tn = report
+        .case_results
+        .iter()
+        .filter(|c| c.family == "benign" && c.tn)
+        .count();
     assert!(
-        report.case_results.iter().any(|c| c.family == "benign" && c.tn),
-        "benign control must be true negative"
+        benign_tn >= 5,
+        "need several benign true negatives, got {benign_tn}"
     );
+    for family in [
+        "escape",
+        "probe",
+        "credential",
+        "package",
+        "privilege",
+        "benign",
+    ] {
+        assert!(
+            report.case_results.iter().any(|c| c.family == family),
+            "missing family {family}"
+        );
+    }
 }

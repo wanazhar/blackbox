@@ -47,8 +47,10 @@ Epic: [issue #5](https://github.com/wanazhar/blackbox/issues/5). Plan: [docs/pla
 
 #### Polish (pre-release)
 - Detector **FP/FN quality gate** (`evaluate_detector_quality`, min recall 0.85 / precision 0.80; benign controls must be clean)
+- Expanded corpus (~22 cases): escape, probe, credential, package, privilege, transition, benign admin/dev
 - Incident **cursor pagination** (`list_incidents_page`, CLI `--cursor/--limit`) + **aggregates** on show
 - Dashboard HTML: run trust panel + findings table; `/incidents` and `/incidents/{id}` pages
+- Incident page **reconstruction graph** (SVG runs + reuse curves), earliest-signal banner, techniques/findings/edges tables
 - **Auto provenance** from experiment `dataset_case` / task_id on run end
 
 #### Tests & fixtures

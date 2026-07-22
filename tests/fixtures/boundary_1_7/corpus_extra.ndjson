@@ -1,0 +1,6 @@
+# Extra sensor-shaped samples for docs / manual import (mirrors corpus families)
+{"id":"dns-deny-1","action":"dns_query","destination":"evil.example","outcome":"denied","sensor":"network"}
+{"id":"cred-ext-1","action":"credential_access","object":"~/.ssh/id_ed25519","source":"falco","sensor":"process"}
+{"id":"apt-1","action":"package_install","object":"apt-get install nmap","source":"audit","sensor":"process"}
+{"proxy":true,"url":"https://edge.external_organizations.example/api","action":"allow","id":"tok-1"}
+{"id":"rustc-ok","action":"process_exec","object":"/usr/bin/rustc","source":"audit","sensor":"process","outcome":"success"}

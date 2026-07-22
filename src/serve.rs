@@ -881,6 +881,169 @@ async fn incident_page(
     let Some(inc) = state.store.get_incident(&id).await? else {
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
+
+    // Build full reconstruction graph for the HTML UI.
+    let mut findings_by_run = Vec::new();
+    let mut external = Vec::new();
+    let mut edges = Vec::new();
+    let mut run_end_times = Vec::new();
+    for rid in inc.run_ids() {
+        let findings = state
+            .store
+            .list_boundary_findings(rid)
+            .await
+            .unwrap_or_default();
+        findings_by_run.push((rid.to_string(), findings));
+        external.extend(
+            state
+                .store
+                .list_external_evidence_for_run(rid)
+                .await
+                .unwrap_or_default(),
+        );
+        edges.extend(
+            state
+                .store
+                .list_evidence_edges(rid)
+                .await
+                .unwrap_or_default(),
+        );
+        if let Ok(Some(run)) = state.store.get_run(rid).await {
+            run_end_times.push((rid.to_string(), run.ended_at));
+        }
+    }
+    let graph = crate::incident::build_incident_graph(
+        &inc,
+        &crate::incident::GraphInputs {
+            findings_by_run: findings_by_run.clone(),
+            external: external.clone(),
+            edges: edges.clone(),
+            run_end_times,
+        },
+    );
+    // Persist earliest signal when computed.
+    if graph.earliest_signal.is_some()
+        && (inc.earliest_signal_id.is_none() || inc.continued_after_signal.is_none())
+    {
+        let mut updated = inc.clone();
+        updated.earliest_signal_id = graph
+            .earliest_signal
+            .as_ref()
+            .map(|s| s.ref_id.clone());
+        updated.continued_after_signal = graph.continued_after_signal;
+        updated.updated_at = Some(chrono::Utc::now());
+        let _ = state.store.upsert_incident(&updated).await;
+    }
+
+    let reuse = graph
+        .techniques
+        .iter()
+        .filter(|t| !t.reused_by_runs.is_empty())
+        .count();
+    let aggregates = crate::incident::compute_incident_aggregates(
+        &inc,
+        graph.finding_count,
+        0,
+        graph.finding_count,
+        graph.evidence_count,
+        graph.techniques.len(),
+        reuse,
+    );
+
+    let body = format!(
+        r#"<p><a href="/incidents">← Incidents</a> · <a class="muted" href="/api/incidents/{id}">JSON</a></p>
+<h1>{title}</h1>
+<p class="mono muted">{full}</p>
+{signal_banner}
+<div class="meta">
+  <div><b>Runs</b> {runs}</div>
+  <div><b>Attachments</b> {atts}</div>
+  <div><b>Findings</b> {find_n}</div>
+  <div><b>Evidence</b> {ev_n}</div>
+  <div><b>Techniques</b> {tech_n}</div>
+  <div><b>Reuse</b> {reuse}</div>
+  <div><b>Continued after signal</b> {cont}</div>
+</div>
+{graph_svg}
+<h2>Attachments</h2>
+<table>
+  <thead><tr><th>Kind</th><th>Ref</th><th>Reason</th></tr></thead>
+  <tbody>{attach}</tbody>
+</table>
+<h2>Technique discovery & reuse</h2>
+<table>
+  <thead><tr><th>Technique</th><th>First run</th><th>Reused by</th></tr></thead>
+  <tbody>{tech_rows}</tbody>
+</table>
+<h2>Findings timeline</h2>
+<table>
+  <thead><tr><th>When</th><th>Run</th><th>Sev</th><th>Detector</th><th>Summary</th></tr></thead>
+  <tbody>{finding_rows}</tbody>
+</table>
+<h2>Correlation edges</h2>
+<table>
+  <thead><tr><th>Relation</th><th>Confidence</th><th>From</th><th>To</th><th>Reasons</th></tr></thead>
+  <tbody>{edge_rows}</tbody>
+</table>
+<h2>Linked runs</h2>
+<ul>{run_list}</ul>"#,
+        id = urlencoding(&inc.id),
+        title = html_escape(inc.title.as_deref().unwrap_or("Incident")),
+        full = html_escape(&inc.id),
+        signal_banner = incident_signal_banner(&graph),
+        runs = aggregates.run_count,
+        atts = aggregates.attachment_count,
+        find_n = aggregates.finding_count,
+        ev_n = aggregates.external_evidence_count,
+        tech_n = aggregates.technique_count,
+        reuse = aggregates.reuse_count,
+        cont = graph
+            .continued_after_signal
+            .or(inc.continued_after_signal)
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "—".into()),
+        graph_svg = incident_graph_svg(&graph),
+        attach = incident_attach_rows(&inc),
+        tech_rows = incident_technique_rows(&graph),
+        finding_rows = incident_finding_rows(&findings_by_run),
+        edge_rows = incident_edge_rows(&graph.edges),
+        run_list = incident_run_list(&findings_by_run),
+    );
+    Ok(Html(shell("Incident", &body)).into_response())
+}
+
+fn incident_signal_banner(graph: &crate::incident::IncidentGraph) -> String {
+    let Some(ref s) = graph.earliest_signal else {
+        return r#"<div class="meta"><div><b>Earliest signal</b> none yet</div></div>"#.into();
+    };
+    let cont = graph
+        .continued_after_signal
+        .map(|c| {
+            if c {
+                "yes — activity continued after signal"
+            } else {
+                "no"
+            }
+        })
+        .unwrap_or("unknown");
+    format!(
+        r#"<div class="meta trust-panel trust-bad signal-banner">
+  <div><b>Earliest actionable signal</b></div>
+  <div class="mono">{id}</div>
+  <div>{kind}</div>
+  <div>{summary}</div>
+  <div class="muted">{at}</div>
+  <div><b>Continued after signal</b> {cont}</div>
+</div>"#,
+        id = html_escape(&s.ref_id[..8.min(s.ref_id.len())]),
+        kind = html_escape(&s.kind),
+        summary = html_escape(&s.summary),
+        at = html_escape(&s.at.to_rfc3339()),
+        cont = cont,
+    )
+}
+
+fn incident_attach_rows(inc: &crate::incident::Incident) -> String {
     let mut attach_rows = String::new();
     for a in &inc.attachments {
         let link = if matches!(a.kind, crate::incident::IncidentAttachmentKind::Run) {
@@ -899,53 +1062,209 @@ async fn incident_page(
             html_escape(a.reason.as_deref().unwrap_or("—")),
         ));
     }
-    // Lightweight per-run finding counts for the incident.
-    let mut finding_summary = String::new();
-    for rid in inc.run_ids() {
-        let n = state
-            .store
-            .list_boundary_findings(rid)
-            .await
-            .map(|f| f.len())
-            .unwrap_or(0);
-        finding_summary.push_str(&format!(
+    if attach_rows.is_empty() {
+        attach_rows =
+            r#"<tr><td colspan="3" class="muted">No attachments</td></tr>"#.into();
+    }
+    attach_rows
+}
+
+fn incident_technique_rows(graph: &crate::incident::IncidentGraph) -> String {
+    let mut rows = String::new();
+    for t in &graph.techniques {
+        let reused = if t.reused_by_runs.is_empty() {
+            "—".into()
+        } else {
+            t.reused_by_runs
+                .iter()
+                .map(|r| {
+                    format!(
+                        r#"<a href="/runs/{0}">{1}</a>"#,
+                        urlencoding(r),
+                        html_escape(&r[..8.min(r.len())])
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        rows.push_str(&format!(
+            r#"<tr><td class="mono">{tech}</td><td class="mono"><a href="/runs/{first_u}">{first}</a></td><td>{reused}</td></tr>"#,
+            tech = html_escape(&t.technique),
+            first_u = urlencoding(&t.first_run_id),
+            first = html_escape(&t.first_run_id[..8.min(t.first_run_id.len())]),
+            reused = reused,
+        ));
+    }
+    if rows.is_empty() {
+        rows = r#"<tr><td colspan="3" class="muted">No techniques recorded</td></tr>"#.into();
+    }
+    rows
+}
+
+fn incident_finding_rows(findings_by_run: &[(String, Vec<crate::boundary::BoundaryFinding>)]) -> String {
+    let mut all: Vec<(&str, &crate::boundary::BoundaryFinding)> = Vec::new();
+    for (rid, fs) in findings_by_run {
+        for f in fs {
+            all.push((rid.as_str(), f));
+        }
+    }
+    all.sort_by_key(|(_, f)| f.created_at);
+    let mut rows = String::new();
+    for (rid, f) in all.iter().take(100) {
+        rows.push_str(&format!(
+            r#"<tr><td class="muted">{at}</td><td class="mono"><a href="/runs/{ru}">{r}</a></td><td>{sev}</td><td class="mono">{det}</td><td>{sum}</td></tr>"#,
+            at = html_escape(&f.created_at.to_rfc3339()),
+            ru = urlencoding(rid),
+            r = html_escape(&rid[..8.min(rid.len())]),
+            sev = html_escape(f.severity.as_str()),
+            det = html_escape(&f.detector),
+            sum = html_escape(&f.summary),
+        ));
+    }
+    if rows.is_empty() {
+        rows = r#"<tr><td colspan="5" class="muted">No findings</td></tr>"#.into();
+    }
+    rows
+}
+
+fn incident_edge_rows(edges: &[crate::boundary::EvidenceEdge]) -> String {
+    let mut rows = String::new();
+    for e in edges.iter().take(50) {
+        rows.push_str(&format!(
+            r#"<tr><td class="mono">{rel}</td><td>{conf}</td><td class="mono">{from}</td><td class="mono">{to}</td><td class="muted">{why}</td></tr>"#,
+            rel = html_escape(e.relation.as_str()),
+            conf = html_escape(e.confidence.as_str()),
+            from = html_escape(&e.from_id[..8.min(e.from_id.len())]),
+            to = html_escape(&e.to_id[..8.min(e.to_id.len())]),
+            why = html_escape(&e.reasons.join(", ")),
+        ));
+    }
+    if rows.is_empty() {
+        rows = r#"<tr><td colspan="5" class="muted">No correlation edges</td></tr>"#.into();
+    }
+    rows
+}
+
+fn incident_run_list(findings_by_run: &[(String, Vec<crate::boundary::BoundaryFinding>)]) -> String {
+    let mut out = String::new();
+    for (rid, fs) in findings_by_run {
+        out.push_str(&format!(
             r#"<li><a href="/runs/{0}">{1}</a> — {n} finding(s)</li>"#,
             urlencoding(rid),
             html_escape(&rid[..8.min(rid.len())]),
-            n = n,
+            n = fs.len(),
         ));
     }
-    let body = format!(
-        r#"<p><a href="/incidents">← Incidents</a> · <a class="muted" href="/api/incidents/{id}">JSON</a></p>
-<h1>{title}</h1>
-<p class="mono muted">{full}</p>
-<div class="meta">
-  <div><b>Runs</b> {runs}</div>
-  <div><b>Attachments</b> {atts}</div>
-  <div><b>Earliest signal</b> {signal}</div>
-  <div><b>Continued after signal</b> {cont}</div>
-</div>
-<h2>Attachments</h2>
-<table>
-  <thead><tr><th>Kind</th><th>Ref</th><th>Reason</th></tr></thead>
-  <tbody>{attach}</tbody>
-</table>
-<h2>Linked runs</h2>
-<ul>{findings}</ul>"#,
-        id = urlencoding(&inc.id),
-        title = html_escape(inc.title.as_deref().unwrap_or("Incident")),
-        full = html_escape(&inc.id),
-        runs = inc.run_ids().len(),
-        atts = inc.attachments.len(),
-        signal = html_escape(inc.earliest_signal_id.as_deref().unwrap_or("—")),
-        cont = inc
-            .continued_after_signal
-            .map(|c| c.to_string())
-            .unwrap_or_else(|| "—".into()),
-        attach = attach_rows,
-        findings = finding_summary,
-    );
-    Ok(Html(shell("Incident", &body)).into_response())
+    if out.is_empty() {
+        out = "<li class=\"muted\">No runs attached</li>".into();
+    }
+    out
+}
+
+/// Simple SVG layout: runs on a horizontal row, technique labels below with reuse arcs.
+fn incident_graph_svg(graph: &crate::incident::IncidentGraph) -> String {
+    let runs: Vec<String> = {
+        let mut r: Vec<String> = graph
+            .nodes
+            .iter()
+            .filter(|n| n.kind == "run")
+            .map(|n| n.id.clone())
+            .collect();
+        if r.is_empty() {
+            // Fall back from techniques
+            for t in &graph.techniques {
+                if !r.contains(&t.first_run_id) {
+                    r.push(t.first_run_id.clone());
+                }
+                for u in &t.reused_by_runs {
+                    if !r.contains(u) {
+                        r.push(u.clone());
+                    }
+                }
+            }
+        }
+        r
+    };
+    if runs.is_empty() {
+        return r#"<div class="muted">No graph nodes yet.</div>"#.into();
+    }
+    let n = runs.len().max(1);
+    let width = (n as i32 * 140 + 80).max(320);
+    let height = 220 + (graph.techniques.len().min(8) as i32) * 18;
+    let mut circles = String::new();
+    let mut labels = String::new();
+    let mut run_pos = std::collections::BTreeMap::new();
+    for (i, rid) in runs.iter().enumerate() {
+        let x = 60 + (i as i32) * 140;
+        let y = 60;
+        run_pos.insert(rid.clone(), (x, y));
+        circles.push_str(&format!(
+            r#"<a href="/runs/{href}"><circle cx="{x}" cy="{y}" r="22" class="g-run"/><title>{title}</title></a>"#,
+            href = urlencoding(rid),
+            x = x,
+            y = y,
+            title = html_escape(rid),
+        ));
+        labels.push_str(&format!(
+            r#"<text x="{x}" y="{y}" text-anchor="middle" dy="5" class="g-label">{short}</text>"#,
+            x = x,
+            y = y,
+            short = html_escape(&rid[..8.min(rid.len())]),
+        ));
+    }
+    // Technique reuse edges as curves under the run row.
+    let mut paths = String::new();
+    for (ti, t) in graph.techniques.iter().take(12).enumerate() {
+        let Some(&(x1, y1)) = run_pos.get(&t.first_run_id) else {
+            continue;
+        };
+        for (ri, reused) in t.reused_by_runs.iter().enumerate() {
+            let Some(&(x2, y2)) = run_pos.get(reused) else {
+                continue;
+            };
+            let mid_y = 110 + ((ti + ri) as i32 % 5) * 14;
+            paths.push_str(&format!(
+                r#"<path d="M {x1} {y1} C {x1} {mid_y}, {x2} {mid_y}, {x2} {y2}" class="g-edge" />"#,
+                x1 = x1,
+                y1 = y1 + 22,
+                mid_y = mid_y,
+                x2 = x2,
+                y2 = y2 + 22,
+            ));
+        }
+    }
+    // Earliest signal marker on its run.
+    let mut signal = String::new();
+    if let Some(ref s) = graph.earliest_signal {
+        if let Some(ref rid) = s.run_id {
+            if let Some(&(x, y)) = run_pos.get(rid) {
+                signal.push_str(&format!(
+                    r#"<circle cx="{x}" cy="{y}" r="28" class="g-signal" fill="none"/><text x="{x}" y="{ty}" text-anchor="middle" class="g-signal-label">signal</text>"#,
+                    x = x,
+                    y = y,
+                    ty = y - 36,
+                ));
+            }
+        }
+    }
+    format!(
+        r#"<h2>Reconstruction graph</h2>
+<div class="graph-wrap">
+<svg viewBox="0 0 {w} {h}" class="incident-graph" role="img" aria-label="Incident reconstruction graph">
+  {paths}
+  {circles}
+  {labels}
+  {signal}
+</svg>
+<p class="muted">Runs as nodes; curves show technique reuse. Highlight ring = earliest actionable signal run.</p>
+</div>"#,
+        w = width,
+        h = height,
+        paths = paths,
+        circles = circles,
+        labels = labels,
+        signal = signal,
+    )
 }
 
 /// Live-updating run page powered by SSE.
@@ -1887,6 +2206,14 @@ th {{ color:var(--muted); font-size:0.75rem; text-transform:uppercase; letter-sp
 .anom-bar {{ margin-top:0.25rem; }}
 .trust-panel.trust-ok {{ border-color:color-mix(in srgb,#22c55e 40%,var(--border)); }}
 .trust-panel.trust-bad {{ border-color:color-mix(in srgb,#ef4444 50%,var(--border)); }}
+.signal-banner {{ margin:0.75rem 0; }}
+.graph-wrap {{ background:var(--card); border:1px solid var(--border); border-radius:10px; padding:0.75rem; overflow-x:auto; }}
+.incident-graph {{ width:100%; max-width:960px; height:auto; display:block; }}
+.g-run {{ fill:color-mix(in srgb,var(--accent) 35%,var(--card)); stroke:var(--accent); stroke-width:2; }}
+.g-label {{ fill:var(--fg); font-size:11px; font-family:ui-monospace,Menlo,monospace; pointer-events:none; }}
+.g-edge {{ fill:none; stroke:color-mix(in srgb,var(--accent) 55%,var(--muted)); stroke-width:1.5; opacity:0.85; }}
+.g-signal {{ stroke:#ef4444; stroke-width:2.5; }}
+.g-signal-label {{ fill:#ef4444; font-size:10px; font-weight:600; }}
 .tags {{ color:var(--muted); font-size:0.8rem; margin-left:0.4rem; }}
 .row-tool {{ background:var(--tool); }}
 .row-error {{ background:var(--err); }}

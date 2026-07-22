@@ -8,7 +8,11 @@
 
 mod containment;
 mod contract;
+mod correlate;
+mod detect;
 mod evidence;
+mod identity;
+mod provenance;
 mod resolve;
 mod vocab;
 
@@ -18,9 +22,25 @@ pub use containment::{
 pub use contract::{
     AllowedResources, BoundaryContract, BOUNDARY_SCHEMA, DispositionMap,
 };
+pub use correlate::{
+    correlate_external_batch, correlate_external_event, CorrelationContext, EntityKind,
+    EvidenceEdge, EvidenceRelation, EVIDENCE_EDGE_SCHEMA,
+};
+pub use detect::{
+    detect_boundary_findings, BoundaryFinding, DetectInputs, FindingKind, FindingSeverity,
+    BOUNDARY_FINDING_SCHEMA,
+};
 pub use evidence::{
     evaluate_required_evidence, BoundaryEvidenceReport, EvidenceAvailability,
     EvidenceRequirement, EvidenceStatus, ObservedEvidence, BOUNDARY_EVAL_SCHEMA,
+};
+pub use identity::{
+    PropagationChannel, PropagationRecord, PropagationStatus, TraceIdentity,
+    TRACE_IDENTITY_SCHEMA,
+};
+pub use provenance::{
+    evaluate_provenance, record_from_observations, ProvenanceGateReport, ProvenanceKind,
+    ProvenanceRecord, ProvenanceStatus, PROVENANCE_EVAL_SCHEMA, PROVENANCE_SCHEMA,
 };
 pub use resolve::{
     load_boundary_file, resolve_boundary, ResolvedBoundary, ResolveOpts,

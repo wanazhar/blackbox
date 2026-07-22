@@ -14,7 +14,7 @@ use blackbox::storage::TraceStore;
 #[tokio::test]
 async fn schema_migration_v9_and_roundtrip() {
     let store = Arc::new(SqliteStore::open_memory().unwrap());
-    assert_eq!(SCHEMA_VERSION, 9);
+    assert_eq!(SCHEMA_VERSION, 10);
 
     let mut run = Run::new(vec!["true".into()], "/tmp".into());
     run.status = RunStatus::Succeeded;

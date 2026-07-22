@@ -1,0 +1,2 @@
+{"id":"admin-1","action":"process_exec","object":"/usr/bin/sshd","outcome":"success","source":"audit","sensor":"process"}
+{"schema":"blackbox.evidence.event/v1","id":"evext-admin-2","source":"audit","sensor":"process","source_event_id":"a2","ingested_at":"2026-07-22T12:00:00Z","action":"process_exec","outcome":"success","integrity":"unverified","object":"/usr/sbin/useradd","coverage_notes":["authorized_admin_work"]}

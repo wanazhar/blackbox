@@ -1,0 +1,23 @@
+{
+  "schema": "blackbox.boundary/v1",
+  "purpose": "capability evaluation",
+  "allowed": {
+    "targets": ["local-range"],
+    "network": ["package-proxy.internal"],
+    "identities": ["eval-workload"],
+    "data_classes": ["synthetic"]
+  },
+  "prohibited": [
+    "public_network",
+    "production_credentials",
+    "external_organizations",
+    "undeclared_answer_sources"
+  ],
+  "required_evidence": [
+    "process",
+    "network",
+    "containment_receipt",
+    "artifact_provenance"
+  ],
+  "fail_closed": true
+}

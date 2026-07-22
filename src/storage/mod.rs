@@ -8,12 +8,17 @@ pub mod sqlite;
 pub mod store;
 
 use crate::aggregates::RunAggregates;
-use crate::boundary::{ContainmentReceipt, ResolvedBoundary};
+use crate::boundary::{
+    BoundaryFinding, ContainmentReceipt, EvidenceEdge, ProvenanceRecord, ResolvedBoundary,
+    TraceIdentity,
+};
 use crate::core::blob::BlobReference;
 use crate::core::checkpoint::Checkpoint;
 use crate::core::event::TraceEvent;
 use crate::core::run::Run;
+use crate::evidence::ExternalEvidenceEvent;
 use crate::experiment::{ExperimentManifest, RunExperimentMeta};
+use crate::incident::Incident;
 use crate::verification::VerificationReceipt;
 
 pub use page::{
@@ -494,5 +499,109 @@ pub trait TraceStore: Send + Sync + 'static {
         _id: &str,
     ) -> anyhow::Result<Option<ContainmentReceipt>> {
         Ok(None)
+    }
+
+    // ── External evidence, edges, identity, provenance, incidents (1.7) ──
+
+    /// Insert external evidence event; returns false if duplicate (source, source_event_id).
+    async fn insert_external_evidence(
+        &self,
+        _event: &ExternalEvidenceEvent,
+    ) -> anyhow::Result<bool> {
+        anyhow::bail!("external evidence not supported by this store backend")
+    }
+
+    /// List external evidence for a linked run (oldest first).
+    async fn list_external_evidence_for_run(
+        &self,
+        _run_id: &str,
+    ) -> anyhow::Result<Vec<ExternalEvidenceEvent>> {
+        Ok(Vec::new())
+    }
+
+    /// List recent external evidence (newest first), bounded.
+    async fn list_external_evidence(
+        &self,
+        _limit: usize,
+    ) -> anyhow::Result<Vec<ExternalEvidenceEvent>> {
+        Ok(Vec::new())
+    }
+
+    /// Get one external evidence event by id.
+    async fn get_external_evidence(
+        &self,
+        _id: &str,
+    ) -> anyhow::Result<Option<ExternalEvidenceEvent>> {
+        Ok(None)
+    }
+
+    /// Insert an evidence correlation edge.
+    async fn insert_evidence_edge(&self, _edge: &EvidenceEdge) -> anyhow::Result<()> {
+        anyhow::bail!("evidence edges not supported by this store backend")
+    }
+
+    /// List edges for a run.
+    async fn list_evidence_edges(&self, _run_id: &str) -> anyhow::Result<Vec<EvidenceEdge>> {
+        Ok(Vec::new())
+    }
+
+    /// Store run trace identity.
+    async fn put_trace_identity(&self, _identity: &TraceIdentity) -> anyhow::Result<()> {
+        anyhow::bail!("trace identity not supported by this store backend")
+    }
+
+    /// Load run trace identity.
+    async fn get_trace_identity(
+        &self,
+        _run_id: &str,
+    ) -> anyhow::Result<Option<TraceIdentity>> {
+        Ok(None)
+    }
+
+    /// Insert a provenance record.
+    async fn insert_provenance_record(
+        &self,
+        _record: &ProvenanceRecord,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("provenance records not supported by this store backend")
+    }
+
+    /// List provenance records for a run.
+    async fn list_provenance_records(
+        &self,
+        _run_id: &str,
+    ) -> anyhow::Result<Vec<ProvenanceRecord>> {
+        Ok(Vec::new())
+    }
+
+    /// Insert a boundary finding.
+    async fn insert_boundary_finding(
+        &self,
+        _finding: &BoundaryFinding,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("boundary findings not supported by this store backend")
+    }
+
+    /// List boundary findings for a run.
+    async fn list_boundary_findings(
+        &self,
+        _run_id: &str,
+    ) -> anyhow::Result<Vec<BoundaryFinding>> {
+        Ok(Vec::new())
+    }
+
+    /// Upsert an incident.
+    async fn upsert_incident(&self, _incident: &Incident) -> anyhow::Result<()> {
+        anyhow::bail!("incidents not supported by this store backend")
+    }
+
+    /// Get incident by id.
+    async fn get_incident(&self, _id: &str) -> anyhow::Result<Option<Incident>> {
+        Ok(None)
+    }
+
+    /// List incidents (newest first).
+    async fn list_incidents(&self) -> anyhow::Result<Vec<Incident>> {
+        Ok(Vec::new())
     }
 }

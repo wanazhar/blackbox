@@ -21,7 +21,7 @@ Every command accepts global `--json` for machine-readable output (`blackbox.cli
 | **Hygiene** | [`scrub`](#24-scrub) · [`doctor`](#25-doctor) · [`stats`](#29-stats) · [`gc`](#30-gc) · [`rm`](#26-rm) · [`purge`](#27-purge) · [`tags`](#28-tags-tag) |
 | **Integrity / verification** | [`fsck`](#36-fsck) · [`verify`](#37-verify) · [`experiment`](#38-experiment) · [`report`](#39-report) · [`gate`](#40-gate) |
 | **Capsules / budgets / index** | [`capsule`](#41-capsule) · [`cassette`](#42-cassette-experimental) · [`budget`](#43-budget) · [`adapter`](#44-adapter) · [`projects`](#45-projects) |
-| **Boundary / containment (1.7)** | [`boundary`](#46-boundary) |
+| **Boundary / containment (1.7)** | [`boundary`](#46-boundary) · [`evidence`](#47-evidence) · [`incident`](#48-incident) · [`forensic`](#49-forensic) |
 | **Shell** | [`completions`](#35-completions) |
 
 Guide shortcuts: [getting-started](../guide/getting-started.md) · [debug](../guide/debug-a-failure.md) · [config](../guide/configuration.md) · [security](../guide/security.md) · [fsck](../guide/fsck-and-integrity.md) · [verification](../guide/verification.md).
@@ -1027,8 +1027,44 @@ blackbox boundary receipt <run-id|latest> [--claim STATE] [--result RESULT] \
 | `set` | Resolve (with optional parents) and store on the run |
 | `evaluate` | Required-evidence / containment gate (`--gate` → exit 2 on fail-closed failure) |
 | `receipt` | Append immutable containment receipt |
+| `detect` | Deterministic boundary/behavior findings |
+| `provenance` | Artifact/answer provenance record + gate |
 
 Reference: [boundary.md](boundary.md). Plan: [agent-boundary-1.7.md](../plan/agent-boundary-1.7.md).
+
+---
+
+## 47. `evidence`
+
+```bash
+blackbox evidence import <file.ndjson> [--run <id|latest>] [--max-events N]
+blackbox evidence list [--run <id|latest>] [--limit N]
+```
+
+Import versioned `blackbox.evidence.event/v1` (or generic JSONL mapping). Idempotent on `(source, source_event_id)`.
+
+---
+
+## 48. `incident`
+
+```bash
+blackbox incident create [--title T] [--run id]…
+blackbox incident list
+blackbox incident show <id> [--graph]
+blackbox incident attach <id> [--run id] [--evidence id] [--reason text]
+```
+
+Multi-run incident object with optional reconstruction graph.
+
+---
+
+## 49. `forensic`
+
+```bash
+blackbox forensic pack <run-id|latest> [-o pack.json] [--max-events N]
+```
+
+Bounded local forensic pack (redacted; citation-validated).
 
 ---
 
@@ -1038,4 +1074,4 @@ Reference: [boundary.md](boundary.md). Plan: [agent-boundary-1.7.md](../plan/age
 |---|---|
 | 0 | Success |
 | 1 | General error / run failed (`--ci` / `--eval` / `--fail-on-failure` / gate fail) |
-| 2 | Boundary fail-closed gate failed (`boundary evaluate --gate`) |
+| 2 | Boundary/provenance fail-closed gate failed |

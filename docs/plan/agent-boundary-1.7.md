@@ -4,7 +4,7 @@
 |---|---|
 | **Document** | Product + technical plan for 1.7 |
 | **Date** | 2026-07-22 |
-| **Status** | **In progress** — Phase A foundation landing |
+| **Status** | **Implementation complete** — Phases A–I landed; qualify before tag |
 | **Baseline** | 1.6.0 (verified runs & reproducibility) |
 | **Target tag** | **1.7.0** |
 | **Epic** | [Issue #5](https://github.com/wanazhar/blackbox/issues/5) |
@@ -66,15 +66,15 @@ Permanent 1.1–1.6 gates remain green.
 | 1 | Threat model + `blackbox.boundary/v1` schema | **A** |
 | 2 | Containment claim/receipt schema + storage | **A/B** |
 | 3 | Capture-coverage requirements + fail-closed gates | **A/B** |
-| 4 | Normalized external evidence event + NDJSON importer | C |
-| 5 | Trace identity propagation + correlation primitives | D |
-| 6 | Process/network/proxy fixtures | C/D |
-| 7 | Boundary evaluator + deterministic violation events | E |
-| 8 | Provenance records + benchmark gates | G |
-| 9 | Incident object + cross-run graph | F |
-| 10 | Local forensic pack | H |
-| 11 | Optional model-assisted analysis | H |
-| 12 | Scale, adversarial, portability, docs qualification | I |
+| 4 | Normalized external evidence event + NDJSON importer | **C** ✅ |
+| 5 | Trace identity propagation + correlation primitives | **D** ✅ |
+| 6 | Process/network/proxy fixtures | **C/D** ✅ |
+| 7 | Boundary evaluator + deterministic violation events | **E** ✅ |
+| 8 | Provenance records + benchmark gates | **G** ✅ |
+| 9 | Incident object + cross-run graph | **F** ✅ |
+| 10 | Local forensic pack | **H** ✅ |
+| 11 | Optional model-assisted analysis | **H** (claims origin=model supported; no hosted provider) |
+| 12 | Scale, adversarial, portability, docs qualification | **I** ✅ fixtures + tests |
 
 ---
 

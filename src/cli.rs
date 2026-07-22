@@ -153,6 +153,12 @@ pub enum Command {
     Projects(crate::cli_ext::ProjectsArgs),
     /// Boundary contracts, containment receipts, evidence gates (1.7)
     Boundary(crate::cli_ext::BoundaryArgs),
+    /// External evidence import (1.7)
+    Evidence(crate::cli_ext::EvidenceArgs),
+    /// Multi-run incident reconstruction (1.7)
+    Incident(crate::cli_ext::IncidentArgs),
+    /// Local forensic analysis packs (1.7)
+    Forensic(crate::cli_ext::ForensicArgs),
 }
 
 #[derive(Args, Clone)]
@@ -1134,12 +1140,60 @@ impl Cli {
                     crate::cli_ext::BoundaryAction::Show { run_id }
                     | crate::cli_ext::BoundaryAction::Set { run_id, .. }
                     | crate::cli_ext::BoundaryAction::Evaluate { run_id, .. }
-                    | crate::cli_ext::BoundaryAction::Receipt { run_id, .. } => {
+                    | crate::cli_ext::BoundaryAction::Receipt { run_id, .. }
+                    | crate::cli_ext::BoundaryAction::Detect { run_id, .. }
+                    | crate::cli_ext::BoundaryAction::Provenance { run_id, .. } => {
                         *run_id = resolve_run_id(&store, run_id).await?;
                     }
                     crate::cli_ext::BoundaryAction::Validate { .. } => {}
                 }
                 crate::cli_ext::cmd_boundary(std::sync::Arc::new(store), &args, self.json).await
+            }
+            Command::Evidence(args) => {
+                let store = open_store(self)?;
+                let mut args = args.clone();
+                if let crate::cli_ext::EvidenceAction::Import {
+                    run: Some(ref mut rid),
+                    ..
+                } = args.action
+                {
+                    *rid = resolve_run_id(&store, rid).await?;
+                }
+                if let crate::cli_ext::EvidenceAction::List {
+                    run: Some(ref mut rid),
+                    ..
+                } = args.action
+                {
+                    *rid = resolve_run_id(&store, rid).await?;
+                }
+                crate::cli_ext::cmd_evidence(std::sync::Arc::new(store), &args, self.json).await
+            }
+            Command::Incident(args) => {
+                let store = open_store(self)?;
+                let mut args = args.clone();
+                if let crate::cli_ext::IncidentAction::Create { ref mut runs, .. } = args.action {
+                    for rid in runs.iter_mut() {
+                        *rid = resolve_run_id(&store, rid).await?;
+                    }
+                }
+                if let crate::cli_ext::IncidentAction::Attach {
+                    run: Some(ref mut rid),
+                    ..
+                } = args.action
+                {
+                    *rid = resolve_run_id(&store, rid).await?;
+                }
+                crate::cli_ext::cmd_incident(std::sync::Arc::new(store), &args, self.json).await
+            }
+            Command::Forensic(args) => {
+                let store = open_store(self)?;
+                let mut args = args.clone();
+                match &mut args.action {
+                    crate::cli_ext::ForensicAction::Pack { run_id, .. } => {
+                        *run_id = resolve_run_id(&store, run_id).await?;
+                    }
+                }
+                crate::cli_ext::cmd_forensic(std::sync::Arc::new(store), &args, self.json).await
             }
         }
     }
@@ -1484,6 +1538,20 @@ async fn cmd_run(cli: &Cli, args: &RunArgs) -> anyhow::Result<()> {
         .with_policy(policy)
         .with_budget(budget);
     let run = supervisor.execute(&args).await?;
+
+    // 1.7: mint trace identity for correlation (always for supervised runs).
+    {
+        use crate::boundary::{PropagationChannel, PropagationStatus, TraceIdentity};
+        let mut identity = TraceIdentity::mint(&run.id);
+        identity.record_propagation(
+            PropagationChannel::ChildEnv,
+            PropagationStatus::Attempted,
+            Some("BLACKBOX_TRACE_ID not injected in recorder-neutral mode".into()),
+        );
+        if let Err(e) = store.put_trace_identity(&identity).await {
+            tracing::warn!(error = %e, "failed to store trace identity");
+        }
+    }
 
     // 1.7: attach resolved boundary contract when --boundary is set.
     if let Some(ref boundary_path) = args.boundary {

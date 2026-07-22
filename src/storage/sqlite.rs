@@ -22,7 +22,7 @@ use crate::storage::TraceStore;
 
 /// Current schema version. Bump when migrations change.
 /// Current on-disk schema version (also reported by `doctor --json`).
-pub const SCHEMA_VERSION: i32 = 9;
+pub const SCHEMA_VERSION: i32 = 10;
 
 /// Default scanner for redacting secrets in FTS index content.
 static FTS_SCANNER: LazyLock<SecretScanner> =
@@ -398,6 +398,15 @@ impl SqliteStore {
                 .context("failed to record v9 version")?;
             tx.commit().context("failed to commit v9 migration")?;
         }
+        if current < 10 {
+            let tx = conn
+                .unchecked_transaction()
+                .context("failed to start transaction for v10 migration")?;
+            Self::migrate_v10(&tx)?;
+            tx.execute("INSERT INTO schema_version (version) VALUES (10)", [])
+                .context("failed to record v10 version")?;
+            tx.commit().context("failed to commit v10 migration")?;
+        }
 
         // Ensure we never claim a higher version than we support
         let applied: i32 = conn
@@ -740,6 +749,81 @@ impl SqliteStore {
         )
         .context("failed to create v9 boundary/containment tables")?;
         tracing::info!("v9: run_boundaries + containment_receipts");
+        Ok(())
+    }
+
+    /// V10: external evidence, edges, trace identity, provenance, findings, incidents (1.7).
+    fn migrate_v10(conn: &Connection) -> anyhow::Result<()> {
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS external_evidence (
+                id               TEXT PRIMARY KEY,
+                source           TEXT NOT NULL,
+                sensor           TEXT NOT NULL,
+                source_event_id  TEXT NOT NULL,
+                linked_run_id    TEXT,
+                occurred_at      TEXT,
+                ingested_at      TEXT NOT NULL,
+                action           TEXT NOT NULL,
+                payload_hash     TEXT,
+                payload          TEXT NOT NULL,
+                UNIQUE(source, source_event_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_ext_ev_run ON external_evidence(linked_run_id);
+            CREATE INDEX IF NOT EXISTS idx_ext_ev_ingested ON external_evidence(ingested_at);
+
+            CREATE TABLE IF NOT EXISTS evidence_edges (
+                id          TEXT PRIMARY KEY,
+                run_id      TEXT,
+                relation    TEXT NOT NULL,
+                confidence  TEXT NOT NULL,
+                created_at  TEXT NOT NULL,
+                payload     TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_edges_run ON evidence_edges(run_id);
+
+            CREATE TABLE IF NOT EXISTS run_trace_identity (
+                run_id      TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
+                trace_id    TEXT NOT NULL,
+                payload     TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_trace_id ON run_trace_identity(trace_id);
+
+            CREATE TABLE IF NOT EXISTS provenance_records (
+                id          TEXT PRIMARY KEY,
+                run_id      TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+                kind        TEXT NOT NULL,
+                status      TEXT NOT NULL,
+                created_at  TEXT NOT NULL,
+                payload     TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_prov_run ON provenance_records(run_id);
+
+            CREATE TABLE IF NOT EXISTS boundary_findings (
+                id          TEXT PRIMARY KEY,
+                run_id      TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+                kind        TEXT NOT NULL,
+                detector    TEXT NOT NULL,
+                severity    TEXT NOT NULL,
+                created_at  TEXT NOT NULL,
+                payload     TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_findings_run ON boundary_findings(run_id);
+
+            CREATE TABLE IF NOT EXISTS incidents (
+                id          TEXT PRIMARY KEY,
+                created_at  TEXT NOT NULL,
+                updated_at  TEXT,
+                title       TEXT,
+                payload     TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_incidents_created ON incidents(created_at);
+            ",
+        )
+        .context("failed to create v10 evidence/incident tables")?;
+        tracing::info!(
+            "v10: external_evidence + edges + trace_identity + provenance + findings + incidents"
+        );
         Ok(())
     }
 
@@ -2140,6 +2224,354 @@ impl TraceStore for SqliteStore {
                 Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
                 Err(e) => Err(e.into()),
             }
+        };
+        tokio::task::yield_now().await;
+        result
+    }
+
+    async fn insert_external_evidence(
+        &self,
+        event: &crate::evidence::ExternalEvidenceEvent,
+    ) -> anyhow::Result<bool> {
+        let payload = serde_json::to_string(event)?;
+        let action = event.action.as_str().to_string();
+        let occurred = event.occurred_at.map(|t| t.to_rfc3339());
+        let ingested = event.ingested_at.to_rfc3339();
+        let id = event.id.clone();
+        let source = event.source.clone();
+        let sensor = event.sensor.clone();
+        let source_event_id = event.source_event_id.clone();
+        let linked = event.linked_run_id.clone();
+        let payload_hash = event.original_payload_hash.clone();
+        let result = {
+            let conn = self.lock();
+            match conn.execute(
+                "INSERT INTO external_evidence
+                   (id, source, sensor, source_event_id, linked_run_id, occurred_at, ingested_at, action, payload_hash, payload)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![
+                    id,
+                    source,
+                    sensor,
+                    source_event_id,
+                    linked,
+                    occurred,
+                    ingested,
+                    action,
+                    payload_hash,
+                    payload
+                ],
+            ) {
+                Ok(_) => Ok(true),
+                Err(rusqlite::Error::SqliteFailure(e, _))
+                    if e.code == rusqlite::ErrorCode::ConstraintViolation =>
+                {
+                    Ok(false)
+                }
+                Err(e) => Err(e.into()),
+            }
+        };
+        tokio::task::yield_now().await;
+        result
+    }
+
+    async fn list_external_evidence_for_run(
+        &self,
+        run_id: &str,
+    ) -> anyhow::Result<Vec<crate::evidence::ExternalEvidenceEvent>> {
+        let run_id = run_id.to_string();
+        let result = {
+            let conn = self.lock();
+            let mut stmt = conn.prepare(
+                "SELECT payload FROM external_evidence WHERE linked_run_id = ?1 ORDER BY ingested_at ASC",
+            )?;
+            let rows = stmt
+                .query_map(params![run_id], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut out = Vec::new();
+            for p in rows {
+                out.push(serde_json::from_str(&p)?);
+            }
+            Ok(out)
+        };
+        tokio::task::yield_now().await;
+        result
+    }
+
+    async fn list_external_evidence(
+        &self,
+        limit: usize,
+    ) -> anyhow::Result<Vec<crate::evidence::ExternalEvidenceEvent>> {
+        let result = {
+            let conn = self.lock();
+            let mut stmt = conn.prepare(
+                "SELECT payload FROM external_evidence ORDER BY ingested_at DESC LIMIT ?1",
+            )?;
+            let rows = stmt
+                .query_map(params![limit as i64], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut out = Vec::new();
+            for p in rows {
+                out.push(serde_json::from_str(&p)?);
+            }
+            Ok(out)
+        };
+        tokio::task::yield_now().await;
+        result
+    }
+
+    async fn get_external_evidence(
+        &self,
+        id: &str,
+    ) -> anyhow::Result<Option<crate::evidence::ExternalEvidenceEvent>> {
+        let id = id.to_string();
+        let result = {
+            let conn = self.lock();
+            let mut stmt =
+                conn.prepare("SELECT payload FROM external_evidence WHERE id = ?1")?;
+            match stmt.query_row(params![id], |row| row.get::<_, String>(0)) {
+                Ok(p) => Ok(Some(serde_json::from_str(&p)?)),
+                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+                Err(e) => Err(e.into()),
+            }
+        };
+        tokio::task::yield_now().await;
+        result
+    }
+
+    async fn insert_evidence_edge(
+        &self,
+        edge: &crate::boundary::EvidenceEdge,
+    ) -> anyhow::Result<()> {
+        let payload = serde_json::to_string(edge)?;
+        let relation = edge.relation.as_str().to_string();
+        let confidence = edge.confidence.as_str().to_string();
+        let created = edge.created_at.to_rfc3339();
+        let id = edge.id.clone();
+        let run_id = edge.run_id.clone();
+        {
+            let conn = self.lock();
+            conn.execute(
+                "INSERT INTO evidence_edges (id, run_id, relation, confidence, created_at, payload)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![id, run_id, relation, confidence, created, payload],
+            )?;
+        }
+        tokio::task::yield_now().await;
+        Ok(())
+    }
+
+    async fn list_evidence_edges(
+        &self,
+        run_id: &str,
+    ) -> anyhow::Result<Vec<crate::boundary::EvidenceEdge>> {
+        let run_id = run_id.to_string();
+        let result = {
+            let conn = self.lock();
+            let mut stmt = conn.prepare(
+                "SELECT payload FROM evidence_edges WHERE run_id = ?1 ORDER BY created_at ASC",
+            )?;
+            let rows = stmt
+                .query_map(params![run_id], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut out = Vec::new();
+            for p in rows {
+                out.push(serde_json::from_str(&p)?);
+            }
+            Ok(out)
+        };
+        tokio::task::yield_now().await;
+        result
+    }
+
+    async fn put_trace_identity(
+        &self,
+        identity: &crate::boundary::TraceIdentity,
+    ) -> anyhow::Result<()> {
+        let payload = serde_json::to_string(identity)?;
+        let run_id = identity.run_id.clone();
+        let trace_id = identity.trace_id.clone();
+        {
+            let conn = self.lock();
+            conn.execute(
+                "INSERT INTO run_trace_identity (run_id, trace_id, payload)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(run_id) DO UPDATE SET
+                   trace_id = excluded.trace_id,
+                   payload = excluded.payload",
+                params![run_id, trace_id, payload],
+            )?;
+        }
+        tokio::task::yield_now().await;
+        Ok(())
+    }
+
+    async fn get_trace_identity(
+        &self,
+        run_id: &str,
+    ) -> anyhow::Result<Option<crate::boundary::TraceIdentity>> {
+        let run_id = run_id.to_string();
+        let result = {
+            let conn = self.lock();
+            let mut stmt =
+                conn.prepare("SELECT payload FROM run_trace_identity WHERE run_id = ?1")?;
+            match stmt.query_row(params![run_id], |row| row.get::<_, String>(0)) {
+                Ok(p) => Ok(Some(serde_json::from_str(&p)?)),
+                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+                Err(e) => Err(e.into()),
+            }
+        };
+        tokio::task::yield_now().await;
+        result
+    }
+
+    async fn insert_provenance_record(
+        &self,
+        record: &crate::boundary::ProvenanceRecord,
+    ) -> anyhow::Result<()> {
+        let payload = serde_json::to_string(record)?;
+        let kind = record.kind.as_str().to_string();
+        let status = record.status.as_str().to_string();
+        let created = record.created_at.to_rfc3339();
+        let id = record.id.clone();
+        let run_id = record.run_id.clone();
+        {
+            let conn = self.lock();
+            conn.execute(
+                "INSERT INTO provenance_records (id, run_id, kind, status, created_at, payload)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![id, run_id, kind, status, created, payload],
+            )?;
+        }
+        tokio::task::yield_now().await;
+        Ok(())
+    }
+
+    async fn list_provenance_records(
+        &self,
+        run_id: &str,
+    ) -> anyhow::Result<Vec<crate::boundary::ProvenanceRecord>> {
+        let run_id = run_id.to_string();
+        let result = {
+            let conn = self.lock();
+            let mut stmt = conn.prepare(
+                "SELECT payload FROM provenance_records WHERE run_id = ?1 ORDER BY created_at ASC",
+            )?;
+            let rows = stmt
+                .query_map(params![run_id], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut out = Vec::new();
+            for p in rows {
+                out.push(serde_json::from_str(&p)?);
+            }
+            Ok(out)
+        };
+        tokio::task::yield_now().await;
+        result
+    }
+
+    async fn insert_boundary_finding(
+        &self,
+        finding: &crate::boundary::BoundaryFinding,
+    ) -> anyhow::Result<()> {
+        let payload = serde_json::to_string(finding)?;
+        let kind = finding.kind.as_str().to_string();
+        let severity = finding.severity.as_str().to_string();
+        let created = finding.created_at.to_rfc3339();
+        let id = finding.id.clone();
+        let run_id = finding.run_id.clone();
+        let detector = finding.detector.clone();
+        {
+            let conn = self.lock();
+            conn.execute(
+                "INSERT INTO boundary_findings (id, run_id, kind, detector, severity, created_at, payload)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![id, run_id, kind, detector, severity, created, payload],
+            )?;
+        }
+        tokio::task::yield_now().await;
+        Ok(())
+    }
+
+    async fn list_boundary_findings(
+        &self,
+        run_id: &str,
+    ) -> anyhow::Result<Vec<crate::boundary::BoundaryFinding>> {
+        let run_id = run_id.to_string();
+        let result = {
+            let conn = self.lock();
+            let mut stmt = conn.prepare(
+                "SELECT payload FROM boundary_findings WHERE run_id = ?1 ORDER BY created_at ASC",
+            )?;
+            let rows = stmt
+                .query_map(params![run_id], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut out = Vec::new();
+            for p in rows {
+                out.push(serde_json::from_str(&p)?);
+            }
+            Ok(out)
+        };
+        tokio::task::yield_now().await;
+        result
+    }
+
+    async fn upsert_incident(
+        &self,
+        incident: &crate::incident::Incident,
+    ) -> anyhow::Result<()> {
+        let payload = serde_json::to_string(incident)?;
+        let created = incident.created_at.to_rfc3339();
+        let updated = incident.updated_at.map(|t| t.to_rfc3339());
+        let id = incident.id.clone();
+        let title = incident.title.clone();
+        {
+            let conn = self.lock();
+            conn.execute(
+                "INSERT INTO incidents (id, created_at, updated_at, title, payload)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(id) DO UPDATE SET
+                   updated_at = excluded.updated_at,
+                   title = excluded.title,
+                   payload = excluded.payload",
+                params![id, created, updated, title, payload],
+            )?;
+        }
+        tokio::task::yield_now().await;
+        Ok(())
+    }
+
+    async fn get_incident(
+        &self,
+        id: &str,
+    ) -> anyhow::Result<Option<crate::incident::Incident>> {
+        let id = id.to_string();
+        let result = {
+            let conn = self.lock();
+            let mut stmt = conn.prepare("SELECT payload FROM incidents WHERE id = ?1")?;
+            match stmt.query_row(params![id], |row| row.get::<_, String>(0)) {
+                Ok(p) => Ok(Some(serde_json::from_str(&p)?)),
+                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+                Err(e) => Err(e.into()),
+            }
+        };
+        tokio::task::yield_now().await;
+        result
+    }
+
+    async fn list_incidents(&self) -> anyhow::Result<Vec<crate::incident::Incident>> {
+        let result = {
+            let conn = self.lock();
+            let mut stmt =
+                conn.prepare("SELECT payload FROM incidents ORDER BY created_at DESC")?;
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut out = Vec::new();
+            for p in rows {
+                out.push(serde_json::from_str(&p)?);
+            }
+            Ok(out)
         };
         tokio::task::yield_now().await;
         result

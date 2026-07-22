@@ -4,18 +4,39 @@ All notable changes to **blackbox** are documented here.
 
 ## [Unreleased]
 
-### 1.7 Phase A — Boundary contracts & containment receipts
+### 1.7 — Agent boundary evidence & incident reconstruction
 
 Epic: [issue #5](https://github.com/wanazhar/blackbox/issues/5). Plan: [docs/plan/agent-boundary-1.7.md](docs/plan/agent-boundary-1.7.md).
 
-- **`blackbox.boundary/v1`**: purpose, allowed/prohibited capabilities, dispositions, required evidence, fail-closed flag
-- Policy resolution with experiment→run inheritance and stable SHA-256 **policy hash**
-- Immutable **containment receipts** (`blackbox.containment.receipt/v1`) with claim states: configured / enforced / verified / observed_only / failed / unknown / unavailable
-- Required-evidence evaluation: `insufficient_evidence`, `containment_unproven`, `containment_violated`; task success never satisfies a containment gate
+#### Phase A/B — Boundary contracts & containment
+- **`blackbox.boundary/v1`**: purpose, allowed/prohibited, dispositions, required evidence, fail-closed
+- Policy resolution + stable SHA-256 **policy hash**; immutable **containment receipts**
+- Required-evidence gates; task success never satisfies containment
 - Store schema **v9**: `run_boundaries`, `containment_receipts`
-- CLI: `blackbox boundary validate|show|set|evaluate|receipt`; `run --boundary` / `--boundary-parent` / `--boundary-fail-closed`
-- Reference: [docs/reference/boundary.md](docs/reference/boundary.md)
-- Tests: `tests/boundary_contract.rs` + unit coverage in `src/boundary/`
+
+#### Phase C/D — External evidence & correlation
+- **`blackbox.evidence.event/v1`** NDJSON import (idempotent, bounded, path-safe)
+- Trace identity minting; multi-signal **evidence edges** (temporal proximity never confirmed alone)
+- Store schema **v10**: `external_evidence`, `evidence_edges`, `run_trace_identity`, …
+
+#### Phase E/G — Detection & provenance
+- Deterministic `boundary.violation` / `behavior.transition` findings
+- Provenance records + gates: correct answer can fail independently on provenance
+
+#### Phase F/H — Incidents & forensic packs
+- Multi-run **incidents** with graph (discovery, reuse, earliest signal, continued activity)
+- Local **forensic packs** (redacted, citation-validated, no hosted provider required)
+
+#### CLI
+- `boundary validate|show|set|evaluate|receipt|detect|provenance`
+- `evidence import|list`
+- `incident create|list|show|attach`
+- `forensic pack`
+- `run --boundary` / `--boundary-parent` / `--boundary-fail-closed`
+
+#### Tests & fixtures
+- `tests/boundary_contract.rs`, `tests/boundary_1_7_full.rs`
+- `tests/fixtures/boundary_1_7/` (proxy, credential, benign admin)
 
 ## [1.6.0] — 2026-07-21
 

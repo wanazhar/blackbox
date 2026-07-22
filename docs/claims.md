@@ -60,6 +60,12 @@ High-risk product claims classified by evidence. Update when tests or platforms 
 | Task success does not satisfy a required containment gate | test-backed | Evidence evaluator never consults exit code / verification status |
 | Policy hash is stable for the same merged contract | test-backed | SHA-256 of canonical JSON; inheritance unit tests |
 | Blackbox enforces sandbox/network policy by default | false / non-goal | Records authorization and evidence; not a firewall or EDR |
-| External telemetry import and multi-run incidents | planned | Phases C–F of [plan/agent-boundary-1.7.md](plan/agent-boundary-1.7.md) |
+| External NDJSON evidence import is idempotent and path-safe | test-backed | `tests/boundary_1_7_full.rs`; rejects `..` / absolute path attrs |
+| Trace-id alone never yields confirmed correlation | test-backed | `correlate::tests`; multi-signal required for confirmed without run_id |
+| Deterministic detectors emit evidence-linked findings | test-backed | `boundary::detect`; `boundary detect` CLI |
+| Correct task answer can fail provenance gate independently | test-backed | `evaluate_provenance` + full pipeline test |
+| Multi-run incidents surface earliest signal and technique reuse | test-backed | `incident::graph` tests |
+| Forensic packs validate citations and redact secret-like patterns | test-backed | `forensic::pack` tests |
+| Blackbox blocks sandbox escapes by default | false / non-goal | Evidence only; no autonomous kill |
 
 **Classes:** `code-backed` · `test-backed` · `platform-dependent` · `best-effort` · `planned` · `historical` · `experimental`.

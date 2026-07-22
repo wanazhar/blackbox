@@ -72,7 +72,10 @@ AnalysisPass   Export/Import    Serve/SSE      UI / CLI
 | `src/pipeline/batch_ingest.rs` | Bounded batch SQLite writer (1.5) | `BatchIngestor` |
 | `src/summary.rs` | Run summary builder | `build_summary` |
 | `src/transcript.rs` | Transcript rebuild | Transcript from store |
-| `src/boundary/` | Agent boundary contracts (1.7) | `BoundaryContract`, `ResolvedBoundary`, `ContainmentReceipt`, evidence gates |
+| `src/boundary/` | Agent boundary contracts (1.7) | contracts, containment, detect, provenance, correlate |
+| `src/evidence/` | External evidence import (1.7) | `ExternalEvidenceEvent`, NDJSON importer |
+| `src/incident/` | Multi-run incidents (1.7) | `Incident`, graph |
+| `src/forensic/` | Forensic packs (1.7) | `ForensicPack` |
 | `src/views.rs` | JSON view types | All `*View` structs for `--json` |
 | `src/output.rs` | Output formatting | JSON envelope, human formatting |
 | `src/util.rs` | Shared helpers | `short_id`, `truncate` |
@@ -171,7 +174,9 @@ Operator-facing notes for shipped harnesses: [docs/guide/adapters.md](docs/guide
 | `tests/docs_cli_envelope.rs` | CLI JSON envelope + postmortem text labels + examples.md jq paths |
 | `tests/setup_fail.rs` | 1.3 Phase 1: `setup` + `fail` integration |
 | `src/score.rs` + `tests/ci_eval.rs` | 1.3 Phase 3: `blackbox.score/v1` score.json |
-| `src/boundary/` + `tests/boundary_contract.rs` | 1.7 Phase A: boundary contracts, containment receipts, evidence gates |
+| `src/boundary/` + `tests/boundary_contract.rs` | 1.7 boundary contracts, containment, detect, provenance |
+| `src/evidence/` + `src/incident/` + `src/forensic/` | 1.7 external evidence, incidents, forensic packs |
+| `tests/boundary_1_7_full.rs` | 1.7 end-to-end pipeline |
 | `tests/fixtures/docs/` | Static golden samples for docs contracts |
 | `.github/workflows/ci.yml` | test + clippy + doc link check (docs stay in-repo; no Pages) |
 | `tests/security.rs` | Security invariants |
@@ -258,6 +263,6 @@ No Makefile or justfile -- use cargo directly. Stable Rust, edition 2021.
 - **1.4** = Trust Proof (Unix neutrality, causal proof, security) — **1.4.0**
 - **1.5** = Trace integrity & scale — **1.5.0**
 - **1.6** = Verified runs & reproducibility — **1.6.0**
-- **1.7** = Agent boundary evidence & incident reconstruction — **in progress** ([issue #5](https://github.com/wanazhar/blackbox/issues/5))
+- **1.7** = Agent boundary evidence & incident reconstruction — **implementation complete** ([issue #5](https://github.com/wanazhar/blackbox/issues/5)); qualify before tag
 
 Qualify before tag: `./scripts/release-qualify-unix.sh`. See `docs/ROADMAP.md`.

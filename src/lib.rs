@@ -37,6 +37,9 @@
 //! | [`redaction`] | Secret scanning before write |
 //! | [`verification`] | Immutable receipts and outcomes |
 //! | [`boundary`] | Boundary contracts, containment, evidence gates |
+//! | [`evidence`] | External evidence NDJSON import |
+//! | [`incident`] | Multi-run incident reconstruction |
+//! | [`forensic`] | Local forensic analysis packs |
 //! | [`experiment`] | Experiments, reports, gates |
 //! | [`export`] | Portable / JSONL / HTML |
 //! | [`integrity`] | `fsck` and repair |
@@ -86,6 +89,12 @@ pub mod backup;
 pub mod boundary;
 /// Execution budget policy and Linux enforcement.
 pub mod budget;
+/// External evidence ingestion (1.7).
+pub mod evidence;
+/// Local forensic analysis packs (1.7).
+pub mod forensic;
+/// Multi-run incident reconstruction (1.7).
+pub mod incident;
 /// Capture layers: PTY, git, filesystem, process.
 pub mod capture;
 /// Reproducibility capsules.

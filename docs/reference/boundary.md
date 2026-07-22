@@ -126,49 +126,73 @@ A **required** `containment_receipt` is satisfied only by a receipt with claim `
 
 ---
 
+## External evidence (`blackbox.evidence.event/v1`)
+
+Normalized NDJSON for process/network/proxy/k8s/cloud/generic sensors. Import is idempotent on `(source, source_event_id)`, bounded, and rejects absolute/traversal path attributes.
+
+```bash
+blackbox evidence import events.ndjson --run <run|latest>
+blackbox evidence list --run latest
+```
+
+## Correlation & trace identity
+
+Each supervised run mints a random `TraceIdentity`. Edges never upgrade temporal proximity alone to `confirmed`. Matching cooperative `trace_id` alone is at most `strongly_correlated`.
+
+## Detection & provenance
+
+```bash
+blackbox boundary detect <run> [--emit-events]
+blackbox boundary provenance <run> --declared local-dataset --task-passed true --gate
+```
+
+Task correctness and provenance validity are independent: a correct answer with undeclared network still fails the provenance gate.
+
+## Incidents & forensic packs
+
+```bash
+blackbox incident create --title "egress" --run r1 --run r2
+blackbox incident show <inc-id>
+blackbox forensic pack <run> -o pack.json
+```
+
+Forensic packs redact common secret patterns, cite original evidence pointers, and keep model-derived claims (if any) as `origin=model` — never as raw evidence.
+
 ## CLI
 
 ```bash
-# Validate a contract file (prints policy hash)
 blackbox boundary validate path/to/boundary.json
-blackbox boundary validate path/to/boundary.json --json
-
-# Attach to an existing run
 blackbox boundary set <run|latest> -f boundary.json
-blackbox boundary set <run> -f child.json --parent experiment.json --fail-closed
-
-# Show / evaluate
 blackbox boundary show <run|latest>
 blackbox boundary evaluate <run> --gate
-blackbox boundary evaluate <run> --present process --present network --artifact-provenance --gate
-
-# Record containment claims
-blackbox boundary receipt <run> --claim configured --result not_observed --backend none
-blackbox boundary receipt <run> --claim verified --result held --method post_run_canary --control network_egress
-
-# Attach at run time
+blackbox boundary receipt <run> --claim verified --result held --method post_run_canary
+blackbox boundary detect <run> --emit-events
+blackbox boundary provenance <run> --declared dataset://case --gate
+blackbox evidence import proxy.ndjson --run latest
+blackbox incident create --title swarm --run latest
+blackbox forensic pack latest -o /tmp/pack.json
 blackbox run --boundary boundary.json --boundary-fail-closed -- echo hi
 ```
 
-Exit code **2** when `boundary evaluate --gate` fails closed.
+Exit code **2** when `boundary evaluate --gate` or `boundary provenance --gate` fails closed.
 
 ---
 
 ## Storage
 
-Schema version **9**:
+Schema versions:
 
-- `run_boundaries` — one resolved contract per run (`policy_hash`, `resolved_at`, JSON payload)
-- `containment_receipts` — append-only receipts keyed by id
+| Ver | Tables |
+|---|---|
+| **v9** | `run_boundaries`, `containment_receipts` |
+| **v10** | `external_evidence`, `evidence_edges`, `run_trace_identity`, `provenance_records`, `boundary_findings`, `incidents` |
 
 ---
 
 ## jq examples
 
 ```bash
-# Policy hash after validate
 jq -r '.data.policy_hash' <(blackbox --json boundary validate boundary.json)
-
-# Gate status
 jq -r '.data.status, .data.gate_failed' <(blackbox --json boundary evaluate latest)
+jq -r '.data.report.provenance_status' <(blackbox --json boundary provenance latest --gate || true)
 ```

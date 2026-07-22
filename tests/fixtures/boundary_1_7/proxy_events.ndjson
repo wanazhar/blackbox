@@ -1,0 +1,3 @@
+{"schema":"blackbox.evidence.event/v1","id":"evext-fixture-1","source":"package-proxy","sensor":"proxy","source_event_id":"fix-1","ingested_at":"2026-07-22T12:00:00Z","action":"http_request","outcome":"denied","integrity":"unverified","destination":"https://pypi.org/simple/evil"}
+{"id":"generic-1","action":"connect","destination":"8.8.8.8:53","host":"eval-worker","outcome":"success"}
+{"id":"generic-2","action":"credential_access","object":"~/.aws/credentials"}

@@ -201,15 +201,15 @@ Epic: [issue #5](https://github.com/wanazhar/blackbox/issues/5). Plan: [plan/age
 
 | Id | Criterion | Intent / status |
 |---|---|---|
-| **B1** | Resolved boundary contract | ✅ `blackbox.boundary/v1` + policy hash stored with run (`run_boundaries`) |
-| **B2** | Containment honesty | ✅ Claim states configured/enforced/verified/… + immutable receipts |
-| **B3** | Required evidence | ✅ `insufficient_evidence` / containment unproven; fail-closed gate |
-| **E1** | External evidence import | Planned (Phase C) |
-| **E2** | Correlation identity | Planned (Phase D) |
-| **V1** | Boundary violations | Planned (Phase E) |
-| **P1** | Provenance gates | Planned (Phase G) |
-| **I1** | Multi-run incidents | Planned (Phase F) |
-| **F1** | Forensic packs | Planned (Phase H) |
-| **Q1** | Adversarial qualification | Planned (Phase I) |
+| **B1** | Resolved boundary contract | ✅ `blackbox.boundary/v1` + policy hash (`run_boundaries`) |
+| **B2** | Containment honesty | ✅ Claim states + immutable receipts |
+| **B3** | Required evidence | ✅ `insufficient_evidence` / fail-closed gate |
+| **E1** | External evidence import | ✅ `blackbox.evidence.event/v1` NDJSON; transactional; path-safe |
+| **E2** | Correlation identity | ✅ Trace identity + multi-signal edges; temporal ≠ confirmed |
+| **V1** | Boundary violations | ✅ Deterministic detectors → findings / `boundary.violation` events |
+| **P1** | Provenance gates | ✅ Task success independent of provenance validity |
+| **I1** | Multi-run incidents | ✅ Incident object + graph (discovery, reuse, earliest signal) |
+| **F1** | Forensic packs | ✅ Bounded redacted packs with validated citations |
+| **Q1** | Adversarial qualification | ✅ Fixtures + `tests/boundary_1_7_full.rs` |
 
-Reference: [reference/boundary.md](reference/boundary.md). CLI: `blackbox boundary validate|show|set|evaluate|receipt`; `run --boundary`.
+Reference: [reference/boundary.md](reference/boundary.md). CLI: `boundary`, `evidence`, `incident`, `forensic`.

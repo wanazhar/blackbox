@@ -417,6 +417,137 @@ pub enum BoundaryAction {
         #[arg(long)]
         summary: Option<String>,
     },
+    /// Run deterministic boundary/behavior detectors and persist findings
+    Detect {
+        /// Run ID, prefix, or "latest"
+        run_id: String,
+        /// Also write findings as TraceEvents
+        #[arg(long)]
+        emit_events: bool,
+    },
+    /// Record / evaluate artifact provenance for a run
+    Provenance {
+        /// Run ID, prefix, or "latest"
+        run_id: String,
+        /// Declared source (repeatable)
+        #[arg(long = "declared")]
+        declared: Vec<String>,
+        /// Observed source (repeatable)
+        #[arg(long = "observed")]
+        observed: Vec<String>,
+        /// Task verification passed (optional independence check)
+        #[arg(long)]
+        task_passed: Option<bool>,
+        /// Exit non-zero when provenance gate fails
+        #[arg(long)]
+        gate: bool,
+    },
+}
+
+#[derive(Args, Clone)]
+/// External evidence import (1.7).
+pub struct EvidenceArgs {
+    #[command(subcommand)]
+    /// Subcommand.
+    pub action: EvidenceAction,
+}
+
+#[derive(Subcommand, Clone)]
+/// Evidence subcommands.
+pub enum EvidenceAction {
+    /// Import versioned NDJSON external evidence
+    Import {
+        /// Path to NDJSON file
+        file: PathBuf,
+        /// Link events to this run when not set on the event
+        #[arg(long)]
+        run: Option<String>,
+        /// Correlate imported events to the run and store edges
+        #[arg(long, default_value_t = true)]
+        correlate: bool,
+        /// Max events
+        #[arg(long, default_value_t = 50_000)]
+        max_events: usize,
+    },
+    /// List external evidence (optionally for a run)
+    List {
+        /// Optional run filter
+        #[arg(long)]
+        run: Option<String>,
+        /// Max rows
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+    },
+}
+
+#[derive(Args, Clone)]
+/// Multi-run incident commands (1.7).
+pub struct IncidentArgs {
+    #[command(subcommand)]
+    /// Subcommand.
+    pub action: IncidentAction,
+}
+
+#[derive(Subcommand, Clone)]
+/// Incident subcommands.
+pub enum IncidentAction {
+    /// Create an incident
+    Create {
+        /// Title
+        #[arg(long)]
+        title: Option<String>,
+        /// Attach run ids (repeatable)
+        #[arg(long = "run")]
+        runs: Vec<String>,
+    },
+    /// List incidents
+    List,
+    /// Show incident + graph summary
+    Show {
+        /// Incident id
+        id: String,
+        /// Build cross-run graph
+        #[arg(long, default_value_t = true)]
+        graph: bool,
+    },
+    /// Attach a run or evidence ref to an incident
+    Attach {
+        /// Incident id
+        id: String,
+        /// Run to attach
+        #[arg(long)]
+        run: Option<String>,
+        /// External evidence id to attach
+        #[arg(long)]
+        evidence: Option<String>,
+        /// Attachment reason
+        #[arg(long)]
+        reason: Option<String>,
+    },
+}
+
+#[derive(Args, Clone)]
+/// Forensic pack commands (1.7).
+pub struct ForensicArgs {
+    #[command(subcommand)]
+    /// Subcommand.
+    pub action: ForensicAction,
+}
+
+#[derive(Subcommand, Clone)]
+/// Forensic subcommands.
+pub enum ForensicAction {
+    /// Build a local forensic pack for a run
+    Pack {
+        /// Run ID, prefix, or "latest"
+        run_id: String,
+        /// Write pack JSON to this path (`-` = stdout)
+        #[arg(short = 'o', long, default_value = "-")]
+        output: PathBuf,
+        /// Max events in the pack window
+        #[arg(long, default_value_t = 200)]
+        max_events: usize,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1675,6 +1806,117 @@ pub async fn cmd_boundary(
             );
             Ok(())
         }
+        BoundaryAction::Detect {
+            run_id,
+            emit_events,
+        } => {
+            use crate::boundary::{detect_boundary_findings, DetectInputs};
+            let boundary = store.get_run_boundary(run_id).await?;
+            let events = store.get_events(run_id).await.unwrap_or_default();
+            let external = store
+                .list_external_evidence_for_run(run_id)
+                .await
+                .unwrap_or_default();
+            let findings = detect_boundary_findings(DetectInputs {
+                run_id,
+                contract: boundary.as_ref().map(|b| &b.contract),
+                events: &events,
+                external: &external,
+            });
+            let mut next_seq = store
+                .get_run(run_id)
+                .await?
+                .map(|r| r.next_sequence)
+                .unwrap_or(events.len() as u64);
+            for f in &findings {
+                let _ = store.insert_boundary_finding(f).await;
+                if *emit_events {
+                    let ev = f.to_trace_event(next_seq);
+                    next_seq += 1;
+                    let _ = store.insert_event(&ev).await;
+                }
+            }
+            if json {
+                return output::emit_ok(
+                    "boundary_detect",
+                    &serde_json::json!({ "findings": findings, "count": findings.len() }),
+                );
+            }
+            println!("boundary detect: {} finding(s)", findings.len());
+            for f in &findings {
+                println!(
+                    "  [{}] {} — {}",
+                    f.severity.as_str(),
+                    f.detector,
+                    f.summary
+                );
+            }
+            Ok(())
+        }
+        BoundaryAction::Provenance {
+            run_id,
+            declared,
+            observed,
+            task_passed,
+            gate,
+        } => {
+            use crate::boundary::{
+                evaluate_provenance, record_from_observations,
+            };
+            store
+                .get_run(run_id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("run not found: {run_id}"))?;
+            let external = store
+                .list_external_evidence_for_run(run_id)
+                .await
+                .unwrap_or_default();
+            // Auto-observe destinations from external evidence when --observed omitted.
+            let mut observed = observed.clone();
+            if observed.is_empty() {
+                for e in &external {
+                    if let Some(ref d) = e.destination {
+                        if !observed.contains(d) {
+                            observed.push(d.clone());
+                        }
+                    }
+                }
+            }
+            let record = record_from_observations(run_id, declared, &observed);
+            store.insert_provenance_record(&record).await?;
+            let records = store.list_provenance_records(run_id).await?;
+            let report = evaluate_provenance(
+                run_id,
+                &records,
+                &external,
+                declared,
+                *task_passed,
+                true,
+            );
+            if json {
+                if *gate && report.provenance_gate_failed {
+                    let _ = output::emit_ok("boundary_provenance", &report);
+                    std::process::exit(2);
+                }
+                return output::emit_ok(
+                    "boundary_provenance",
+                    &serde_json::json!({ "record": record, "report": report }),
+                );
+            }
+            println!(
+                "provenance status={} gate_failed={} overall_passed={}",
+                report.provenance_status.as_str(),
+                report.provenance_gate_failed,
+                report.overall_passed
+            );
+            for r in &report.reasons {
+                println!("  reason: {r}");
+            }
+            if *gate && report.provenance_gate_failed {
+                std::process::exit(2);
+            }
+            Ok(())
+        }
     }
 }
 
@@ -1732,4 +1974,355 @@ pub async fn attach_boundary_to_run(
     .with_run_id(run_id);
     store.put_run_boundary(&resolved).await?;
     Ok(resolved)
+}
+
+/// External evidence CLI (1.7 Phase C).
+pub async fn cmd_evidence(
+    store: Arc<dyn TraceStore>,
+    args: &EvidenceArgs,
+    json: bool,
+) -> anyhow::Result<()> {
+    match &args.action {
+        EvidenceAction::Import {
+            file,
+            run,
+            correlate,
+            max_events,
+        } => {
+            use crate::boundary::{
+                correlate_external_batch, CorrelationContext, PropagationChannel,
+                PropagationStatus, TraceIdentity,
+            };
+            use crate::evidence::{import_evidence_ndjson, ImportOptions};
+
+            let opts = ImportOptions {
+                max_events: *max_events,
+                default_run_id: run.clone(),
+                ..Default::default()
+            };
+            let (events, mut report) = import_evidence_ndjson(file, &opts)?;
+            let mut inserted = 0usize;
+            let mut dup_store = 0usize;
+            for ev in &events {
+                match store.insert_external_evidence(ev).await? {
+                    true => inserted += 1,
+                    false => dup_store += 1,
+                }
+            }
+            report.duplicates += dup_store;
+            // Adjust accepted to store-new only for clarity.
+            let _ = inserted;
+
+            let mut edges_n = 0usize;
+            if *correlate {
+                if let Some(ref rid) = run {
+                    let identity = store.get_trace_identity(rid).await?;
+                    let ctx = CorrelationContext {
+                        run_id: rid.clone(),
+                        trace_id: identity.as_ref().map(|i| i.trace_id.clone()),
+                        ..Default::default()
+                    };
+                    let edges = correlate_external_batch(&events, &ctx);
+                    for e in &edges {
+                        let _ = store.insert_evidence_edge(e).await;
+                        edges_n += 1;
+                    }
+                    // Record that cooperative IDs were observed if present.
+                    if let Some(mut id) = identity {
+                        for ev in &events {
+                            if let Some(ref tid) = ev.identity.trace_id {
+                                let status = if Some(tid) == Some(&id.trace_id) {
+                                    PropagationStatus::Confirmed
+                                } else {
+                                    PropagationStatus::Forged
+                                };
+                                id.record_propagation(
+                                    PropagationChannel::OtelBaggage,
+                                    status,
+                                    Some(format!("import observed trace_id={tid}")),
+                                );
+                            }
+                        }
+                        let _ = store.put_trace_identity(&id).await;
+                    } else if store.get_run(rid).await?.is_some() {
+                        let id = TraceIdentity::mint(rid);
+                        let _ = store.put_trace_identity(&id).await;
+                    }
+                }
+            }
+
+            if json {
+                return output::emit_ok(
+                    "evidence_import",
+                    &serde_json::json!({
+                        "report": report,
+                        "inserted": inserted,
+                        "edges": edges_n,
+                    }),
+                );
+            }
+            println!(
+                "evidence import accepted={} inserted={} duplicates={} rejected={} edges={}",
+                report.accepted, inserted, report.duplicates, report.rejected, edges_n
+            );
+            for r in report.rejects.iter().take(10) {
+                println!("  reject line {}: {}", r.line, r.reason);
+            }
+            Ok(())
+        }
+        EvidenceAction::List { run, limit } => {
+            let events = if let Some(ref rid) = run {
+                store.list_external_evidence_for_run(rid).await?
+            } else {
+                store.list_external_evidence(*limit).await?
+            };
+            if json {
+                return output::emit_ok("evidence_list", &events);
+            }
+            println!("external evidence: {}", events.len());
+            for e in events.iter().take(*limit) {
+                println!(
+                    "  {} {} {} dest={:?}",
+                    crate::util::short_id(&e.id),
+                    e.sensor,
+                    e.action.as_str(),
+                    e.destination
+                );
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Incident CLI (1.7 Phase F).
+pub async fn cmd_incident(
+    store: Arc<dyn TraceStore>,
+    args: &IncidentArgs,
+    json: bool,
+) -> anyhow::Result<()> {
+    use crate::incident::{
+        attach_to_incident, build_incident_graph, GraphInputs, Incident, IncidentAttachmentKind,
+    };
+
+    match &args.action {
+        IncidentAction::Create { title, runs } => {
+            let mut inc = Incident::new(title.clone());
+            for r in runs {
+                attach_to_incident(
+                    &mut inc,
+                    IncidentAttachmentKind::Run,
+                    r.clone(),
+                    Some("create".into()),
+                );
+            }
+            store.upsert_incident(&inc).await?;
+            if json {
+                return output::emit_ok("incident_create", &inc);
+            }
+            println!(
+                "incident {} title={:?} runs={}",
+                crate::util::short_id(&inc.id),
+                inc.title,
+                inc.run_ids().len()
+            );
+            Ok(())
+        }
+        IncidentAction::List => {
+            let list = store.list_incidents().await?;
+            if json {
+                return output::emit_ok("incident_list", &list);
+            }
+            println!("incidents: {}", list.len());
+            for i in &list {
+                println!(
+                    "  {} {:?} runs={}",
+                    crate::util::short_id(&i.id),
+                    i.title,
+                    i.run_ids().len()
+                );
+            }
+            Ok(())
+        }
+        IncidentAction::Show { id, graph } => {
+            let inc = store
+                .get_incident(id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("incident not found: {id}"))?;
+            let mut graph_view = None;
+            if *graph {
+                let mut findings_by_run = Vec::new();
+                let mut external = Vec::new();
+                let mut edges = Vec::new();
+                let mut run_end_times = Vec::new();
+                for rid in inc.run_ids() {
+                    let findings = store.list_boundary_findings(rid).await.unwrap_or_default();
+                    findings_by_run.push((rid.to_string(), findings));
+                    external.extend(
+                        store
+                            .list_external_evidence_for_run(rid)
+                            .await
+                            .unwrap_or_default(),
+                    );
+                    edges.extend(store.list_evidence_edges(rid).await.unwrap_or_default());
+                    if let Ok(Some(run)) = store.get_run(rid).await {
+                        run_end_times.push((rid.to_string(), run.ended_at));
+                    }
+                }
+                let g = build_incident_graph(
+                    &inc,
+                    &GraphInputs {
+                        findings_by_run,
+                        external,
+                        edges,
+                        run_end_times,
+                    },
+                );
+                // Persist earliest signal fields.
+                let mut updated = inc.clone();
+                updated.earliest_signal_id =
+                    g.earliest_signal.as_ref().map(|s| s.ref_id.clone());
+                updated.continued_after_signal = g.continued_after_signal;
+                updated.updated_at = Some(chrono::Utc::now());
+                let _ = store.upsert_incident(&updated).await;
+                graph_view = Some(g);
+            }
+            if json {
+                return output::emit_ok(
+                    "incident_show",
+                    &serde_json::json!({ "incident": inc, "graph": graph_view }),
+                );
+            }
+            println!(
+                "incident {} title={:?}",
+                crate::util::short_id(&inc.id),
+                inc.title
+            );
+            for a in &inc.attachments {
+                println!("  attach {} {}", a.kind.as_str(), crate::util::short_id(&a.ref_id));
+            }
+            if let Some(ref g) = graph_view {
+                println!(
+                    "  graph runs={} evidence={} findings={} techniques={}",
+                    g.run_count,
+                    g.evidence_count,
+                    g.finding_count,
+                    g.techniques.len()
+                );
+                if let Some(ref s) = g.earliest_signal {
+                    println!(
+                        "  earliest_signal {} — {}",
+                        crate::util::short_id(&s.ref_id),
+                        s.summary
+                    );
+                }
+                if let Some(c) = g.continued_after_signal {
+                    println!("  continued_after_signal={c}");
+                }
+            }
+            Ok(())
+        }
+        IncidentAction::Attach {
+            id,
+            run,
+            evidence,
+            reason,
+        } => {
+            let mut inc = store
+                .get_incident(id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("incident not found: {id}"))?;
+            if let Some(ref rid) = run {
+                attach_to_incident(
+                    &mut inc,
+                    IncidentAttachmentKind::Run,
+                    rid.clone(),
+                    reason.clone(),
+                );
+            }
+            if let Some(ref eid) = evidence {
+                attach_to_incident(
+                    &mut inc,
+                    IncidentAttachmentKind::ExternalEvidence,
+                    eid.clone(),
+                    reason.clone(),
+                );
+            }
+            store.upsert_incident(&inc).await?;
+            if json {
+                return output::emit_ok("incident_attach", &inc);
+            }
+            println!(
+                "incident {} attachments={}",
+                crate::util::short_id(&inc.id),
+                inc.attachments.len()
+            );
+            Ok(())
+        }
+    }
+}
+
+/// Forensic pack CLI (1.7 Phase H).
+pub async fn cmd_forensic(
+    store: Arc<dyn TraceStore>,
+    args: &ForensicArgs,
+    json: bool,
+) -> anyhow::Result<()> {
+    match &args.action {
+        ForensicAction::Pack {
+            run_id,
+            output: out_path,
+            max_events,
+        } => {
+            use crate::forensic::{build_forensic_pack, ForensicPackOpts};
+
+            let boundary = store.get_run_boundary(run_id).await?;
+            let events = store.get_events(run_id).await.unwrap_or_default();
+            let external = store
+                .list_external_evidence_for_run(run_id)
+                .await
+                .unwrap_or_default();
+            let findings = store.list_boundary_findings(run_id).await.unwrap_or_default();
+            let edges = store.list_evidence_edges(run_id).await.unwrap_or_default();
+            let opts = ForensicPackOpts {
+                max_events: *max_events,
+                ..Default::default()
+            };
+            let pack = build_forensic_pack(
+                run_id,
+                boundary.as_ref(),
+                &events,
+                &external,
+                &findings,
+                &edges,
+                &opts,
+            );
+            let text = serde_json::to_string_pretty(&pack)?;
+            if out_path.as_os_str() == "-" {
+                if json {
+                    return output::emit_ok("forensic_pack", &pack);
+                }
+                println!("{text}");
+            } else {
+                std::fs::write(out_path, &text)?;
+                if json {
+                    return output::emit_ok(
+                        "forensic_pack",
+                        &serde_json::json!({
+                            "path": out_path,
+                            "pack_hash": pack.pack_hash,
+                            "findings": pack.findings.len(),
+                            "events": pack.event_window.len(),
+                        }),
+                    );
+                }
+                println!(
+                    "forensic pack written to {} hash={} findings={}",
+                    out_path.display(),
+                    &pack.pack_hash[..16.min(pack.pack_hash.len())],
+                    pack.findings.len()
+                );
+            }
+            Ok(())
+        }
+    }
 }

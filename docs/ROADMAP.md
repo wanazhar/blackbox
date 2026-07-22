@@ -1,9 +1,9 @@
 # Roadmap and quality bar
 
-What “good” means for blackbox, what each major version promised, what **1.4–1.6** shipped, and what **1.7** targets.
+What “good” means for blackbox, what each major version promised, what **1.4–1.6** shipped, and what **1.7** has qualified for release.
 
 This is **product direction**, not a how-to. Operators: [guide/README.md](guide/README.md).
-**1.7 (in progress):** [issue #5](https://github.com/wanazhar/blackbox/issues/5) — agent boundaries, containment evidence, incident reconstruction. Plan: [plan/agent-boundary-1.7.md](plan/agent-boundary-1.7.md).
+**1.7 (implementation complete; release pending):** [issue #5](https://github.com/wanazhar/blackbox/issues/5) — agent boundaries, containment evidence, incident reconstruction. Plan: [plan/agent-boundary-1.7.md](plan/agent-boundary-1.7.md).
 **1.6 (shipped 1.6.0):** [issue #4](https://github.com/wanazhar/blackbox/issues/4) — verified runs, experiments, reproducibility, durable evidence.
 **1.5 plan (shipped):** [plan/trace-integrity-1.5.md](plan/trace-integrity-1.5.md). Epic: [issue #3](https://github.com/wanazhar/blackbox/issues/3).
 **1.4 plan (shipped):** [plan/trust-proof-1.4.md](plan/trust-proof-1.4.md).
@@ -43,7 +43,7 @@ If a change weakens a bar, it needs an explicit docs + test story.
 | **1.4** | **Trust Proof (Unix 10/10)** | Shipped **1.4.0** |
 | **1.5** | **Trace integrity & scale** | Shipped **1.5.0** — [issue #3](https://github.com/wanazhar/blackbox/issues/3) |
 | **1.6** | **Verified runs & reproducibility** | Shipped **1.6.0** — [issue #4](https://github.com/wanazhar/blackbox/issues/4) |
-| **1.7** | **Agent boundary evidence & incident reconstruction** | In progress — [issue #5](https://github.com/wanazhar/blackbox/issues/5) |
+| **1.7** | **Agent boundary evidence & incident reconstruction** | Implementation complete; qualified before tag — [issue #5](https://github.com/wanazhar/blackbox/issues/5) |
 
 ### 1.1 adoption bar (permanent)
 
@@ -165,7 +165,7 @@ Full plan: [plan/trace-integrity-1.5.md](plan/trace-integrity-1.5.md). Epic: [is
 
 ## Related
 
-- [plan/agent-boundary-1.7.md](plan/agent-boundary-1.7.md) — 1.7 design (in progress)
+- [plan/agent-boundary-1.7.md](plan/agent-boundary-1.7.md) — 1.7 design and completion evidence
 - [plan/trace-integrity-1.5.md](plan/trace-integrity-1.5.md) — full 1.5 design
 - [plan/trust-proof-1.4.md](plan/trust-proof-1.4.md) — 1.4 design (shipped)
 - [plan/trust-explain-1.3.md](plan/trust-explain-1.3.md) — 1.3 design (shipped)
@@ -195,7 +195,7 @@ Operator guides: [fsck](guide/fsck-and-integrity.md), [verification](guide/verif
 
 ---
 
-## 1.7 bar (in progress)
+## 1.7 bar (implementation complete)
 
 Epic: [issue #5](https://github.com/wanazhar/blackbox/issues/5). Plan: [plan/agent-boundary-1.7.md](plan/agent-boundary-1.7.md).
 
@@ -204,12 +204,17 @@ Epic: [issue #5](https://github.com/wanazhar/blackbox/issues/5). Plan: [plan/age
 | **B1** | Resolved boundary contract | ✅ `blackbox.boundary/v1` + policy hash (`run_boundaries`) |
 | **B2** | Containment honesty | ✅ Claim states + immutable receipts |
 | **B3** | Required evidence | ✅ `insufficient_evidence` / fail-closed gate |
-| **E1** | External evidence import | ✅ `blackbox.evidence.event/v1` NDJSON; transactional; path-safe |
+| **E1** | External evidence import | ✅ Versioned transactional NDJSON; host/proxy/Kubernetes/cloud adapters; bounded and path-safe |
 | **E2** | Correlation identity | ✅ Trace identity + multi-signal edges; temporal ≠ confirmed |
 | **V1** | Boundary violations | ✅ Deterministic detectors → findings / `boundary.violation` events |
 | **P1** | Provenance gates | ✅ Task success independent of provenance validity |
-| **I1** | Multi-run incidents | ✅ Incident object + graph (discovery, reuse, earliest signal) |
-| **F1** | Forensic packs | ✅ Bounded redacted packs with validated citations |
-| **Q1** | Adversarial qualification | ✅ Fixtures + `tests/boundary_1_7_full.rs` |
+| **I1** | Multi-run incidents | ✅ Discovery/reuse/earliest signal plus typed delegation, credential, and artifact flows with honest truncation |
+| **F1** | Forensic packs | ✅ Bounded redacted packs with validated citations and model/prompt/configuration provenance |
+| **Q1** | Adversarial qualification | ✅ Permanent detector, evidence, orchestration, incident-scale, and completion gates |
 
 Reference: [reference/boundary.md](reference/boundary.md). CLI: `boundary`, `evidence`, `incident`, `forensic`.
+
+The issue #5 Definition of Done is mapped to permanent executable evidence in
+[plan/analysis/boundary-17-completion.md](plan/analysis/boundary-17-completion.md).
+The full all-target matrix and `release-qualify-unix.sh --quick` were green on
+the completion candidate; publication remains a separate maintainer action.

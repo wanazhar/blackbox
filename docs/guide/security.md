@@ -247,10 +247,12 @@ SSE streams and JSON APIs share the same auth middleware.
 | Payload integrity | When `original_payload_hash` is present, sha256 of `payload`/`raw`/`body` is verified; false `hash_ok` claims demoted |
 | Fail-closed IR import | `evidence import --reject-unverified` keeps locally checked `hash_ok`; NDJSON cannot self-assert `signed_verified` |
 | Correlation confidence | Cooperative `trace_id` and payload hashes do not authenticate a sensor; only trusted signature verification can reach Confirmed |
+| Kubernetes/cloud audit | Provider IDs, principals, workloads, objects, outcomes, and clocks are preserved; malformed recognized records are rejected |
 | Process `object` paths | Absolute exe paths are allowed as labels (never opened) |
 | Containment “verified” | Requires verified+held on a real control — process-only absence of egress does **not** satisfy |
-| Forensic packs | `SecretScanner` + substring patterns + truncation; model claims need citations |
-| Incidents / dashboard | Same auth as other `serve` APIs; HTML escapes free text |
+| Forensic packs | `SecretScanner` + substring patterns + truncation; model claims need citations and model/prompt/configuration fingerprints |
+| Incident exchange | Shared secret scanner, transformation ledger, attachment hashes, unresolved references, and document integrity hash |
+| Incidents / dashboard | Same auth as other `serve` APIs; HTML escapes free text; graph v2 reports exact totals and truncation |
 
 Guide: [boundaries-and-incidents.md](boundaries-and-incidents.md).
 
@@ -262,6 +264,15 @@ Guide: [boundaries-and-incidents.md](boundaries-and-incidents.md).
 | Forensic pack leaks fixture secrets | Packs run the same `SecretScanner` as capture/export before write |
 | Anonymous loopback `serve` | Token auto-generated unless `--allow-anonymous` (loopback-only danger) |
 | Forged cooperative `trace_id` → Confirmed | Permanent unit gates; multi-signal + integrity required |
+| Secret-bearing incident title/summary | Sanitized exchange uses the shared `SecretScanner`, not marker-only replacement |
+
+### Sensor trust, retention, and sharing
+
+Treat Kubernetes and cloud audit records as assertions from their collection path. Configure provider retention and access controls independently; Blackbox retains normalized rows and hashes, not a complete CloudTrail, Audit Log, or Kubernetes audit archive. Preserve originals at least as long as incidents and forensic citations need to be investigated.
+
+An import-context run ID, workload label, principal, or cooperative trace ID is not authenticated attribution. Use a trusted verification step for source authenticity and corroborate identities across independent sensors. Clock skew and collection delay can change apparent event order; inspect `occurred_at`, `observed_at`, and clock uncertainty before claiming causality.
+
+Sanitization lowers disclosure risk but is not declassification. Validate `export_hash`, review the transformation and unresolved-reference ledgers, apply recipient-specific access controls, and share attachment bodies separately only when their policy permits it. Model-derived forensic claims are untrusted derived content even when their citations and reproducibility fingerprints validate.
 
 ---
 
@@ -275,6 +286,8 @@ Guide: [boundaries-and-incidents.md](boundaries-and-incidents.md).
 6. Prefer pinned `--token` / `BLACKBOX_SERVE_TOKEN` for `serve`; avoid `--allow-anonymous` on multi-user hosts.
 7. After expanding scanner patterns: `blackbox scrub --gc`.
 8. Treat imported external evidence as untrusted telemetry. `hash_ok` is a consistency check; only a configured trusted verifier may establish `signed_verified` authenticity.
+9. Retain authoritative sensor originals for the citation window; normalized Blackbox rows are not a complete provider archive.
+10. Validate and manually review sanitized incident exports before crossing a trust boundary.
 
 ---
 

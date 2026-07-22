@@ -78,7 +78,9 @@ jobs:
             --test boundary_contract --test boundary_1_7_full \
             --test boundary_trust_integration --test boundary_detector_quality \
             --test incident_pagination --test auto_provenance \
-            --test evidence_adversarial -- --quiet
+            --test evidence_adversarial --test evidence_orchestration \
+            --test incident_graph_flow --test incident_scale \
+            --test boundary_1_7_completion -- --quiet
 
   # 1.5 Q1: lightweight macOS runtime gate on every PR (not only tag-time build).
   macos:
@@ -123,6 +125,9 @@ jobs:
             --test boundary_detector_quality \
             --test auto_provenance \
             --test evidence_adversarial \
+            --test evidence_orchestration \
+            --test incident_graph_flow \
+            --test boundary_1_7_completion \
             -- --quiet
 
   # Soft matrix note: full release binaries are built on tag via release.yml

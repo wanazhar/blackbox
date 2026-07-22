@@ -596,6 +596,12 @@ pub enum ForensicAction {
         /// Model name (local identifier)
         #[arg(long, default_value = "local")]
         model: String,
+        /// Fingerprint of the exact prompt or prompt template
+        #[arg(long)]
+        prompt_fingerprint: String,
+        /// Fingerprint of inference and runtime configuration
+        #[arg(long)]
+        configuration_fingerprint: String,
         /// Claim text (repeatable via multiple flags not supported — single claim)
         #[arg(long)]
         claim: String,
@@ -2511,6 +2517,8 @@ pub async fn cmd_forensic(
         ForensicAction::Analyze {
             pack: pack_path,
             model,
+            prompt_fingerprint,
+            configuration_fingerprint,
             claim,
             cite,
             refused,
@@ -2527,7 +2535,8 @@ pub async fn cmd_forensic(
             };
             let input = ModelAnalysisInput {
                 model: model.clone(),
-                prompt_fingerprint: None,
+                prompt_fingerprint: prompt_fingerprint.clone(),
+                configuration_fingerprint: configuration_fingerprint.clone(),
                 claims,
                 refused: *refused,
                 failure: failure.clone(),

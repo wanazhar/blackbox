@@ -58,6 +58,12 @@ pub struct ForensicClaim {
     pub confidence: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Fingerprint of the exact prompt/template used to produce a model claim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_fingerprint: Option<String>,
+    /// Fingerprint of inference/runtime configuration used for the model claim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub configuration_fingerprint: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refused: Option<bool>,
 }
@@ -222,6 +228,8 @@ pub fn build_forensic_pack(
             origin: "deterministic".into(),
             confidence: Some(f.severity.as_str().into()),
             model: None,
+            prompt_fingerprint: None,
+            configuration_fingerprint: None,
             refused: None,
         });
     }
@@ -309,7 +317,8 @@ fn short_hash(s: &str) -> String {
 #[derive(Debug, Clone)]
 pub struct ModelAnalysisInput {
     pub model: String,
-    pub prompt_fingerprint: Option<String>,
+    pub prompt_fingerprint: String,
+    pub configuration_fingerprint: String,
     /// Free-form model claims as (text, citation ids).
     pub claims: Vec<(String, Vec<String>)>,
     /// Model refused to analyze.
@@ -323,6 +332,20 @@ pub fn apply_model_analysis(
     pack: &mut ForensicPack,
     input: &ModelAnalysisInput,
 ) -> Result<(), Vec<String>> {
+    let mut provenance_errors = Vec::new();
+    if input.model.trim().is_empty() {
+        provenance_errors.push("model identifier is empty".into());
+    }
+    if input.prompt_fingerprint.trim().is_empty() {
+        provenance_errors.push("model prompt fingerprint is empty".into());
+    }
+    if input.configuration_fingerprint.trim().is_empty() {
+        provenance_errors.push("model configuration fingerprint is empty".into());
+    }
+    if !provenance_errors.is_empty() {
+        return Err(provenance_errors);
+    }
+
     if input.refused {
         pack.derived_claims.push(ForensicClaim {
             claim: "model refused analysis".into(),
@@ -330,6 +353,8 @@ pub fn apply_model_analysis(
             origin: "model".into(),
             confidence: Some("unknown".into()),
             model: Some(input.model.clone()),
+            prompt_fingerprint: Some(input.prompt_fingerprint.clone()),
+            configuration_fingerprint: Some(input.configuration_fingerprint.clone()),
             refused: Some(true),
         });
         if pack.derived_claims.last().unwrap().citations.is_empty() {
@@ -346,6 +371,8 @@ pub fn apply_model_analysis(
             origin: "model".into(),
             confidence: Some("unknown".into()),
             model: Some(input.model.clone()),
+            prompt_fingerprint: Some(input.prompt_fingerprint.clone()),
+            configuration_fingerprint: Some(input.configuration_fingerprint.clone()),
             refused: Some(false),
         });
         pack.coverage_gaps.push("model_analysis_failure".into());
@@ -374,12 +401,10 @@ pub fn apply_model_analysis(
             origin: "model".into(),
             confidence: Some("weakly_correlated".into()),
             model: Some(input.model.clone()),
+            prompt_fingerprint: Some(input.prompt_fingerprint.clone()),
+            configuration_fingerprint: Some(input.configuration_fingerprint.clone()),
             refused: None,
         });
-    }
-    if let Some(ref fp) = input.prompt_fingerprint {
-        pack.coverage_gaps
-            .push(format!("model_prompt_fingerprint:{fp}"));
     }
     pack.pack_hash = hash_pack(pack);
     if errs.is_empty() {
@@ -410,6 +435,12 @@ pub fn validate_claim_citations(pack: &ForensicPack) -> Result<(), Vec<String>> 
         // Model claims must not be origin=deterministic.
         if claim.origin == "model" && claim.model.is_none() {
             errs.push("model claim missing model field".into());
+        }
+        if claim.origin == "model" && claim.prompt_fingerprint.is_none() {
+            errs.push("model claim missing prompt fingerprint".into());
+        }
+        if claim.origin == "model" && claim.configuration_fingerprint.is_none() {
+            errs.push("model claim missing configuration fingerprint".into());
         }
     }
     if errs.is_empty() {
@@ -496,5 +527,79 @@ mod tests {
                 || pack.fingerprints.iter().any(|fp| fp.contains("REDACTED")),
             "expected SecretScanner redaction markers"
         );
+    }
+
+    #[test]
+    fn model_claim_records_reproducibility_provenance() {
+        let ev = TraceEvent::new("r1", EventSource::Tool, "tool.call");
+        let event_id = ev.id.clone();
+        let mut pack = build_forensic_pack(
+            "r1",
+            None,
+            &[ev],
+            &[],
+            &[],
+            &[],
+            &ForensicPackOpts::default(),
+        );
+        let original_hash = pack.pack_hash.clone();
+
+        apply_model_analysis(
+            &mut pack,
+            &ModelAnalysisInput {
+                model: "local/model@sha256:1234".into(),
+                prompt_fingerprint: "sha256:prompt".into(),
+                configuration_fingerprint: "sha256:config".into(),
+                claims: vec![("derived observation".into(), vec![event_id])],
+                refused: false,
+                failure: None,
+            },
+        )
+        .unwrap();
+
+        let claim = pack.derived_claims.last().unwrap();
+        assert_eq!(claim.origin, "model");
+        assert_eq!(claim.model.as_deref(), Some("local/model@sha256:1234"));
+        assert_eq!(claim.prompt_fingerprint.as_deref(), Some("sha256:prompt"));
+        assert_eq!(
+            claim.configuration_fingerprint.as_deref(),
+            Some("sha256:config")
+        );
+        assert_ne!(pack.pack_hash, original_hash);
+        validate_claim_citations(&pack).unwrap();
+    }
+
+    #[test]
+    fn model_analysis_rejects_missing_reproducibility_provenance() {
+        let ev = TraceEvent::new("r1", EventSource::Tool, "tool.call");
+        let mut pack = build_forensic_pack(
+            "r1",
+            None,
+            &[ev],
+            &[],
+            &[],
+            &[],
+            &ForensicPackOpts::default(),
+        );
+        let before = pack.clone();
+
+        let errors = apply_model_analysis(
+            &mut pack,
+            &ModelAnalysisInput {
+                model: "local".into(),
+                prompt_fingerprint: String::new(),
+                configuration_fingerprint: String::new(),
+                claims: vec![],
+                refused: true,
+                failure: None,
+            },
+        )
+        .unwrap_err();
+
+        assert!(errors.iter().any(|e| e.contains("prompt fingerprint")));
+        assert!(errors
+            .iter()
+            .any(|e| e.contains("configuration fingerprint")));
+        assert_eq!(pack, before, "invalid analysis must be mutation-free");
     }
 }

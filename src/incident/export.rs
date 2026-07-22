@@ -4,6 +4,9 @@
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::sync::LazyLock;
+
+use crate::redaction::{scanner::SecretScanner, RedactionConfig};
 
 use super::graph::IncidentGraph;
 use super::model::Incident;
@@ -130,13 +133,9 @@ fn hash_export(doc: &IncidentExport) -> String {
 }
 
 fn redact_text(s: &str) -> String {
-    let mut out = s.to_string();
-    for pat in ["password=", "AKIA", "Bearer ", "secret="] {
-        if out.contains(pat) {
-            out = out.replace(pat, "[REDACTED]");
-        }
-    }
-    out
+    static SCANNER: LazyLock<SecretScanner> =
+        LazyLock::new(|| SecretScanner::new(RedactionConfig::default()));
+    SCANNER.redact(s)
 }
 
 #[cfg(test)]
@@ -151,5 +150,44 @@ mod tests {
         let payloads = vec![("r1".into(), "{}".into())];
         let doc = build_incident_export(&i, None, &payloads, true);
         validate_incident_export(&doc, false).unwrap();
+    }
+
+    #[test]
+    fn sanitized_export_removes_secrets_and_records_transformations() {
+        let secret = "sk-abcdefghijklmnopqrstuvwxyz012345";
+        let mut incident = Incident::new(Some(format!("credential {secret}")));
+        incident.summary = Some("password=correct-horse-battery-staple".into());
+        attach_to_incident(
+            &mut incident,
+            IncidentAttachmentKind::Run,
+            "r1",
+            None::<String>,
+        );
+
+        let doc = build_incident_export(
+            &incident,
+            None,
+            &[("r1".into(), format!("attachment still hashed: {secret}"))],
+            true,
+        );
+        let encoded = serde_json::to_string(&doc).unwrap();
+
+        assert!(!encoded.contains(secret));
+        assert!(!encoded.contains("correct-horse-battery-staple"));
+        assert!(encoded.contains("REDACTED"));
+        assert!(doc.transformations.iter().any(|t| t == "title_redacted"));
+        assert!(doc.transformations.iter().any(|t| t == "summary_redacted"));
+        assert_eq!(doc.attachment_hashes.len(), 1);
+        validate_incident_export(&doc, false).unwrap();
+    }
+
+    #[test]
+    fn sanitized_export_detects_tampering() {
+        let incident = Incident::new(Some("integrity".into()));
+        let mut doc = build_incident_export(&incident, None, &[], true);
+        doc.incident.title = Some("changed after export".into());
+
+        let errors = validate_incident_export(&doc, false).unwrap_err();
+        assert!(errors.iter().any(|error| error == "export_hash mismatch"));
     }
 }

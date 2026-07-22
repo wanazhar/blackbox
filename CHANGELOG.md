@@ -7,6 +7,7 @@ All notable changes to **blackbox** are documented here.
 ### 1.7 — Agent boundary evidence & incident reconstruction
 
 Epic: [issue #5](https://github.com/wanazhar/blackbox/issues/5). Plan: [docs/plan/agent-boundary-1.7.md](docs/plan/agent-boundary-1.7.md).
+Implementation is complete and the all-target plus Unix quick qualification gates are green; release remains pending.
 
 #### Phase A/B — Boundary contracts & containment
 - **`blackbox.boundary/v1`**: purpose, allowed/prohibited, dispositions, required evidence, fail-closed
@@ -16,6 +17,7 @@ Epic: [issue #5](https://github.com/wanazhar/blackbox/issues/5). Plan: [docs/pla
 
 #### Phase C/D — External evidence & correlation
 - **`blackbox.evidence.event/v1`** NDJSON import (idempotent, bounded, path-safe)
+- Sensor adapters for Falco-like, HTTP proxy, process audit, Kubernetes audit, AWS CloudTrail, and GCP Audit Log records; malformed recognized records reject without invented identity/effect defaults
 - Trace identity minting; multi-signal **evidence edges** (temporal proximity never confirmed alone)
 - Store schema **v10**: `external_evidence`, `evidence_edges`, `run_trace_identity`, …
 
@@ -25,20 +27,21 @@ Epic: [issue #5](https://github.com/wanazhar/blackbox/issues/5). Plan: [docs/pla
 
 #### Phase F/H — Incidents & forensic packs
 - Multi-run **incidents** with graph (discovery, reuse, earliest signal, continued activity)
-- Local **forensic packs** (redacted, citation-validated, no hosted provider required)
+- Typed delegation, credential-use, and artifact-derivation flows; bounded graph detail with exact totals and explicit truncation
+- Local **forensic packs** (redacted, citation-validated, no hosted provider required); model claims record model, prompt, and configuration fingerprints
 
 #### CLI
 - `boundary validate|show|set|evaluate|receipt|detect|provenance`
 - `evidence import|list`
 - `incident create|list|show|attach`
-- `forensic pack`
+- `forensic pack|analyze`
 - `run --boundary` / `--boundary-parent` / `--boundary-fail-closed`
 
 #### Depth (integration)
 - Summary/postmortem `boundary_trust`; score fails on provenance/critical findings even with exit 0
 - Experiment `gate --require-boundary-ok --require-provenance-ok --fail-on-critical-findings`
 - Portable export/import of boundary, containment, evidence, edges, findings, provenance, trace identity
-- Sensor adapters: Falco-like, HTTP proxy, process audit JSON
+- Sensor adapters: Falco-like, HTTP proxy, process audit, Kubernetes audit, AWS CloudTrail, GCP Audit Log
 - Auto launch/post-run containment canaries + auto-detect on boundary runs
 - Incident sanitized export with integrity hash; forensic `analyze` for local model claims
 - MCP: `blackbox_boundary`, `blackbox_evidence`, `blackbox_incident`, `blackbox_forensic`
@@ -47,9 +50,9 @@ Epic: [issue #5](https://github.com/wanazhar/blackbox/issues/5). Plan: [docs/pla
 
 #### Polish (pre-release)
 - Detector **FP/FN quality gate** (`evaluate_detector_quality`, min recall 0.85 / precision 0.80; benign controls must be clean)
-- Expanded corpus (~22 cases): escape, probe, credential, package, privilege, transition, benign admin/dev
+- Expanded permanent corpus: escape, probe, credential, package/repository manipulation, privilege, poisoned instructions, persistence, swarm/delegation, telemetry deception, transitions, and benign controls
 - **Residual-risk closure:** payload-hash verify + `--reject-unverified` on evidence import; correlation caps on unverified integrity / cooperative `trace_id`; forensic packs use `SecretScanner`; `serve` auto-token by default (`--allow-anonymous` danger opt-in)
-- Incident **cursor pagination** (`list_incidents_page`, CLI `--cursor/--limit`) + **aggregates** on show
+- Incident **cursor pagination** (`list_incidents_page`, CLI `--cursor/--limit`) + **aggregates** on show; 10k-incident and graph-detail scale gates
 - Dashboard HTML: run trust panel + findings table; `/incidents` and `/incidents/{id}` pages
 - Incident page **reconstruction graph** (SVG runs + reuse curves), earliest-signal banner, techniques/findings/edges tables
 - **Auto provenance** from experiment `dataset_case` / task_id on run end
@@ -59,6 +62,7 @@ Epic: [issue #5](https://github.com/wanazhar/blackbox/issues/5). Plan: [docs/pla
 #### Tests & fixtures
 - `tests/boundary_contract.rs`, `tests/boundary_1_7_full.rs`, `tests/boundary_trust_integration.rs`
 - `tests/boundary_detector_quality.rs`, `tests/incident_pagination.rs`, `tests/auto_provenance.rs`
+- `tests/evidence_orchestration.rs`, `tests/incident_graph_flow.rs`, `tests/incident_scale.rs`, `tests/boundary_1_7_completion.rs`
 - `tests/fixtures/boundary_1_7/` (proxy, credential, benign admin)
 
 ## [1.6.0] — 2026-07-21

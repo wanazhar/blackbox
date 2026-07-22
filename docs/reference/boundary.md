@@ -128,7 +128,7 @@ A **required** `containment_receipt` is satisfied only by a receipt with claim `
 
 ## External evidence (`blackbox.evidence.event/v1`)
 
-Normalized NDJSON for process/network/proxy/k8s/cloud/generic sensors. Import is idempotent on `(source, source_event_id)`, bounded, and rejects absolute/traversal path attributes.
+Normalized NDJSON for process/network/proxy/Kubernetes/cloud/generic sensors. Built-in mappings cover Falco-like, HTTP proxy, process audit, Kubernetes audit, AWS CloudTrail, and GCP Audit Log records. Import is idempotent on `(source, source_event_id)`, bounded, and rejects absolute/traversal path attributes. Recognized sensor records missing required provider fields are rejected rather than defaulted.
 
 ```bash
 blackbox evidence import events.ndjson --run <run|latest>
@@ -138,7 +138,7 @@ blackbox evidence list --run latest
 
 ## Correlation & trace identity
 
-Each supervised run mints a random `TraceIdentity`. Edges never upgrade temporal proximity alone to `confirmed`. Matching cooperative `trace_id` alone is at most `strongly_correlated` (closed residual risk). A matching payload hash proves consistency but not source authenticity, so `hash_ok` is also capped below `confirmed`. Only evidence admitted by a trusted signature verifier can reach `confirmed`; NDJSON input cannot self-assert `signed_verified`.
+Each supervised run mints a random `TraceIdentity`. Correlation can combine process ID, host, workload, principal, trace ID, import context, and time. Edges never upgrade temporal proximity alone to `confirmed`. Matching cooperative `trace_id` alone is at most `strongly_correlated` (closed residual risk). Conflicting principals weaken attribution. A matching payload hash proves consistency but not source authenticity, so `hash_ok` is also capped below `confirmed`. Only evidence admitted by a trusted signature verifier can reach `confirmed`; NDJSON input cannot self-assert `signed_verified`.
 
 ## Detection & provenance
 
@@ -153,11 +153,18 @@ Task correctness and provenance validity are independent: a correct answer with 
 
 ```bash
 blackbox incident create --title "egress" --run r1 --run r2
-blackbox incident show <inc-id>
+blackbox incident show <inc-id> --graph
 blackbox forensic pack <run> -o pack.json
+blackbox forensic analyze pack.json --model local/model@sha256:... \
+  --prompt-fingerprint sha256:... --configuration-fingerprint sha256:... \
+  --claim "derived claim" --cite <event-or-finding-id>
 ```
 
-Forensic packs run `SecretScanner` (same patterns as capture/export) plus optional substring tags, cite original evidence pointers, and keep model-derived claims (if any) as `origin=model` — never as raw evidence.
+Incident graph schema `blackbox.incident.graph/v2` carries typed delegation, credential-use, and artifact-derivation flows. `edge_count`, `flow_count`, `flow_counts`, `technique_count`, and `reuse_count` are exact source totals when `counts_exact=true`. `detail_limits` and `truncation` distinguish totals from serialized details. Deserialized v1 graphs have `counts_exact=false`; their list lengths are lower bounds and truncation is unknown.
+
+Forensic packs run `SecretScanner` (same patterns as capture/export) plus optional substring tags, cite original evidence pointers, and keep model-derived claims (if any) as `origin=model` — never as raw evidence. Model claims require a model identifier and prompt/configuration fingerprints. Refusal and failure records carry the same provenance.
+
+`blackbox.incident.export/v1` records sanitization steps, supplied attachment payload hashes, unresolved references, and a document `export_hash`. Validate the hash before trusting a received exchange. Attachment bodies are not embedded, so hashes remain citations to separately retained originals.
 
 ## CLI
 

@@ -176,9 +176,9 @@ Full plan: [plan/trace-integrity-1.5.md](plan/trace-integrity-1.5.md). Epic: [is
 
 ---
 
-## 1.6 bar (shipped in 1.6.0)
+## 1.6 bar (must pass before tag)
 
-Epic: [issue #4](https://github.com/wanazhar/blackbox/issues/4).
+Epic: [issue #4](https://github.com/wanazhar/blackbox/issues/4). Shipped in **1.6.0**.
 
 | Area | Requirement | Tests / gate |
 |---|---|---|

@@ -52,6 +52,8 @@ Epic: [issue #5](https://github.com/wanazhar/blackbox/issues/5). Plan: [docs/pla
 - Dashboard HTML: run trust panel + findings table; `/incidents` and `/incidents/{id}` pages
 - Incident page **reconstruction graph** (SVG runs + reuse curves), earliest-signal banner, techniques/findings/edges tables
 - **Auto provenance** from experiment `dataset_case` / task_id on run end
+- Docs coverage: README, mkdocs nav, inventory, MCP/score/portable/glossary/cheatsheet/skills, rustdoc module maps
+- Red-team fixes: process-only canary no longer satisfies required containment; stronger path-attr / blob-key validation on evidence import
 
 #### Tests & fixtures
 - `tests/boundary_contract.rs`, `tests/boundary_1_7_full.rs`, `tests/boundary_trust_integration.rs`

@@ -94,6 +94,7 @@ Links point at the GitHub tree so they resolve from crates.io as well as GitHub.
 | Store integrity (`fsck`) | [Fsck & integrity](https://github.com/wanazhar/blackbox/blob/master/docs/guide/fsck-and-integrity.md) |
 | Verification receipts | [Verification](https://github.com/wanazhar/blackbox/blob/master/docs/guide/verification.md) |
 | Experiments & CI gates | [Experiments](https://github.com/wanazhar/blackbox/blob/master/docs/guide/experiments.md) |
+| Boundaries, evidence, incidents (1.7) | [Boundaries & incidents](https://github.com/wanazhar/blackbox/blob/master/docs/guide/boundaries-and-incidents.md) |
 | Capsules & MCP cassettes | [Capsules](https://github.com/wanazhar/blackbox/blob/master/docs/guide/capsules-and-cassettes.md) |
 | Budgets & external adapters | [Budgets](https://github.com/wanazhar/blackbox/blob/master/docs/guide/budgets-and-adapters.md) |
 | Day-to-day CLI / TUI / serve | [Everyday use](https://github.com/wanazhar/blackbox/blob/master/docs/guide/everyday-use.md) |
@@ -112,6 +113,8 @@ Links point at the GitHub tree so they resolve from crates.io as well as GitHub.
 | Every subcommand | [CLI reference](https://github.com/wanazhar/blackbox/blob/master/docs/reference/cli.md) |
 | `--json` views | [JSON API](https://github.com/wanazhar/blackbox/blob/master/docs/reference/json-api.md) |
 | MCP tools | [MCP](https://github.com/wanazhar/blackbox/blob/master/docs/reference/mcp.md) |
+| Boundary contracts (1.7) | [Boundary reference](https://github.com/wanazhar/blackbox/blob/master/docs/reference/boundary.md) |
+| Eval score.json | [Score](https://github.com/wanazhar/blackbox/blob/master/docs/reference/score.md) |
 | Memory pack schema | [Memory pack](https://github.com/wanazhar/blackbox/blob/master/docs/reference/memory-pack.md) |
 | Agent session playbook | [skills/blackbox.md](https://github.com/wanazhar/blackbox/blob/master/docs/skills/blackbox.md) |
 

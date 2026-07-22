@@ -1,9 +1,16 @@
-//! External evidence ingestion (1.7 Phase C).
+//! External evidence ingestion (1.7).
 //!
 //! Schema: **`blackbox.evidence.event/v1`**.
 //!
-//! Imports kernel/network/proxy/container/cloud/identity telemetry as
-//! versioned, integrity-checked NDJSON without reimplementing those sensors.
+//! # Safety
+//!
+//! Imports are **bounded**, **idempotent** on `(source, source_event_id)`,
+//! and reject absolute/traversal path attributes used as loadable file refs.
+//! Sensors are adapters (Falco-like, HTTP proxy, process audit, generic JSONL);
+//! Blackbox does not run those agents itself.
+//!
+//! Operator docs: `docs/guide/boundaries-and-incidents.md` · reference
+//! `docs/reference/boundary.md`.
 
 mod adapters;
 mod event;

@@ -260,6 +260,62 @@
     "status": "keep"
   },
   {
+    "path": "docs/guide/boundaries-and-incidents.md",
+    "title": "Boundaries, evidence, and incidents",
+    "audience": "operator",
+    "purpose": "Operator guide for boundary contracts, evidence import, incidents, forensic packs (1.7)",
+    "canonical_topic_owner": "docs/guide/boundaries-and-incidents.md",
+    "source_of_truth": "docs/guide/boundaries-and-incidents.md",
+    "commands_referenced": [
+      "boundary",
+      "evidence",
+      "incident",
+      "forensic"
+    ],
+    "schemas_referenced": [
+      "blackbox.boundary/v1",
+      "blackbox.evidence.event/v1"
+    ],
+    "last_verified_version": "1.7.0-dev",
+    "status": "keep"
+  },
+  {
+    "path": "docs/guide/budgets-and-adapters.md",
+    "title": "Execution budgets and external adapters",
+    "audience": "operator",
+    "purpose": "budget capabilities; adapter protocol; project index",
+    "canonical_topic_owner": "docs/guide/budgets-and-adapters.md",
+    "source_of_truth": "docs/guide/budgets-and-adapters.md",
+    "commands_referenced": [
+      "blackbox budget",
+      "blackbox adapter",
+      "blackbox projects"
+    ],
+    "schemas_referenced": [
+      "blackbox.adapter/v1",
+      "blackbox.budget.report/v1"
+    ],
+    "last_verified_version": "1.6.0-dev",
+    "status": "keep"
+  },
+  {
+    "path": "docs/guide/capsules-and-cassettes.md",
+    "title": "Capsules and MCP cassettes",
+    "audience": "operator",
+    "purpose": "reproducibility capsules; experimental MCP cassette",
+    "canonical_topic_owner": "docs/guide/capsules-and-cassettes.md",
+    "source_of_truth": "docs/guide/capsules-and-cassettes.md",
+    "commands_referenced": [
+      "blackbox capsule",
+      "blackbox cassette"
+    ],
+    "schemas_referenced": [
+      "blackbox.capsule/v1"
+    ],
+    "last_verified_version": "1.6.0-dev",
+    "status": "keep"
+  },
+  {
     "path": "docs/guide/cheatsheet.md",
     "title": "Cheatsheet",
     "audience": "operator",
@@ -435,6 +491,25 @@
     "status": "keep"
   },
   {
+    "path": "docs/guide/experiments.md",
+    "title": "Experiments, reports, and gates",
+    "audience": "operator",
+    "purpose": "experiment cohorts and CI gates",
+    "canonical_topic_owner": "docs/guide/experiments.md",
+    "source_of_truth": "docs/guide/experiments.md",
+    "commands_referenced": [
+      "blackbox experiment",
+      "blackbox report",
+      "blackbox gate"
+    ],
+    "schemas_referenced": [
+      "blackbox.experiment/v1",
+      "blackbox.gate/v1"
+    ],
+    "last_verified_version": "1.6.0-dev",
+    "status": "keep"
+  },
+  {
     "path": "docs/guide/export-and-sync.md",
     "title": "Export and sync",
     "audience": "operator",
@@ -451,6 +526,22 @@
     ],
     "schemas_referenced": [],
     "last_verified_version": "1.5.0-dev",
+    "status": "keep"
+  },
+  {
+    "path": "docs/guide/fsck-and-integrity.md",
+    "title": "Store integrity and fsck",
+    "audience": "operator",
+    "purpose": "fsck, spool recovery, repair",
+    "canonical_topic_owner": "docs/guide/fsck-and-integrity.md",
+    "source_of_truth": "docs/guide/fsck-and-integrity.md",
+    "commands_referenced": [
+      "blackbox fsck"
+    ],
+    "schemas_referenced": [
+      "blackbox.fsck/v1"
+    ],
+    "last_verified_version": "1.6.0-dev",
     "status": "keep"
   },
   {
@@ -639,6 +730,22 @@
     "status": "keep"
   },
   {
+    "path": "docs/guide/verification.md",
+    "title": "Verification outcomes and receipts",
+    "audience": "operator",
+    "purpose": "execution vs verification vs capture",
+    "canonical_topic_owner": "docs/guide/verification.md",
+    "source_of_truth": "docs/guide/verification.md",
+    "commands_referenced": [
+      "blackbox verify"
+    ],
+    "schemas_referenced": [
+      "blackbox.verification.receipt/v1"
+    ],
+    "last_verified_version": "1.6.0-dev",
+    "status": "keep"
+  },
+  {
     "path": "docs/guide/what-is-blackbox.md",
     "title": "What is blackbox?",
     "audience": "operator",
@@ -763,6 +870,20 @@
     "status": "archive"
   },
   {
+    "path": "docs/plan/agent-boundary-1.7.md",
+    "title": "Blackbox 1.7 \u2014 Agent Boundary Evidence & Incident Reconstruction",
+    "audience": "mixed",
+    "purpose": "Product + technical plan for 1.7",
+    "canonical_topic_owner": "docs/plan/agent-boundary-1.7.md",
+    "source_of_truth": "docs/plan/agent-boundary-1.7.md",
+    "commands_referenced": [],
+    "schemas_referenced": [
+      "blackbox.boundary/v1"
+    ],
+    "last_verified_version": "1.7.0-dev",
+    "status": "keep"
+  },
+  {
     "path": "docs/plan/agent-memory-bus-1.2.md",
     "title": "Blackbox 1.2 \u2014 Agent Memory Bus (Continuity Plane)",
     "audience": "historical/design",
@@ -861,6 +982,28 @@
     "schemas_referenced": [],
     "last_verified_version": "1.5.0-dev",
     "status": "archive"
+  },
+  {
+    "path": "docs/reference/boundary.md",
+    "title": "Boundary contract reference (`blackbox.boundary/v1`)",
+    "audience": "automation",
+    "purpose": "Schema and CLI reference for boundaries, containment, evidence, incidents",
+    "canonical_topic_owner": "docs/reference/boundary.md",
+    "source_of_truth": "docs/reference/boundary.md",
+    "commands_referenced": [
+      "boundary",
+      "evidence",
+      "incident",
+      "forensic"
+    ],
+    "schemas_referenced": [
+      "blackbox.boundary/v1",
+      "blackbox.containment.receipt/v1",
+      "blackbox.evidence.event/v1",
+      "blackbox.provenance/v1"
+    ],
+    "last_verified_version": "1.7.0-dev",
+    "status": "keep"
   },
   {
     "path": "docs/reference/cli.md",
@@ -1110,93 +1253,6 @@
     "commands_referenced": [],
     "schemas_referenced": [],
     "last_verified_version": "1.5.0-dev",
-    "status": "keep"
-  },
-  {
-    "path": "docs/guide/fsck-and-integrity.md",
-    "title": "Store integrity and fsck",
-    "audience": "operator",
-    "purpose": "fsck, spool recovery, repair",
-    "canonical_topic_owner": "docs/guide/fsck-and-integrity.md",
-    "source_of_truth": "docs/guide/fsck-and-integrity.md",
-    "commands_referenced": [
-      "blackbox fsck"
-    ],
-    "schemas_referenced": [
-      "blackbox.fsck/v1"
-    ],
-    "last_verified_version": "1.6.0-dev",
-    "status": "keep"
-  },
-  {
-    "path": "docs/guide/verification.md",
-    "title": "Verification outcomes and receipts",
-    "audience": "operator",
-    "purpose": "execution vs verification vs capture",
-    "canonical_topic_owner": "docs/guide/verification.md",
-    "source_of_truth": "docs/guide/verification.md",
-    "commands_referenced": [
-      "blackbox verify"
-    ],
-    "schemas_referenced": [
-      "blackbox.verification.receipt/v1"
-    ],
-    "last_verified_version": "1.6.0-dev",
-    "status": "keep"
-  },
-  {
-    "path": "docs/guide/experiments.md",
-    "title": "Experiments, reports, and gates",
-    "audience": "operator",
-    "purpose": "experiment cohorts and CI gates",
-    "canonical_topic_owner": "docs/guide/experiments.md",
-    "source_of_truth": "docs/guide/experiments.md",
-    "commands_referenced": [
-      "blackbox experiment",
-      "blackbox report",
-      "blackbox gate"
-    ],
-    "schemas_referenced": [
-      "blackbox.experiment/v1",
-      "blackbox.gate/v1"
-    ],
-    "last_verified_version": "1.6.0-dev",
-    "status": "keep"
-  },
-  {
-    "path": "docs/guide/capsules-and-cassettes.md",
-    "title": "Capsules and MCP cassettes",
-    "audience": "operator",
-    "purpose": "reproducibility capsules; experimental MCP cassette",
-    "canonical_topic_owner": "docs/guide/capsules-and-cassettes.md",
-    "source_of_truth": "docs/guide/capsules-and-cassettes.md",
-    "commands_referenced": [
-      "blackbox capsule",
-      "blackbox cassette"
-    ],
-    "schemas_referenced": [
-      "blackbox.capsule/v1"
-    ],
-    "last_verified_version": "1.6.0-dev",
-    "status": "keep"
-  },
-  {
-    "path": "docs/guide/budgets-and-adapters.md",
-    "title": "Execution budgets and external adapters",
-    "audience": "operator",
-    "purpose": "budget capabilities; adapter protocol; project index",
-    "canonical_topic_owner": "docs/guide/budgets-and-adapters.md",
-    "source_of_truth": "docs/guide/budgets-and-adapters.md",
-    "commands_referenced": [
-      "blackbox budget",
-      "blackbox adapter",
-      "blackbox projects"
-    ],
-    "schemas_referenced": [
-      "blackbox.adapter/v1",
-      "blackbox.budget.report/v1"
-    ],
-    "last_verified_version": "1.6.0-dev",
     "status": "keep"
   }
 ]

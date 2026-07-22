@@ -160,24 +160,31 @@ pub fn post_run_canary_receipts(
         r.summary = Some("public egress observed under hard prohibition".into());
         out.push(r);
     } else if process_evidence_present && !public_egress_observed && prohibits_public {
-        // Only claim verified-held for process observation — not network without sensor.
+        // Honest: process capture without network sensors is **not** verified
+        // network containment. Use ObservedOnly + NotObserved so required
+        // `containment_receipt` gates cannot be satisfied by absence of egress.
         let mut r = ContainmentReceipt::new(
             run_id,
-            ContainmentClaimState::Verified,
-            ContainmentResult::Held,
+            ContainmentClaimState::ObservedOnly,
+            ContainmentResult::NotObserved,
             "blackbox-canary",
             "post_run_canary",
         );
         r.scope = ContainmentScope {
-            control: Some("process_observation".into()),
+            control: Some("network_egress".into()),
             backend: Some("capture".into()),
             sandbox_id: None,
-            label: None,
+            label: Some("no_public_egress_in_capture".into()),
         };
         r.policy_hash = policy_hash;
-        r.summary = Some("process evidence present; no prohibited public egress observed".into());
-        r.limitations
-            .push("absence of evidence is not evidence of absence for network".into());
+        r.summary = Some(
+            "process evidence present; no prohibited public egress observed in capture window"
+                .into(),
+        );
+        r.limitations.push(
+            "absence of observed egress is not verified containment without a network sensor"
+                .into(),
+        );
         out.push(r);
     }
     out
@@ -220,5 +227,18 @@ mod tests {
         assert!(r
             .iter()
             .any(|x| matches!(x.result, ContainmentResult::Violated)));
+    }
+
+    #[test]
+    fn process_only_does_not_satisfy_required_containment() {
+        let b = resolve_boundary(&BoundaryContract::eval_example(), ResolveOpts::default())
+            .unwrap()
+            .with_run_id("r1");
+        let r = post_run_canary_receipts("r1", Some(&b), false, true);
+        assert!(!r.is_empty());
+        assert!(
+            r.iter().all(|x| !x.satisfies_required_containment()),
+            "process-only canary must not satisfy required containment_receipt"
+        );
     }
 }

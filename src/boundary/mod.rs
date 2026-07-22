@@ -2,9 +2,19 @@
 //!
 //! Schema id: **`blackbox.boundary/v1`**.
 //!
+//! # What this module provides
+//!
+//! - **Contracts** — [`BoundaryContract`], [`resolve_boundary`], policy hash
+//! - **Containment** — [`ContainmentReceipt`] claim states (configured ≠ verified)
+//! - **Trust rollup** — [`build_boundary_trust`] for summary/score/gates
+//! - **Detectors** — [`detect_boundary_findings`] deterministic violations
+//! - **Quality corpus** — [`evaluate_detector_quality`] permanent FP/FN bar
+//! - **Provenance** — [`evaluate_provenance`], [`auto_provenance_record`]
+//!
 //! Blackbox records what an agent was *authorized* to do and what evidence
 //! supports that claim. It does **not** enforce sandbox/firewall policy by
-//! default — see the threat model in `docs/plan/agent-boundary-1.7.md`.
+//! default — see the threat model in `docs/plan/agent-boundary-1.7.md` and
+//! operator guide `docs/guide/boundaries-and-incidents.md`.
 
 mod auto_provenance;
 mod canary;

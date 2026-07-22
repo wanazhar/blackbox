@@ -81,6 +81,7 @@ nav:
       - Store integrity (fsck): guide/fsck-and-integrity.md
       - Verification: guide/verification.md
       - Experiments & gates: guide/experiments.md
+      - Boundaries & incidents: guide/boundaries-and-incidents.md
       - Capsules & cassettes: guide/capsules-and-cassettes.md
       - Budgets & adapters: guide/budgets-and-adapters.md
       - Overhead: guide/overhead.md
@@ -91,6 +92,7 @@ nav:
       - MCP: reference/mcp.md
       - Memory pack: reference/memory-pack.md
       - Eval score: reference/score.md
+      - Boundary contracts: reference/boundary.md
       - Portable format: reference/portable-format.md
       - Stream protocol: reference/stream-protocol.md
   - Agents:
@@ -102,7 +104,7 @@ nav:
       - Continuity plane: internals/continuity-plane.md
   - Product:
       - Roadmap: ROADMAP.md
-      - 1.5 plan (active): plan/trace-integrity-1.5.md
+      - 1.7 plan: plan/agent-boundary-1.7.md
       - Claim matrix: claims.md
       - Docs inventory: inventory.md
       - Changelog: CHANGELOG.md

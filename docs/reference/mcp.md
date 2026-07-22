@@ -13,6 +13,7 @@ Blackbox exposes a **Model Context Protocol (MCP)** server over stdio so agents 
 | **Session start** | [`blackbox_handoff`](#blackbox_handoff) · [`blackbox_memory`](#blackbox_memory) · [`blackbox_status`](#blackbox_status) |
 | **Debug failure** | [`blackbox_fail`](#blackbox_fail) · [`blackbox_postmortem`](#blackbox_postmortem) · [`blackbox_timeline`](#blackbox_timeline) · [`blackbox_anomalies`](#blackbox_anomalies) · [`blackbox_context`](#blackbox_context) · [`blackbox_runs`](#blackbox_runs) · [`blackbox_search`](#blackbox_search) |
 | **Multi-agent** | [`blackbox_claim`](#blackbox_claim) · [`blackbox_resolve`](#blackbox_resolve) · [`blackbox_memory_update`](#blackbox_memory_update) |
+| **Boundaries / IR (1.7)** | [`blackbox_boundary`](#blackbox_boundary) · [`blackbox_evidence`](#blackbox_evidence) · [`blackbox_incident`](#blackbox_incident) · [`blackbox_forensic`](#blackbox_forensic) |
 | **Diagnostics** | [`blackbox_doctor`](#blackbox_doctor) |
 
 ---
@@ -239,6 +240,53 @@ Bookkeeping kinds filtered when `semantic=true` (`pty.started`, observer start/s
 | **CLI equivalent** | `blackbox doctor --json` |
 | **Input** | — |
 | **Output** | Store path, schema, sizes, warnings, daily-driver notes |
+
+---
+
+### `blackbox_boundary`
+
+| | |
+|---|---|
+| **When to use** | Inspect authorization / containment / findings / provenance trust for a run. |
+| **When not to** | You only need exit code or raw timeline. |
+| **CLI equivalent** | `blackbox boundary show` + detect/evaluate fields |
+| **Input** | `run_id?: string` (default `latest`) |
+| **Output** | `boundary`, `trust`, `findings`, `containment_receipts`, `provenance_records` |
+
+Guide: [boundaries-and-incidents](../guide/boundaries-and-incidents.md).
+
+---
+
+### `blackbox_evidence`
+
+| | |
+|---|---|
+| **When to use** | List imported external telemetry linked to a run. |
+| **CLI equivalent** | `blackbox evidence list --run …` |
+| **Input** | `run_id?: string`, `limit?: int` |
+| **Output** | `events[]` of `blackbox.evidence.event/v1` |
+
+---
+
+### `blackbox_incident`
+
+| | |
+|---|---|
+| **When to use** | List incidents or show one multi-run reconstruction object. |
+| **CLI equivalent** | `blackbox incident list` / `incident show` |
+| **Input** | `id?: string` (omit to list), `limit?: int` |
+| **Output** | Incident object or `{ incidents, count }` |
+
+---
+
+### `blackbox_forensic`
+
+| | |
+|---|---|
+| **When to use** | Build a redacted forensic pack summary for local analysis (no hosted model required). |
+| **CLI equivalent** | `blackbox forensic pack …` |
+| **Input** | `run_id?: string`, `max_events?: int` |
+| **Output** | Pack metadata, findings count, fingerprints, derived claims (not raw secrets) |
 
 ---
 

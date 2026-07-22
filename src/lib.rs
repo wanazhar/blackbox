@@ -36,10 +36,10 @@
 //! | [`adapters`] | Harness detection and parse |
 //! | [`redaction`] | Secret scanning before write |
 //! | [`verification`] | Immutable receipts and outcomes |
-//! | [`boundary`] | Boundary contracts, containment, evidence gates |
-//! | [`evidence`] | External evidence NDJSON import |
-//! | [`incident`] | Multi-run incident reconstruction |
-//! | [`forensic`] | Local forensic analysis packs |
+//! | [`boundary`] | Boundary contracts, containment, detectors, provenance, trust (1.7) |
+//! | [`evidence`] | External evidence NDJSON import + sensor adapters (1.7) |
+//! | [`incident`] | Multi-run incident reconstruction + pagination (1.7) |
+//! | [`forensic`] | Local forensic analysis packs (1.7) |
 //! | [`experiment`] | Experiments, reports, gates |
 //! | [`export`] | Portable / JSONL / HTML |
 //! | [`integrity`] | `fsck` and repair |

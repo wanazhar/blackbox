@@ -236,6 +236,20 @@ SSE streams and JSON APIs share the same auth middleware.
 
 ---
 
+## 8b. Boundaries & external evidence (1.7)
+
+| Topic | Default |
+|---|---|
+| External NDJSON import | Bounded size/count; idempotent; rejects loadable absolute/`..` path **attributes** |
+| Process `object` paths | Absolute exe paths are allowed as labels (never opened) |
+| Containment “verified” | Requires verified+held on a real control — process-only absence of egress does **not** satisfy |
+| Forensic packs | Pattern redaction + truncation; model claims need citations |
+| Incidents / dashboard | Same auth as other `serve` APIs; HTML escapes free text |
+
+Guide: [boundaries-and-incidents.md](boundaries-and-incidents.md).
+
+---
+
 ## 9. Operational checklist
 
 1. Keep `.blackbox/` gitignored.
@@ -245,6 +259,7 @@ SSE streams and JSON APIs share the same auth middleware.
 5. Use passphrase `backup` for cold storage; test `restore` once.
 6. Token-protect any non-loopback `serve`.
 7. After expanding scanner patterns: `blackbox scrub --gc`.
+8. Treat imported external evidence as untrusted telemetry (integrity fields may be `unverified`).
 
 ---
 
@@ -254,7 +269,9 @@ SSE streams and JSON APIs share the same auth middleware.
 |---|---|
 | `tests/redaction_gate.rs` | Structural IDs live; secrets die |
 | `tests/redaction_adversarial.rs` | Chunk splits, export, mixed SHA+secret |
+| `tests/boundary_detector_quality.rs` | Detector FP/FN permanent gate |
 | `src/redaction/` | Scanner + stream redactor |
 | `src/crypto.rs` | Blob seal, sealed packs |
 | `src/backup.rs` | Store vault |
 | `src/privacy.rs` | Path modes, bind checks |
+| `src/evidence/` | Import validation / path-attr rejection |

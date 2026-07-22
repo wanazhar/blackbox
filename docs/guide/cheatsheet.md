@@ -181,7 +181,20 @@ blackbox projects scan .
 blackbox projects prune
 ```
 
-Guides: [fsck](fsck-and-integrity.md) · [verification](verification.md) · [experiments](experiments.md) · [capsules](capsules-and-cassettes.md) · [budgets](budgets-and-adapters.md).
+### Boundaries / evidence / incidents (1.7)
+
+```bash
+blackbox run --boundary eval.json --boundary-fail-closed --dataset-case case-1 -- agent
+blackbox evidence import proxy.ndjson --run latest
+blackbox boundary detect latest
+blackbox boundary evaluate latest --gate
+blackbox boundary provenance latest --declared dataset://case-1 --task-passed true --gate
+blackbox incident create --title swarm --run latest
+blackbox incident list --limit 50
+blackbox forensic pack latest -o pack.json
+```
+
+Guides: [fsck](fsck-and-integrity.md) · [verification](verification.md) · [experiments](experiments.md) · [boundaries](boundaries-and-incidents.md) · [capsules](capsules-and-cassettes.md) · [budgets](budgets-and-adapters.md).
 
 ---
 

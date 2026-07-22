@@ -1,4 +1,8 @@
-//! Local forensic analysis packs (1.7 Phase H).
+//! Local forensic analysis packs (1.7).
+//!
+//! Build bounded, redacted packs with evidence citations for offline analysis.
+//! Optional local model claims (`apply_model_analysis`) must cite existing
+//! pointers and never replace original evidence. No hosted provider is required.
 
 mod pack;
 

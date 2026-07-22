@@ -46,13 +46,26 @@ The on-wire document uses a numeric `version` field (not a string schema id):
   },
   "experiment_meta": { "experiment_id": "…", "variant": "…", "attempt": 2 },
   "experiment": { "schema": "blackbox.experiment/v1", "id": "…", "name": "…" },
-  "verification_receipts": [ { "schema": "blackbox.verification.receipt/v1", "…": "…" } ]
+  "verification_receipts": [ { "schema": "blackbox.verification.receipt/v1", "…": "…" } ],
+  "boundary": { "schema": "blackbox.boundary/v1", "policy_hash": "…", "contract": { "…": "…" } },
+  "containment_receipts": [ { "schema": "blackbox.containment.receipt/v1", "…": "…" } ],
+  "external_evidence": [ { "schema": "blackbox.evidence.event/v1", "…": "…" } ],
+  "evidence_edges": [ { "schema": "blackbox.evidence.edge/v1", "…": "…" } ],
+  "boundary_findings": [ { "schema": "blackbox.boundary.finding/v1", "…": "…" } ],
+  "provenance_records": [ { "schema": "blackbox.provenance/v1", "…": "…" } ],
+  "trace_identity": { "schema": "blackbox.trace.identity/v1", "trace_id": "…", "…": "…" }
 }
 ```
 
 `experiment_meta`, `experiment`, and `verification_receipts` are optional and
 may be null/empty when the run was not linked or verified. Import restores them
 when present (new receipt ids if run ids are remapped).
+
+**1.7 fields** (`boundary`, containment/evidence/findings/provenance/trace_identity)
+are optional. Import remaps `run_id` (and regenerates ids when `--new-ids` /
+equivalent is used). Absolute/traversal path attributes remain rejected on
+evidence re-validation only if re-imported via the evidence importer; portable
+JSON restores stored payloads as previously accepted.
 
 ### v1 vs v2
 

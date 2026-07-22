@@ -63,3 +63,6 @@ Machine-readable: [`inventory.json`](inventory.json).
 | `release-artifacts/qualify-20260719T143901Z.md` | mixed | keep |
 | `skills/blackbox.md` | mixed | keep |
 | `tests/fixtures/docs/README.md` | mixed | keep |
+| `docs/guide/boundaries-and-incidents.md` | operator | keep |
+| `docs/reference/boundary.md` | automation | keep |
+| `docs/plan/agent-boundary-1.7.md` | mixed | keep |

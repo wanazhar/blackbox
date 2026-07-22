@@ -82,6 +82,8 @@ mkdocs serve                           # http://127.0.0.1:8000 only on your mach
 | [reference/mcp.md](reference/mcp.md) | MCP tool surface |
 | [reference/memory-pack.md](reference/memory-pack.md) | `blackbox.memory/v1` |
 | [reference/portable-format.md](reference/portable-format.md) | Import/export archive |
+| [reference/boundary.md](reference/boundary.md) | Boundary / containment / evidence / incidents (1.7) |
+| [reference/score.md](reference/score.md) | Eval `score.json` including trust fields |
 | [reference/stream-protocol.md](reference/stream-protocol.md) | NDJSON stream |
 
 ---

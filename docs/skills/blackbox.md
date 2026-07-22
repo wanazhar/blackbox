@@ -67,6 +67,9 @@ MCP equivalents: `blackbox_handoff`, `blackbox_memory`, `blackbox_status` — ca
 | Timeline / anomalies | MCP `blackbox_timeline` · `blackbox_anomalies` |
 | Verify task (not exit code) | `blackbox verify latest -- <test cmd>` |
 | Experiment gate (CI) | `blackbox gate --experiment … --min-verified-rate …` |
+| Boundary / provenance gate | `blackbox boundary evaluate latest --gate` · `boundary provenance … --gate` |
+| Import external telemetry | `blackbox evidence import file.ndjson --run latest` |
+| Incident / forensic pack | `blackbox incident show …` · `forensic pack latest -o pack.json` |
 | Store integrity | `blackbox fsck --deep` |
 | First-time project setup | `blackbox setup` / `setup --memory-bus --install-shell` / `setup --harden` |
 | Ack gate | `blackbox ack` or `BLACKBOX_ACK=1` |
@@ -74,6 +77,11 @@ MCP equivalents: `blackbox_handoff`, `blackbox_memory`, `blackbox_status` — ca
 
 **Do not** treat `Run.status == Succeeded` as task verification. Use receipts
 ([verification](../guide/verification.md)) when reporting “fixed” to a human or gate.
+
+**Do not** treat task success as containment or provenance success. Prefer
+`blackbox_boundary` / postmortem `boundary_trust` / `score.json` fields
+`boundary_gate_failed` and `provenance_gate_failed`
+([boundaries](../guide/boundaries-and-incidents.md)).
 
 ---
 

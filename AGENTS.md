@@ -181,6 +181,7 @@ Operator-facing notes for shipped harnesses: [docs/guide/adapters.md](docs/guide
 | `tests/boundary_detector_quality.rs` | 1.7 permanent FP/FN detector quality gate |
 | `tests/incident_pagination.rs` | incident cursor pages + aggregates |
 | `tests/auto_provenance.rs` | auto provenance from dataset_case |
+| `tests/evidence_adversarial.rs` | 1.7 evidence path-attr rejection + canary honesty |
 | `tests/fixtures/docs/` | Static golden samples for docs contracts |
 | `.github/workflows/ci.yml` | test + clippy + doc link check (docs stay in-repo; no Pages) |
 | `tests/security.rs` | Security invariants |

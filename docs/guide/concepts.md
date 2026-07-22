@@ -20,6 +20,7 @@ Related but not a fourth plane:
 |---|---|---|
 | **Integrity** | Store health and recoverability | `fsck`, spool recovery |
 | **Verification** | Task evidence separate from exit code | `verify`, receipts, `report` / `gate` |
+| **Boundaries (1.7)** | Authorization, containment honesty, external telemetry, incidents | `boundary`, `evidence`, `incident`, `forensic` |
 | **Budgets** | Cap supervised work | `--max-wall`, tool/output ceilings, cgroup |
 
 Ambient capture uses **capture only** (observe-only). Explicit `blackbox run` can use **capture + continuity** when configured.

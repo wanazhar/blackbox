@@ -275,23 +275,46 @@ impl ExternalEvidenceEvent {
         if self.source.contains("..") || self.source_event_id.contains("..") {
             errs.push("source identity must not contain path traversal".into());
         }
+        if self.source.contains('\0') || self.source_event_id.contains('\0') {
+            errs.push("source identity contains NUL".into());
+        }
         if let Some(ref dest) = self.destination {
             if dest.contains('\0') {
                 errs.push("destination contains NUL".into());
             }
         }
-        // Nested path references in attributes that look like absolute filesystem
-        // paths used as loadable references are rejected (safety).
+        // Object often carries process exe paths (absolute is normal); never load it.
+        // Only reject NUL / control bytes that break storage/display integrity.
+        if let Some(ref obj) = self.object {
+            if obj.contains('\0') {
+                errs.push("object contains NUL".into());
+            }
+        }
+        // Nested path references that look like *loadable* filesystem refs are rejected.
+        // (Blackbox must not treat evidence attributes as file paths to open.)
         for (k, v) in &self.attributes {
-            if k.ends_with("_path") || k == "path" || k == "file" {
+            if is_pathish_key(k) {
                 if let Some(s) = v.as_str() {
-                    if s.starts_with('/') || s.contains("..") {
+                    if looks_like_loadable_path_ref(s) {
                         errs.push(format!(
                             "attribute {k:?} rejects absolute/traversal path {s:?}"
                         ));
                     }
                 }
             }
+        }
+        // payload_blob is a content-addressed key, not a filesystem path.
+        if let Some(ref key) = self.payload_blob {
+            if !is_plausible_blob_key(key) {
+                errs.push(format!("payload_blob is not a plausible content key: {key:?}"));
+            }
+        }
+        // Bound attribute map size (DoS).
+        if self.attributes.len() > 128 {
+            errs.push(format!(
+                "too many attributes ({})",
+                self.attributes.len()
+            ));
         }
         if errs.is_empty() {
             Ok(())
@@ -310,6 +333,53 @@ impl ExternalEvidenceEvent {
     }
 }
 
+fn is_pathish_key(k: &str) -> bool {
+    let k = k.to_ascii_lowercase();
+    k == "path"
+        || k == "file"
+        || k == "filename"
+        || k == "pathname"
+        || k == "filepath"
+        || k.ends_with("_path")
+        || k.ends_with(".path")
+        || k.contains("file_path")
+        || k.contains("pathname")
+}
+
+/// Paths that must never be treated as loadable references from evidence.
+fn looks_like_loadable_path_ref(s: &str) -> bool {
+    if s.contains('\0') {
+        return true;
+    }
+    if s.starts_with('/') || s.starts_with('\\') {
+        return true;
+    }
+    // Windows drive / UNC
+    let bytes = s.as_bytes();
+    if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
+        return true;
+    }
+    if s.starts_with("\\\\") || s.starts_with("//") {
+        return true;
+    }
+    // Path traversal segments
+    s.split(['/', '\\']).any(|seg| seg == "..")
+}
+
+fn is_plausible_blob_key(key: &str) -> bool {
+    // Accept sha256 hex (64) or short content keys used elsewhere (prefix + hex).
+    if key.is_empty()
+        || key.len() > 128
+        || key.contains('/')
+        || key.contains('\\')
+        || key.contains("..")
+    {
+        return false;
+    }
+    key.chars()
+        .all(|c| c.is_ascii_hexdigit() || c == '-' || c == '_' || c == 'b')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -320,6 +390,28 @@ mod tests {
         e.attributes
             .insert("path".into(), serde_json::json!("/etc/passwd"));
         assert!(e.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_windows_path_attr() {
+        let mut e = ExternalEvidenceEvent::new("proxy", "proxy", "1", EvidenceAction::HttpRequest);
+        e.attributes
+            .insert("file_path".into(), serde_json::json!(r"C:\Windows\System32\config"));
+        assert!(e.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_bad_blob_key() {
+        let mut e = ExternalEvidenceEvent::new("proxy", "proxy", "1", EvidenceAction::HttpRequest);
+        e.payload_blob = Some("../etc/passwd".into());
+        assert!(e.validate().is_err());
+    }
+
+    #[test]
+    fn validate_allows_absolute_process_object() {
+        let mut e = ExternalEvidenceEvent::new("audit", "process", "1", EvidenceAction::ProcessExec);
+        e.object = Some("/usr/bin/sshd".into());
+        e.validate().unwrap();
     }
 
     #[test]

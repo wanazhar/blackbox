@@ -10,6 +10,12 @@ Writing rules: [../WRITING.md](../WRITING.md). Mental model: [what-is-blackbox.m
 |---|---|
 | **ambient capture** | Shell wrappers call `maybe-run`, which records matching harness basenames when policy allows. Always **observe-only** (no continuity inject). |
 | **anomaly** | Deterministic marker on a run (tool loop, destructive side effect, error storm, token spike, long silence, process fan-out). Not an LLM judgment. |
+| **boundary contract** | Machine-readable authorization for a run (`blackbox.boundary/v1`): allowed/prohibited capabilities, required evidence, fail-closed flag. |
+| **boundary trust** | Rollup on summary/score: policy hash, evidence gate, provenance gate, findings, containment honesty. |
+| **containment receipt** | Immutable claim about a control (`configured` / `enforced` / `verified` / …). Configured ≠ verified. |
+| **external evidence** | Imported telemetry (`blackbox.evidence.event/v1`) from proxy/process/cloud sensors; not Blackbox’s own capture layers. |
+| **forensic pack** | Bounded, redacted analysis shard with evidence citations for offline/local models. |
+| **incident** | Multi-run reconstruction object (discovery, reuse, earliest signal); not a SIEM case management system. |
 | **attention** | Sticky level after outcomes: typically `none` / `continue` / `blocked`. Unrelated success does not clear an unresolved failure. |
 | **blob** | Content-addressed payload under `.blackbox/blobs/` (terminal chunks, tool I/O, diffs, …). Events hold keys + previews. |
 | **bookkeeping** | Low-signal observer lifecycle events (`pty.started`, `*.observer.stopped`, …). Semantic views hide these. |
@@ -47,6 +53,7 @@ Writing rules: [../WRITING.md](../WRITING.md). Mental model: [what-is-blackbox.m
 | **TraceEvent** | Ordered event record: kind, source, status, metadata, optional blob refs. |
 | **trajectory / LCP** | Compare two runs: shared semantic prefix, first divergence, exclusive steps, file hints. |
 | **verification receipt** | Immutable evidence that a check ran (`verify`); separate from `Run.status`. |
+| **provenance record** | Declared vs observed artifact/answer sources; can fail independently of task success. |
 | **wrap list** | `capture.wrap` basenames eligible for ambient recording. |
 
 ---

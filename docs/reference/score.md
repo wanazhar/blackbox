@@ -48,33 +48,44 @@ Any `blackbox run` with **`--artifact-dir <dir>`** writes:
   "tools_total": 12,
   "error_count": 3,
   "estimated_cost_usd": null,
-  "scored_at": "2026-07-16T12:00:00+00:00"
+  "scored_at": "2026-07-16T12:00:00+00:00",
+  "boundary_policy_hash": null,
+  "boundary_evidence_status": null,
+  "boundary_gate_failed": false,
+  "provenance_status": null,
+  "provenance_gate_failed": false,
+  "boundary_critical_findings": 0,
+  "trust_ok": null
 }
 ```
 
 | Field | Notes |
 |---|---|
 | `schema` | Always `blackbox.score/v1` (additive fields only later) |
-| `failed` | Failed/Cancelled status **or** non-zero exit |
+| `failed` | Failed/Cancelled status, non-zero exit, **or** fail-closed boundary/provenance/critical findings (1.7) |
 | `anomaly_count` / `anomalies_by_*` | From postmortem anomaly markers |
 | `capture_quality` | 0–100 when `capture.coverage` present |
 | `estimated_cost_usd` | Only when pricing enabled on the run |
+| `boundary_*` / `provenance_*` / `trust_ok` | Additive 1.7 trust rollup from postmortem `boundary_trust` |
 
-Rust: `blackbox::score::EvalScore`.
+Rust: `blackbox::score::EvalScore`. Boundary guide: [boundaries-and-incidents](../guide/boundaries-and-incidents.md).
 
 ---
 
 ## jq examples
 
 ```bash
-# Fail CI if score says failed
+# Fail CI if score says failed (includes trust/provenance gates)
 jq -e '.failed == false' score.json
+
+# Fail only on provenance (task may still have passed)
+jq -e '.provenance_gate_failed != true' score.json
 
 # High-severity anomalies
 jq '.anomalies_by_severity.high // 0' score.json
 
 # Compact row for a table
-jq -r '[.short_id, .exit_code, .anomaly_count, .capture_quality // "—"] | @tsv' score.json
+jq -r '[.short_id, .exit_code, .anomaly_count, .capture_quality // "—", .trust_ok // "—"] | @tsv' score.json
 ```
 
 ---

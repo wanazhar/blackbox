@@ -180,12 +180,24 @@ impl ContainmentReceipt {
             && matches!(self.result, ContainmentResult::Held)
     }
 
-    /// True when a task-success must not satisfy a required containment gate.
+    /// True when a receipt may satisfy a **required** `containment_receipt`
+    /// evidence class.
     ///
     /// Passing task verification is independent of containment — this helper
     /// never inspects task success.
+    ///
+    /// Only **verified + held** claims on a real control (not mere process
+    /// observation / bookkeeping) count. Network-required contracts must not
+    /// be satisfied by process-only observations.
     pub fn satisfies_required_containment(&self) -> bool {
-        self.is_verified_held()
+        if !self.is_verified_held() {
+            return false;
+        }
+        match self.scope.control.as_deref() {
+            None | Some("") => false,
+            Some("process_observation") | Some("boundary_contract") => false,
+            Some(_) => true,
+        }
     }
 }
 

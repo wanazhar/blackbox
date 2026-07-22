@@ -1,4 +1,11 @@
-//! Multi-run incident reconstruction (1.7 Phase F).
+//! Multi-run incident reconstruction (1.7).
+//!
+//! Create/list/show incidents spanning runs and external evidence, build
+//! reconstruction graphs (discovery, reuse, earliest signal), cursor-paginate
+//! large lists, and export sanitized packs with integrity hashes.
+//!
+//! Not a SIEM case-management product — local evidence correlation only.
+//! Dashboard: `/incidents` · CLI: `blackbox incident …`.
 
 mod export;
 mod graph;

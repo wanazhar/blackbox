@@ -4,7 +4,7 @@
 |---|---|
 | **Document** | Product + technical plan for 1.7 |
 | **Date** | 2026-07-22 |
-| **Status** | **Implementation complete** — Phases A–I landed; qualify before tag |
+| **Status** | **Gap closure in progress** — issue #5 Definition of Done audit found missing Phase C/F/I coverage |
 | **Baseline** | 1.6.0 (verified runs & reproducibility) |
 | **Target tag** | **1.7.0** |
 | **Epic** | [Issue #5](https://github.com/wanazhar/blackbox/issues/5) |
@@ -56,6 +56,23 @@ Blackbox remains a **local-first evidence and provenance system**. It integrates
 | **Q1** | Adversarial qualification | Escape, poison, credential misuse, swarm, telemetry deception, benign controls |
 
 Permanent 1.1–1.6 gates remain green.
+
+### Completion audit addendum (2026-07-22)
+
+The release is not taggable until these issue-level criteria have executable
+coverage:
+
+1. Kubernetes and cloud-audit sensor mapping, including a real correlation path.
+2. Incident reconstruction that explicitly identifies delegation,
+   credential-use, and artifact-derivation flows rather than merely retaining
+   opaque edges.
+3. Bounded high-volume incident reconstruction and cursor qualification at a
+   tens-of-thousands scale.
+4. Permanent adversarial detector cases for poisoned input, persistence,
+   swarm/fan-out, and deceptive telemetry, alongside benign controls.
+
+Delivery tasks live under `docs/plan/tasks/boundary-17*.md`; independent review
+records live under `docs/plan/reviews/` while the sprint is active.
 
 ---
 

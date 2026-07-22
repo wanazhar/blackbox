@@ -22,6 +22,7 @@ records with deterministic pagination and no duplicate/lost IDs.
 ## path
 
 - `src/incident/graph.rs`
+- `src/incident/mod.rs`
 - `src/incident/page.rs`
 - `tests/incident_graph_flow.rs`
 - `tests/incident_scale.rs`

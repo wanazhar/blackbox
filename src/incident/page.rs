@@ -4,6 +4,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use super::graph::IncidentGraph;
 use super::model::Incident;
 
 /// Opaque cursor for incident listing (newest first).
@@ -24,7 +25,9 @@ pub struct IncidentPage {
 
 /// Encode cursor as URL-safe base64 JSON.
 pub fn encode_incident_cursor(c: &IncidentPageCursor) -> String {
-    let json = serde_json::to_vec(c).unwrap_or_default();
+    // DateTime and String serialization are infallible for this concrete type;
+    // do not silently emit an empty, unusable cursor if that contract changes.
+    let json = serde_json::to_vec(c).expect("incident cursor serialization must succeed");
     base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, json)
 }
 
@@ -48,6 +51,9 @@ pub struct IncidentAggregates {
     pub external_evidence_count: usize,
     pub technique_count: usize,
     pub reuse_count: usize,
+    /// False means counts are known lower bounds from a legacy graph payload.
+    #[serde(default)]
+    pub counts_exact: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub earliest_signal_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -85,10 +91,31 @@ pub fn compute_incident_aggregates(
     a.external_evidence_count = external_evidence_count;
     a.technique_count = technique_count;
     a.reuse_count = reuse_count;
+    a.counts_exact = true;
     a.earliest_signal_id = incident.earliest_signal_id.clone();
     a.continued_after_signal = incident.continued_after_signal;
     a.updated_at = Utc::now();
     a
+}
+
+/// Build aggregates using the graph's pre-truncation totals.
+pub fn compute_incident_aggregates_from_graph(
+    incident: &Incident,
+    graph: &IncidentGraph,
+    critical_findings: usize,
+    high_findings: usize,
+) -> IncidentAggregates {
+    let mut aggregates = compute_incident_aggregates(
+        incident,
+        graph.finding_count,
+        critical_findings,
+        high_findings,
+        graph.evidence_count,
+        graph.technique_total(),
+        graph.reuse_total(),
+    );
+    aggregates.counts_exact = graph.counts_exact;
+    aggregates
 }
 
 /// Page a pre-sorted (newest first) incident slice with cursor.
@@ -167,5 +194,6 @@ mod tests {
         assert_eq!(a.run_count, 2);
         assert_eq!(a.finding_count, 3);
         assert_eq!(a.critical_findings, 1);
+        assert!(a.counts_exact);
     }
 }

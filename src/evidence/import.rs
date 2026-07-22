@@ -220,8 +220,10 @@ fn parse_line(line: &str, opts: &ImportOptions) -> Result<ExternalEvidenceEvent,
     }
 
     // Sensor-specific adapters (Falco / proxy / process audit).
-    if let Some(ev) = super::adapters::map_sensor_event(obj) {
-        return Ok(ev);
+    match super::adapters::map_sensor_event_checked(obj) {
+        Ok(Some(ev)) => return Ok(ev),
+        Ok(None) => {}
+        Err(reason) => return Err(reason),
     }
 
     // Generic JSONL mapping (OpenTelemetry-ish / loose).

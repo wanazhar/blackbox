@@ -1,6 +1,6 @@
 [package]
 name = "blackbox-recorder"
-version = "1.6.0"
+version = "1.7.0"
 edition = "2021"
 description = "Local flight recorder and debugger for AI-agent runs: PTY capture, SQLite traces, redacted export"
 authors = ["Wan Azhar <17683456+wanazhar@users.noreply.github.com>"]

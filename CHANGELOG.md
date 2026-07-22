@@ -4,11 +4,13 @@ All notable changes to **blackbox** are documented here.
 
 ## [Unreleased]
 
+## [1.7.0] — 2026-07-22
+
 ### 1.7 — Agent boundary evidence & incident reconstruction
 
 Epic: [issue #5](https://github.com/wanazhar/blackbox/issues/5). Plan: [docs/plan/agent-boundary-1.7.md](docs/plan/agent-boundary-1.7.md).
 Implementation and integration-review remediation are complete. The all-target
-and Unix quick qualification gates are green; release remains pending.
+and Unix release qualification gates are green.
 
 #### Phase A/B — Boundary contracts & containment
 - **`blackbox.boundary/v1`**: purpose, allowed/prohibited, dispositions, required evidence, fail-closed

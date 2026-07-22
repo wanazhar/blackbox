@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 use std::process::Command;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use blackbox::boundary::{EntityKind, EvidenceEdge, EvidenceRelation};
 use blackbox::core::event::Confidence;
@@ -53,7 +53,7 @@ async fn storage_cursor_exhausts_ten_thousand_tied_records_exactly_once() {
         ordered.windows(2).all(|pair| pair[0] > pair[1]),
         "tied timestamps must use descending ID as a deterministic tiebreaker"
     );
-    assert!(started.elapsed() < Duration::from_secs(30));
+    // Diagnostic only: correctness is host-independent; CI does not fail on wall time.
     eprintln!(
         "incident storage pagination: {RECORD_COUNT} records in {:?}",
         started.elapsed()
@@ -159,7 +159,7 @@ fn graph_reconstruction_bounds_ten_thousand_record_details() {
     assert_eq!(aggregates.technique_count, 251);
     assert_eq!(aggregates.reuse_count, 251);
     assert!(aggregates.counts_exact);
-    assert!(started.elapsed() < Duration::from_secs(10));
+    // Diagnostic only: memory is qualified separately in incident_memory_bound.
     eprintln!(
         "incident graph reconstruction: {RECORD_COUNT} evidence + edges in {:?}",
         started.elapsed()

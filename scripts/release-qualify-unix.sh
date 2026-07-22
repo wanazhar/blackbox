@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Blackbox Unix release qualification gate (1.4 Q1 + 1.5 integrity + 1.6 verified runs).
+# Blackbox Unix release qualification gate (1.4 trust through 1.7 boundaries/incidents).
 #
 # One reproducible command for maintainers before tagging.
 # Outputs a checksummed report under release-artifacts/.
@@ -139,7 +139,10 @@ if [ "$QUICK" -eq 1 ]; then
     --test boundary_contract --test boundary_1_7_full \
     --test boundary_trust_integration --test boundary_detector_quality \
     --test incident_pagination --test auto_provenance \
-    --test evidence_adversarial -- --quiet || true
+    --test evidence_adversarial --test evidence_orchestration \
+    --test incident_graph_flow --test incident_scale \
+    --test incident_memory_bound \
+    --test boundary_1_7_completion -- --quiet || true
 else
   run_gate "cargo test --all-targets" cargo test --all-targets -- --quiet || true
   run_gate "docs first-run + envelope + commands" \
@@ -150,7 +153,10 @@ else
     --test boundary_contract --test boundary_1_7_full \
     --test boundary_trust_integration --test boundary_detector_quality \
     --test incident_pagination --test auto_provenance \
-    --test evidence_adversarial -- --quiet || true
+    --test evidence_adversarial --test evidence_orchestration \
+    --test incident_graph_flow --test incident_scale \
+    --test incident_memory_bound \
+    --test boundary_1_7_completion -- --quiet || true
   # Real 100k-event endurance (ignored by default unit filter; force with --ignored)
   run_gate "1.6: endurance_100k" cargo test --test endurance_100k -- --quiet || true
 fi

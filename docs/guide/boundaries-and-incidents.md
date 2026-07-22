@@ -11,7 +11,7 @@ Reference: [boundary.md](../reference/boundary.md) · Plan: [agent-boundary-1.7.
 | Job | Command |
 |---|---|
 | Govern an eval / agent run | `run --boundary file.json` |
-| Import proxy/process logs | `evidence import events.ndjson --run latest` |
+| Import host, proxy, Kubernetes, or cloud audit logs | `evidence import events.ndjson --run latest` |
 | Check containment honesty | `boundary evaluate latest --gate` |
 | Fail CI on provenance cheat | `boundary provenance latest --task-passed true --gate` |
 | Swarm reconstruction | `incident create --run r1 --run r2` |
@@ -42,7 +42,7 @@ Postmortem JSON includes `boundary_trust`. `score.json` sets `failed=true` when 
 
 ## Evidence import
 
-Supports native `blackbox.evidence.event/v1`, generic JSONL, and adapters for **Falco-like**, **HTTP proxy**, and **process audit** shapes.
+Supports native `blackbox.evidence.event/v1`, generic JSONL, and adapters for **Falco-like**, **HTTP proxy**, **process audit**, **Kubernetes audit**, **AWS CloudTrail**, and **GCP Audit Log** shapes. Kubernetes and cloud adapters preserve provider event IDs, principals, workloads, trace identities, actions, objects, outcomes, and source/observation times; malformed recognized records are rejected rather than filled with invented defaults.
 
 ```bash
 blackbox evidence import tests/fixtures/boundary_1_7/proxy_events.ndjson --run latest
@@ -52,6 +52,18 @@ blackbox evidence list --run latest
 ```
 
 Import is transactional with its generated edges, idempotent on `(source, source_event_id)`, bounded, and rejects absolute/traversal path attributes. When `original_payload_hash` is present, the importer verifies sha256 of the `payload` / `raw` / `body` attribute (disable with `--no-verify-payload-hashes` only for private debugging). A matching hash proves consistency, not sensor authenticity, and remains below `confirmed`. NDJSON cannot self-assert `signed_verified`; that state is reserved for a trusted verifier.
+
+### Sensor requirements
+
+| Requirement | Why it matters |
+|---|---|
+| Stable `source_event_id` from the sensor | Enables idempotence and audit lookup; it is not a run ID |
+| Reliable `occurred_at` and `observed_at` | Makes clock delay and ordering uncertainty visible |
+| Principal, workload, process, or trusted trace identity | Provides independent correlation signals |
+| Integrity set by a trusted verifier | Imported claims cannot promote themselves to `signed_verified` |
+| Retention longer than the incident investigation window | Blackbox stores normalized evidence, not the sensor's full archive |
+
+Do not use `--run` as proof of attribution. It records an import context. Cooperative trace IDs and claimed run IDs may be forged, so they remain below `confirmed` without independently verified integrity and corroborating signals.
 
 ---
 
@@ -88,12 +100,22 @@ blackbox incident export <inc-id> -o incident.json --sanitize
 blackbox forensic pack latest -o pack.json
 # Optional local model claims (citations required; never replace evidence)
 blackbox forensic analyze pack.json --model local-llm \
-  --claim "public egress after probe" --cite find-...
+  --prompt-file exact-prompt.txt \
+  --configuration-file inference-config.json \
+  --claim "public egress after probe" --cite finding:find-...
 ```
 
-Dashboard: open `/incidents` and each run’s trust panel (findings + policy hash). Incident pages show a **reconstruction graph** (runs + technique reuse curves), earliest-signal banner, techniques table, findings timeline, and correlation edges.
+Dashboard: open `/incidents` and each run’s trust panel (findings + policy hash). Incident pages show a **reconstruction graph** (runs + technique reuse curves), earliest-signal banner, techniques table, findings timeline, and correlation edges. Graph v2 also exposes typed `delegation`, `credential_use`, and `artifact_derivation` flows. Serialized node, edge, flow, and technique detail is bounded; `counts_exact`, exact totals, limits, and `truncation` say what was omitted. Legacy v1 graphs provide included lower bounds only and cannot assert whether hidden detail was truncated.
 
-Detector quality is gated in CI (`tests/boundary_detector_quality.rs`): expanded corpus covers escape, probe, credential, package, privilege, transition, and benign controls (min recall 0.85 / precision 0.80).
+Forensic model claims remain derived data. `analyze` first validates the incoming pack schema, content hash, and exact typed citations (`event:…`, `external:…`, or `finding:…`). It reads the exact prompt and configuration files and computes `sha256:<64 lowercase hex>` fingerprints inside Blackbox; arbitrary caller-supplied labels are not accepted. Every derived claim records those fingerprints and the sanitized model/output text. Blackbox does not invoke a hosted model or claim deterministic inference replay.
+
+Sanitized incident exports recursively scan every serialized string in the incident, attachments, graph nodes/edges/flows, techniques, earliest signal, attachment-hash labels, and unresolved references. Secret matches receive opaque per-export tokens reused within that export, so references remain linked without exposing a reusable secret digest. The ledger reports per-field counts as `redacted` or `scanned_unchanged`; `export_hash` covers the complete result. The export is an investigation copy, not a substitute for the original store. Keep the source store under the retention and access policy needed for citation resolution, and validate the export before sharing or importing it elsewhere.
+
+Forensic packs apply the same serialization-boundary rule across event values and keys, external source/sensor identity, findings, edges, pointers, optional incident graphs, coverage notes, model identity, derived output, refusal, and failure text. `pack_hash` is recomputed after sanitization and after analysis. Any pre-analysis hash mismatch rejects without rewriting the input file.
+
+The 10k incident qualification separates host-independent correctness from performance diagnostics. Cursor/exact-total/truncation checks have no fixed wall-time assertion. On Linux, a tracking allocator measures incremental graph-assembly peak allocation for 10,000 evidence rows plus edges; the permanent budget is 32 MiB, excluding already-materialized inputs whose count and byte size are independently import-bounded.
+
+Detector quality is gated in CI (`tests/boundary_detector_quality.rs`): the permanent corpus covers escape, probing, credential abuse, package/repository manipulation, privilege attempts, poisoned instructions, persistence, swarm/delegation, telemetry deception, transitions, and benign controls (min recall 0.85 / precision 0.80).
 
 ### Auto provenance from experiments
 
@@ -120,6 +142,9 @@ blackbox run --experiment exp1 --dataset-case case-9 --boundary eval.json -- ...
 - Cooperative `trace_id` alone is **never** confirmed attribution (closed by design; permanent unit gates)  
 - Unverified / signed-invalid sensor integrity cannot reach `confirmed` correlation  
 - Missing sensors → `insufficient_evidence`, not silent success  
+- Kubernetes/cloud identities are correlation inputs, not authenticated agent identity by themselves
+- Graph detail limits preserve exact v2 totals; a short list is not evidence that no other edges existed
+- Sanitization reduces accidental disclosure but does not make an export safe for unrestricted distribution
 - Blackbox is **not** an EDR/SIEM/firewall  
 
 See also: [verification](verification.md) · [security](security.md) · [experiments](experiments.md).

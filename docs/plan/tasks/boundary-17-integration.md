@@ -1,6 +1,6 @@
 id: boundary-17-integration
 scope: issue #5 end-to-end qualification and release documentation
-status: in-progress
+status: complete
 depends-on: [boundary-17-sensors, boundary-17-incidents, boundary-17-adversarial]
 
 ## objective
@@ -14,7 +14,6 @@ documented non-goal consistent with the issue.
 ## context
 
 - `docs/plan/agent-boundary-1.7.md`
-- `docs/plan/analysis/boundary-17-completion.md`
 - `docs/plan/analysis/boundary-17-completion.md`
 - `docs/ROADMAP.md`
 - `CHANGELOG.md`
@@ -38,6 +37,7 @@ documented non-goal consistent with the issue.
 - `CHANGELOG.md`
 - `.github/workflows/ci.yml`
 - `scripts/release-qualify-unix.sh`
+- `docs/plan/reviews/boundary-17-integration-01.md` (read-only review evidence)
 
 ## verification
 

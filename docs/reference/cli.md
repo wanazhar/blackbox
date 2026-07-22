@@ -1058,7 +1058,7 @@ blackbox incident attach <id> [--run id] [--evidence id] [--reason text]
 blackbox incident export <id> [-o path] [--sanitize] [--allow-unresolved]
 ```
 
-Multi-run incident object with cursor pagination, aggregates on show, and sanitized export.
+Multi-run incident object with cursor pagination, aggregates on show, and sanitized export. Graph v2 reconstructs typed delegation, credential-use, and artifact-derivation flows. Detail arrays are bounded independently of exact totals; inspect `counts_exact`, `detail_limits`, and `truncation` before interpreting list lengths. Legacy v1 graph counts are lower bounds.
 
 ---
 
@@ -1066,10 +1066,13 @@ Multi-run incident object with cursor pagination, aggregates on show, and saniti
 
 ```bash
 blackbox forensic pack <run-id|latest> [-o pack.json] [--max-events N]
-blackbox forensic analyze <pack.json> --model local [--claim text --cite id…] [--refused]
+blackbox forensic analyze <pack.json> --model local \
+  --prompt-file <exact-prompt> \
+  --configuration-file <exact-config> \
+  [--claim text --cite event:<id>|external:<id>|finding:<id>…] [--refused] [--failure text]
 ```
 
-Bounded local forensic pack (redacted; citation-validated). `analyze` attaches local model claims only with valid citations.
+Bounded local forensic pack (recursively redacted; exact-citation and content-hash validated). `analyze` hashes the exact bytes read from prompt/configuration files inside Blackbox, then attaches sanitized local model output. It rejects a malformed/tampered input pack without rewriting it and does not run a model.
 
 ---
 

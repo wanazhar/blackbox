@@ -27,6 +27,8 @@ documented non-goal consistent with the issue.
 - `docs/guide/security.md`
 - `docs/reference/boundary.md`
 - `docs/reference/cli.md`
+- `docs/ROADMAP.md`
+- `CHANGELOG.md`
 - `.github/workflows/ci.yml`
 - `scripts/release-qualify-unix.sh`
 

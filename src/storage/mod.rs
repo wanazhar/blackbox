@@ -8,6 +8,7 @@ pub mod sqlite;
 pub mod store;
 
 use crate::aggregates::RunAggregates;
+use crate::boundary::{ContainmentReceipt, ResolvedBoundary};
 use crate::core::blob::BlobReference;
 use crate::core::checkpoint::Checkpoint;
 use crate::core::event::TraceEvent;
@@ -451,5 +452,47 @@ pub trait TraceStore: Send + Sync + 'static {
     /// Default is a no-op for backends without FTS.
     async fn reindex_fts(&self) -> anyhow::Result<usize> {
         Ok(0)
+    }
+
+    // ── Boundary contracts & containment (1.7) ──
+
+    /// Store the immutable resolved boundary for a run (overwrite replaces prior).
+    async fn put_run_boundary(
+        &self,
+        _boundary: &ResolvedBoundary,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("run boundaries not supported by this store backend")
+    }
+
+    /// Load the resolved boundary for a run, if any.
+    async fn get_run_boundary(
+        &self,
+        _run_id: &str,
+    ) -> anyhow::Result<Option<ResolvedBoundary>> {
+        Ok(None)
+    }
+
+    /// Insert an immutable containment receipt.
+    async fn insert_containment_receipt(
+        &self,
+        _receipt: &ContainmentReceipt,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("containment receipts not supported by this store backend")
+    }
+
+    /// List containment receipts for a run (oldest first).
+    async fn list_containment_receipts(
+        &self,
+        _run_id: &str,
+    ) -> anyhow::Result<Vec<ContainmentReceipt>> {
+        Ok(Vec::new())
+    }
+
+    /// Load one containment receipt by id.
+    async fn get_containment_receipt(
+        &self,
+        _id: &str,
+    ) -> anyhow::Result<Option<ContainmentReceipt>> {
+        Ok(None)
     }
 }

@@ -66,6 +66,7 @@ mkdocs serve                           # http://127.0.0.1:8000 only on your mach
 | `--json` envelope and view schemas | [reference/json-api.md](reference/json-api.md) |
 | Project memory pack schema | [reference/memory-pack.md](reference/memory-pack.md) |
 | Eval score.json | [reference/score.md](reference/score.md) |
+| Boundary contracts (1.7) | [reference/boundary.md](reference/boundary.md) |
 | Stream / portable formats | [reference/stream-protocol.md](reference/stream-protocol.md), [reference/portable-format.md](reference/portable-format.md) |
 | Ambient decision order (normative) | [ambient-contract.md](ambient-contract.md) |
 

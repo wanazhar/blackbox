@@ -1,0 +1,174 @@
+# Boundary contract reference (`blackbox.boundary/v1`)
+
+Machine-readable authorization and required-evidence contract for a governed run (Blackbox **1.7**).
+
+Related: [plan](../plan/agent-boundary-1.7.md) · [claims](../claims.md) · [verification](../guide/verification.md) · epic [issue #5](https://github.com/wanazhar/blackbox/issues/5).
+
+---
+
+## What this is (and is not)
+
+| Is | Is not |
+|---|---|
+| Record of what the agent was **authorized** to do | A sandbox, firewall, or EDR |
+| Distinguishes **configured / enforced / verified** containment | Proof that every side effect was observed |
+| Fail-closed **evidence gates** when required sensors are missing | Automatic process kill on violation (optional later) |
+| Immutable **policy hash** stored with the run | A multi-tenant SIEM |
+
+Blackbox remains a local-first evidence system. Missing sensors produce `insufficient_evidence` or `unknown`, never silently confirmed success.
+
+---
+
+## Schema
+
+```json
+{
+  "schema": "blackbox.boundary/v1",
+  "purpose": "capability evaluation",
+  "allowed": {
+    "targets": ["local-range"],
+    "network": ["package-proxy.internal"],
+    "identities": ["eval-workload"],
+    "data_classes": ["synthetic"],
+    "tools": ["shell", "read_file"],
+    "effects": ["workspace_write"],
+    "provenance": ["declared_dataset"]
+  },
+  "prohibited": [
+    "public_network",
+    "production_credentials",
+    "external_organizations",
+    "undeclared_answer_sources"
+  ],
+  "dispositions": {
+    "package_install": "approval_required"
+  },
+  "required_evidence": [
+    "process",
+    "network",
+    "containment_receipt",
+    "artifact_provenance"
+  ],
+  "fail_closed": true,
+  "parent_policy_hash": null,
+  "labels": {
+    "environment": "eval",
+    "eval_case": "sandbox-escape-01"
+  },
+  "extensions": {}
+}
+```
+
+| Field | Notes |
+|---|---|
+| `schema` | Always `blackbox.boundary/v1` |
+| `purpose` | Free-text purpose of the run under this contract |
+| `allowed.*` | Explicit allow-lists (targets, network, identities, data_classes, tools, effects, provenance) |
+| `prohibited` | Tokens default to disposition `hard_prohibition` |
+| `dispositions` | Per-token override: `hard_prohibition` · `approval_required` · `allowed` · `observed_only` · `unknown` |
+| `required_evidence` | Classes that must be present for a conclusive evaluation |
+| `fail_closed` | When true, missing required evidence / unproven containment fails the gate |
+| `parent_policy_hash` | Optional parent for inheritance / lineage |
+| `labels` / `extensions` | Free-form metadata; extensions ignored unless registered |
+
+Rust: `blackbox::boundary::BoundaryContract`. Resolved form: `ResolvedBoundary` (adds `policy_hash`, `resolved_at`, `run_id`, `inheritance_chain`).
+
+### Policy hash
+
+SHA-256 hex of the **canonical JSON** of the fully merged contract (not timestamps or run id). Same policy → same hash across runs.
+
+### Inheritance
+
+Experiment → run → delegated child: child wins on conflicts; `allowed` is unioned; child prohibitions remove matching allowed entries; `required_evidence` is unioned; `fail_closed` is OR.
+
+---
+
+## Containment receipts (`blackbox.containment.receipt/v1`)
+
+Independent claims — configuration is never silently treated as verification.
+
+| Claim state | Meaning |
+|---|---|
+| `configured` | Declared in launch/config |
+| `enforced` | Control applied at launch |
+| `verified` | Independent check confirmed the control |
+| `observed_only` | Seen in telemetry only |
+| `failed` | Attempted and failed |
+| `unknown` | Cannot determine |
+| `unavailable` | Not available on this platform |
+
+| Result | Meaning |
+|---|---|
+| `held` | Restriction held under the declared method |
+| `violated` | Escape or misconfiguration observed |
+| `denied` | Command denied by policy |
+| `unreachable` | Destination unreachable (≠ denied) |
+| `inconclusive` | Check incomplete |
+| `not_observed` | Sensor gap |
+| `not_applicable` | Method N/A |
+
+A **required** `containment_receipt` is satisfied only by a receipt with claim `verified` **and** result `held`. Task success is never consulted.
+
+---
+
+## Evidence evaluation (`blackbox.boundary.eval/v1`)
+
+| Status | Meaning |
+|---|---|
+| `sufficient` | All required evidence present (or not applicable) |
+| `insufficient_evidence` | Required class missing / unavailable / partial |
+| `containment_unproven` | Receipts missing or not verified+held |
+| `containment_violated` | A receipt reports `violated` |
+| `no_boundary` | No contract on the run |
+| `not_evaluated` | Skipped |
+
+`gate_failed` is true only when `fail_closed` is set **and** status is a gate failure.
+
+---
+
+## CLI
+
+```bash
+# Validate a contract file (prints policy hash)
+blackbox boundary validate path/to/boundary.json
+blackbox boundary validate path/to/boundary.json --json
+
+# Attach to an existing run
+blackbox boundary set <run|latest> -f boundary.json
+blackbox boundary set <run> -f child.json --parent experiment.json --fail-closed
+
+# Show / evaluate
+blackbox boundary show <run|latest>
+blackbox boundary evaluate <run> --gate
+blackbox boundary evaluate <run> --present process --present network --artifact-provenance --gate
+
+# Record containment claims
+blackbox boundary receipt <run> --claim configured --result not_observed --backend none
+blackbox boundary receipt <run> --claim verified --result held --method post_run_canary --control network_egress
+
+# Attach at run time
+blackbox run --boundary boundary.json --boundary-fail-closed -- echo hi
+```
+
+Exit code **2** when `boundary evaluate --gate` fails closed.
+
+---
+
+## Storage
+
+Schema version **9**:
+
+- `run_boundaries` — one resolved contract per run (`policy_hash`, `resolved_at`, JSON payload)
+- `containment_receipts` — append-only receipts keyed by id
+
+---
+
+## jq examples
+
+```bash
+# Policy hash after validate
+jq -r '.data.policy_hash' <(blackbox --json boundary validate boundary.json)
+
+# Gate status
+jq -r '.data.status, .data.gate_failed' <(blackbox --json boundary evaluate latest)
+```

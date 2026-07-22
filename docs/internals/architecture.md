@@ -369,7 +369,7 @@ pub trait TraceStore: Send + Sync + 'static {
 
 ### 4.3 SqliteStore
 
-The primary implementation (`src/storage/sqlite.rs`). Current schema version: **6**.
+The primary implementation (`src/storage/sqlite.rs`). Current schema version: **9** (v8 verification/experiments; v9 boundary contracts + containment receipts).
 
 **Implementation details:**
 

@@ -21,6 +21,7 @@ Every command accepts global `--json` for machine-readable output (`blackbox.cli
 | **Hygiene** | [`scrub`](#24-scrub) · [`doctor`](#25-doctor) · [`stats`](#29-stats) · [`gc`](#30-gc) · [`rm`](#26-rm) · [`purge`](#27-purge) · [`tags`](#28-tags-tag) |
 | **Integrity / verification** | [`fsck`](#36-fsck) · [`verify`](#37-verify) · [`experiment`](#38-experiment) · [`report`](#39-report) · [`gate`](#40-gate) |
 | **Capsules / budgets / index** | [`capsule`](#41-capsule) · [`cassette`](#42-cassette-experimental) · [`budget`](#43-budget) · [`adapter`](#44-adapter) · [`projects`](#45-projects) |
+| **Boundary / containment (1.7)** | [`boundary`](#46-boundary) |
 | **Shell** | [`completions`](#35-completions) |
 
 Guide shortcuts: [getting-started](../guide/getting-started.md) · [debug](../guide/debug-a-failure.md) · [config](../guide/configuration.md) · [security](../guide/security.md) · [fsck](../guide/fsck-and-integrity.md) · [verification](../guide/verification.md).
@@ -153,6 +154,9 @@ blackbox run [--name <label>] [--ci] [--eval] [--artifact-dir <dir>] [--tag <tag
 | `--seed` / `--dataset-case` | Experiment reproducibility fields |
 | `--max-wall` / `--max-processes` / `--max-output` / `--max-tool-calls` | Execution budgets (see [budgets guide](../guide/budgets-and-adapters.md)) |
 | `--max-memory` / `--max-cpu-percent` / `--contained` | Memory/CPU cgroup prefs; contained preflight |
+| `--boundary <file>` | Attach resolved `blackbox.boundary/v1` contract after the run |
+| `--boundary-parent <file>` | Parent boundary for inheritance (repeatable; root first) |
+| `--boundary-fail-closed` | Force fail-closed on the attached boundary |
 | `--insecure-raw` | Store raw PTY bytes as blobs (dangerous) |
 | `--project <dir>` | Project directory (default: cwd) |
 | `--store <path>` | Override store path |
@@ -1002,9 +1006,36 @@ Metadata-only index at `~/.blackbox/projects-index.json`.
 
 ---
 
+## 46. `boundary`
+
+Agent boundary contracts, containment receipts, and required-evidence gates (1.7).
+
+```bash
+blackbox boundary validate <file.json>
+blackbox boundary show <run-id|latest>
+blackbox boundary set <run-id|latest> -f <file.json> [--parent <parent.json>…] [--fail-closed]
+blackbox boundary evaluate <run-id|latest> [--present CLASS]… [--unavailable CLASS]… \
+  [--artifact-provenance] [--gate]
+blackbox boundary receipt <run-id|latest> [--claim STATE] [--result RESULT] \
+  [--verifier ID] [--method NAME] [--control NAME] [--backend NAME] [--summary TEXT]
+```
+
+| Subcommand | Role |
+|---|---|
+| `validate` | Parse + structural validate; print policy hash |
+| `show` | Print resolved boundary stored on the run |
+| `set` | Resolve (with optional parents) and store on the run |
+| `evaluate` | Required-evidence / containment gate (`--gate` → exit 2 on fail-closed failure) |
+| `receipt` | Append immutable containment receipt |
+
+Reference: [boundary.md](boundary.md). Plan: [agent-boundary-1.7.md](../plan/agent-boundary-1.7.md).
+
+---
+
 ## Exit codes
 
 | Code | Meaning |
 |---|---|
 | 0 | Success |
 | 1 | General error / run failed (`--ci` / `--eval` / `--fail-on-failure` / gate fail) |
+| 2 | Boundary fail-closed gate failed (`boundary evaluate --gate`) |

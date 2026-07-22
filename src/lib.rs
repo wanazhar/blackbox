@@ -36,6 +36,7 @@
 //! | [`adapters`] | Harness detection and parse |
 //! | [`redaction`] | Secret scanning before write |
 //! | [`verification`] | Immutable receipts and outcomes |
+//! | [`boundary`] | Boundary contracts, containment, evidence gates |
 //! | [`experiment`] | Experiments, reports, gates |
 //! | [`export`] | Portable / JSONL / HTML |
 //! | [`integrity`] | `fsck` and repair |
@@ -81,6 +82,8 @@ pub mod aggregates;
 pub mod analysis;
 /// Sealed offline store backup / restore.
 pub mod backup;
+/// Agent boundary contracts, containment receipts, evidence gates (1.7).
+pub mod boundary;
 /// Execution budget policy and Linux enforcement.
 pub mod budget;
 /// Capture layers: PTY, git, filesystem, process.

@@ -339,6 +339,86 @@ pub struct ProjectsArgs {
     pub action: ProjectsAction,
 }
 
+#[derive(Args, Clone)]
+/// Boundary contract commands (1.7).
+pub struct BoundaryArgs {
+    #[command(subcommand)]
+    /// Action.
+    pub action: BoundaryAction,
+}
+
+#[derive(Subcommand, Clone)]
+/// Boundary subcommands.
+pub enum BoundaryAction {
+    /// Validate a boundary contract JSON file
+    Validate {
+        /// Path to `blackbox.boundary/v1` JSON
+        file: PathBuf,
+    },
+    /// Show the resolved boundary attached to a run
+    Show {
+        /// Run ID, prefix, or "latest"
+        run_id: String,
+    },
+    /// Attach (or replace) a resolved boundary on a run
+    Set {
+        /// Run ID, prefix, or "latest"
+        run_id: String,
+        /// Path to boundary contract JSON
+        #[arg(long, short = 'f')]
+        file: PathBuf,
+        /// Optional parent boundary JSON (experiment-level); repeatable, root first
+        #[arg(long = "parent")]
+        parents: Vec<PathBuf>,
+        /// Force fail-closed after resolution
+        #[arg(long)]
+        fail_closed: bool,
+    },
+    /// Evaluate required evidence / containment gate for a run
+    Evaluate {
+        /// Run ID, prefix, or "latest"
+        run_id: String,
+        /// Capture classes present (repeatable), e.g. process, network
+        #[arg(long = "present")]
+        present: Vec<String>,
+        /// Capture classes unavailable on this platform
+        #[arg(long = "unavailable")]
+        unavailable: Vec<String>,
+        /// Mark artifact provenance as present
+        #[arg(long)]
+        artifact_provenance: bool,
+        /// Exit non-zero when fail-closed gate fails
+        #[arg(long)]
+        gate: bool,
+    },
+    /// Record an immutable containment receipt for a run
+    Receipt {
+        /// Run ID, prefix, or "latest"
+        run_id: String,
+        /// Claim state: configured|enforced|verified|observed_only|failed|unknown|unavailable
+        #[arg(long, default_value = "configured")]
+        claim: String,
+        /// Result: held|violated|denied|unreachable|inconclusive|not_observed|not_applicable
+        #[arg(long, default_value = "not_observed")]
+        result: String,
+        /// Verifier identity
+        #[arg(long, default_value = "blackbox")]
+        verifier: String,
+        /// Method (launch_record, preflight_canary, post_run_canary, …)
+        #[arg(long, default_value = "launch_record")]
+        method: String,
+        /// Control name (e.g. network_egress)
+        #[arg(long)]
+        control: Option<String>,
+        /// Backend (e.g. bwrap, none)
+        #[arg(long)]
+        backend: Option<String>,
+        /// Summary text
+        #[arg(long)]
+        summary: Option<String>,
+    },
+}
+
 #[derive(Subcommand)]
 /// `ProjectsAction` classification.
 pub enum ProjectsAction {
@@ -1372,4 +1452,284 @@ pub fn ensure_spool(blob_dir: &std::path::Path) -> anyhow::Result<EventSpool> {
 /// ```
 pub fn is_json(mode: OutputMode) -> bool {
     matches!(mode, OutputMode::Json)
+}
+
+/// Boundary contract CLI (1.7 Phase A).
+pub async fn cmd_boundary(
+    store: Arc<dyn TraceStore>,
+    args: &BoundaryArgs,
+    json: bool,
+) -> anyhow::Result<()> {
+    use crate::boundary::{
+        evaluate_required_evidence, load_boundary_file, resolve_boundary, ContainmentReceipt,
+        ContainmentScope, ObservedEvidence, ResolveOpts, BOUNDARY_SCHEMA,
+    };
+
+    match &args.action {
+        BoundaryAction::Validate { file } => {
+            let contract = load_boundary_file(file)?;
+            let resolved = resolve_boundary(&contract, ResolveOpts::default())?;
+            if json {
+                return output::emit_ok(
+                    "boundary_validate",
+                    &serde_json::json!({
+                        "ok": true,
+                        "schema": BOUNDARY_SCHEMA,
+                        "policy_hash": resolved.policy_hash,
+                        "contract": contract,
+                    }),
+                );
+            }
+            println!(
+                "boundary ok schema={} policy_hash={}",
+                BOUNDARY_SCHEMA,
+                &resolved.policy_hash[..16.min(resolved.policy_hash.len())]
+            );
+            if let Some(ref p) = contract.purpose {
+                println!("  purpose: {p}");
+            }
+            println!(
+                "  prohibited={} required_evidence={} fail_closed={}",
+                contract.prohibited.len(),
+                contract.required_evidence.len(),
+                contract.fail_closed
+            );
+            Ok(())
+        }
+        BoundaryAction::Show { run_id } => {
+            let boundary = store
+                .get_run_boundary(run_id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("no boundary contract on run {run_id}"))?;
+            if json {
+                return output::emit_ok("boundary_show", &boundary);
+            }
+            println!(
+                "boundary run={} policy_hash={}",
+                crate::util::short_id(&boundary.run_id),
+                &boundary.policy_hash[..16.min(boundary.policy_hash.len())]
+            );
+            if let Some(ref p) = boundary.contract.purpose {
+                println!("  purpose: {p}");
+            }
+            println!(
+                "  fail_closed={} required_evidence={:?}",
+                boundary.contract.fail_closed, boundary.contract.required_evidence
+            );
+            println!("  prohibited={:?}", boundary.contract.prohibited);
+            if !boundary.inheritance_chain.is_empty() {
+                println!("  inheritance_chain={:?}", boundary.inheritance_chain);
+            }
+            Ok(())
+        }
+        BoundaryAction::Set {
+            run_id,
+            file,
+            parents,
+            fail_closed,
+        } => {
+            // Ensure run exists.
+            store
+                .get_run(run_id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("run not found: {run_id}"))?;
+            let leaf = load_boundary_file(file)?;
+            let mut parent_contracts = Vec::new();
+            for p in parents {
+                parent_contracts.push(load_boundary_file(p)?);
+            }
+            let resolved = resolve_boundary(
+                &leaf,
+                ResolveOpts {
+                    parents: parent_contracts,
+                    force_fail_closed: if *fail_closed { Some(true) } else { None },
+                    ..Default::default()
+                },
+            )?
+            .with_run_id(run_id.clone());
+            store.put_run_boundary(&resolved).await?;
+            if json {
+                return output::emit_ok("boundary_set", &resolved);
+            }
+            println!(
+                "boundary set on {} policy_hash={}",
+                crate::util::short_id(run_id),
+                &resolved.policy_hash[..16.min(resolved.policy_hash.len())]
+            );
+            Ok(())
+        }
+        BoundaryAction::Evaluate {
+            run_id,
+            present,
+            unavailable,
+            artifact_provenance,
+            gate,
+        } => {
+            let boundary = store.get_run_boundary(run_id).await?;
+            let containment_receipts = store.list_containment_receipts(run_id).await?;
+            // Auto-detect common capture classes from events when --present omitted.
+            let mut present_classes = present.clone();
+            if present_classes.is_empty() {
+                if let Ok(events) = store.get_events(run_id).await {
+                    let mut seen = std::collections::BTreeSet::new();
+                    for e in &events {
+                        let class = match e.source {
+                            crate::core::event::EventSource::Process => Some("process"),
+                            crate::core::event::EventSource::Filesystem => Some("filesystem"),
+                            crate::core::event::EventSource::Git => Some("git"),
+                            crate::core::event::EventSource::Terminal => Some("pty"),
+                            crate::core::event::EventSource::Network => Some("network"),
+                            _ => None,
+                        };
+                        if let Some(c) = class {
+                            seen.insert(c.to_string());
+                        }
+                        if e.kind.contains("network") || e.kind.contains("dns") {
+                            seen.insert("network".into());
+                        }
+                    }
+                    present_classes.extend(seen);
+                }
+            }
+            let observed = ObservedEvidence {
+                present_classes,
+                unavailable_classes: unavailable.clone(),
+                partial_classes: Vec::new(),
+                containment_receipts,
+                has_artifact_provenance: *artifact_provenance,
+            };
+            let report = evaluate_required_evidence(boundary.as_ref(), &observed);
+            if json {
+                if *gate && report.gate_failed {
+                    let _ = output::emit_ok("boundary_evaluate", &report);
+                    std::process::exit(2);
+                }
+                return output::emit_ok("boundary_evaluate", &report);
+            }
+            println!(
+                "boundary evaluate status={} gate_failed={} fail_closed={}",
+                report.status.as_str(),
+                report.gate_failed,
+                report.fail_closed
+            );
+            if let Some(ref h) = report.policy_hash {
+                println!("  policy_hash={}", &h[..16.min(h.len())]);
+            }
+            for req in &report.requirements {
+                println!(
+                    "  evidence {} → {}",
+                    req.class,
+                    req.availability.as_str()
+                );
+            }
+            for r in &report.reasons {
+                println!("  reason: {r}");
+            }
+            if *gate && report.gate_failed {
+                std::process::exit(2);
+            }
+            Ok(())
+        }
+        BoundaryAction::Receipt {
+            run_id,
+            claim,
+            result,
+            verifier,
+            method,
+            control,
+            backend,
+            summary,
+        } => {
+            store
+                .get_run(run_id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("run not found: {run_id}"))?;
+            let claim_state = parse_claim_state(claim)?;
+            let result_v = parse_containment_result(result)?;
+            let mut receipt = ContainmentReceipt::new(
+                run_id.clone(),
+                claim_state,
+                result_v,
+                verifier.clone(),
+                method.clone(),
+            );
+            receipt.scope = ContainmentScope {
+                control: control.clone(),
+                backend: backend.clone(),
+                sandbox_id: None,
+                label: None,
+            };
+            receipt.summary = summary.clone();
+            if let Ok(Some(b)) = store.get_run_boundary(run_id).await {
+                receipt.policy_hash = Some(b.policy_hash);
+            }
+            store.insert_containment_receipt(&receipt).await?;
+            if json {
+                return output::emit_ok("boundary_receipt", &receipt);
+            }
+            println!(
+                "containment receipt {} claim={} result={}",
+                crate::util::short_id(&receipt.id),
+                receipt.claim_state.as_str(),
+                receipt.result.as_str()
+            );
+            Ok(())
+        }
+    }
+}
+
+fn parse_claim_state(s: &str) -> anyhow::Result<crate::boundary::ContainmentClaimState> {
+    use crate::boundary::ContainmentClaimState;
+    Ok(match s {
+        "configured" => ContainmentClaimState::Configured,
+        "enforced" => ContainmentClaimState::Enforced,
+        "verified" => ContainmentClaimState::Verified,
+        "observed_only" => ContainmentClaimState::ObservedOnly,
+        "failed" => ContainmentClaimState::Failed,
+        "unknown" => ContainmentClaimState::Unknown,
+        "unavailable" => ContainmentClaimState::Unavailable,
+        other => anyhow::bail!("unknown claim state {other:?}"),
+    })
+}
+
+fn parse_containment_result(s: &str) -> anyhow::Result<crate::boundary::ContainmentResult> {
+    use crate::boundary::ContainmentResult;
+    Ok(match s {
+        "held" => ContainmentResult::Held,
+        "violated" => ContainmentResult::Violated,
+        "denied" => ContainmentResult::Denied,
+        "unreachable" => ContainmentResult::Unreachable,
+        "inconclusive" => ContainmentResult::Inconclusive,
+        "not_observed" => ContainmentResult::NotObserved,
+        "not_applicable" => ContainmentResult::NotApplicable,
+        other => anyhow::bail!("unknown containment result {other:?}"),
+    })
+}
+
+/// Resolve and attach a boundary file to a run (used by `run --boundary`).
+pub async fn attach_boundary_to_run(
+    store: &dyn TraceStore,
+    run_id: &str,
+    boundary_path: &std::path::Path,
+    parent_paths: &[std::path::PathBuf],
+    fail_closed: bool,
+) -> anyhow::Result<crate::boundary::ResolvedBoundary> {
+    use crate::boundary::{load_boundary_file, resolve_boundary, ResolveOpts};
+
+    let leaf = load_boundary_file(boundary_path)?;
+    let mut parents = Vec::new();
+    for p in parent_paths {
+        parents.push(load_boundary_file(p)?);
+    }
+    let resolved = resolve_boundary(
+        &leaf,
+        ResolveOpts {
+            parents,
+            force_fail_closed: if fail_closed { Some(true) } else { None },
+            ..Default::default()
+        },
+    )?
+    .with_run_id(run_id);
+    store.put_run_boundary(&resolved).await?;
+    Ok(resolved)
 }

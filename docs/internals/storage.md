@@ -97,7 +97,13 @@ pub trait TraceStore: Send + Sync + 'static {
 
 ### Schema versioning
 
-The database carries a `schema_version` (currently **v6**). On open, the store checks the version and runs migrations sequentially. Migrations are wrapped in transactions — a failed migration rolls back cleanly.
+The database carries a `schema_version` (currently **v9**). On open, the store checks the version and runs migrations sequentially. Migrations are wrapped in transactions — a failed migration rolls back cleanly.
+
+| Version | Added |
+|---|---|
+| v7 | Run aggregates |
+| v8 | Verification receipts, experiments |
+| v9 | Resolved boundary contracts (`run_boundaries`), containment receipts |
 
 ### Key tables
 

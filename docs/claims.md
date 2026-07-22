@@ -50,4 +50,16 @@ High-risk product claims classified by evidence. Update when tests or platforms 
 | 100k+ event endurance qualification | test-backed (release gate) | `tests/endurance_100k.rs` (`--ignored`); `scripts/release-qualify-unix.sh` |
 | Crates.io publication proves runtime qualification | historical / false | Publish is packaging; runtime qualify is the script above |
 
+## 1.7 agent boundary evidence (Phase A)
+
+| Claim | Class | Evidence / limitation |
+|---|---|---|
+| Governed run can store immutable resolved boundary + policy hash | test-backed | `tests/boundary_contract.rs`; schema `blackbox.boundary/v1` |
+| Configured containment is distinct from verified containment | test-backed | Claim states on `ContainmentReceipt`; configured-only fails required gate |
+| Missing required evidence is explicit and fail-closed when configured | test-backed | `evaluate_required_evidence`; `gate_failed` only when `fail_closed` |
+| Task success does not satisfy a required containment gate | test-backed | Evidence evaluator never consults exit code / verification status |
+| Policy hash is stable for the same merged contract | test-backed | SHA-256 of canonical JSON; inheritance unit tests |
+| Blackbox enforces sandbox/network policy by default | false / non-goal | Records authorization and evidence; not a firewall or EDR |
+| External telemetry import and multi-run incidents | planned | Phases C–F of [plan/agent-boundary-1.7.md](plan/agent-boundary-1.7.md) |
+
 **Classes:** `code-backed` · `test-backed` · `platform-dependent` · `best-effort` · `planned` · `historical` · `experimental`.

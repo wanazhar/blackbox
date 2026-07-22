@@ -4,6 +4,19 @@ All notable changes to **blackbox** are documented here.
 
 ## [Unreleased]
 
+### 1.7 Phase A — Boundary contracts & containment receipts
+
+Epic: [issue #5](https://github.com/wanazhar/blackbox/issues/5). Plan: [docs/plan/agent-boundary-1.7.md](docs/plan/agent-boundary-1.7.md).
+
+- **`blackbox.boundary/v1`**: purpose, allowed/prohibited capabilities, dispositions, required evidence, fail-closed flag
+- Policy resolution with experiment→run inheritance and stable SHA-256 **policy hash**
+- Immutable **containment receipts** (`blackbox.containment.receipt/v1`) with claim states: configured / enforced / verified / observed_only / failed / unknown / unavailable
+- Required-evidence evaluation: `insufficient_evidence`, `containment_unproven`, `containment_violated`; task success never satisfies a containment gate
+- Store schema **v9**: `run_boundaries`, `containment_receipts`
+- CLI: `blackbox boundary validate|show|set|evaluate|receipt`; `run --boundary` / `--boundary-parent` / `--boundary-fail-closed`
+- Reference: [docs/reference/boundary.md](docs/reference/boundary.md)
+- Tests: `tests/boundary_contract.rs` + unit coverage in `src/boundary/`
+
 ## [1.6.0] — 2026-07-21
 
 **Verified runs & reproducibility** — prove what was captured, separate process success from task verification, compare repeated runs without overstating confidence, package reproduction within declared limits, and recover acknowledged evidence after crashes or storage failures.

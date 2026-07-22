@@ -22,7 +22,7 @@ use crate::storage::TraceStore;
 
 /// Current schema version. Bump when migrations change.
 /// Current on-disk schema version (also reported by `doctor --json`).
-pub const SCHEMA_VERSION: i32 = 8;
+pub const SCHEMA_VERSION: i32 = 9;
 
 /// Default scanner for redacting secrets in FTS index content.
 static FTS_SCANNER: LazyLock<SecretScanner> =
@@ -389,6 +389,15 @@ impl SqliteStore {
                 .context("failed to record v8 version")?;
             tx.commit().context("failed to commit v8 migration")?;
         }
+        if current < 9 {
+            let tx = conn
+                .unchecked_transaction()
+                .context("failed to start transaction for v9 migration")?;
+            Self::migrate_v9(&tx)?;
+            tx.execute("INSERT INTO schema_version (version) VALUES (9)", [])
+                .context("failed to record v9 version")?;
+            tx.commit().context("failed to commit v9 migration")?;
+        }
 
         // Ensure we never claim a higher version than we support
         let applied: i32 = conn
@@ -699,6 +708,38 @@ impl SqliteStore {
         )
         .context("failed to create v8 verification/experiment tables")?;
         tracing::info!("v8: verification_receipts + experiments + run_experiment_meta");
+        Ok(())
+    }
+
+    /// V9: resolved boundary contracts + containment receipts (1.7).
+    fn migrate_v9(conn: &Connection) -> anyhow::Result<()> {
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS run_boundaries (
+                run_id          TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
+                policy_hash     TEXT NOT NULL,
+                resolved_at     TEXT NOT NULL,
+                payload         TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_run_boundaries_hash ON run_boundaries(policy_hash);
+
+            CREATE TABLE IF NOT EXISTS containment_receipts (
+                id              TEXT PRIMARY KEY,
+                run_id          TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+                created_at      TEXT NOT NULL,
+                claim_state     TEXT NOT NULL,
+                result          TEXT NOT NULL,
+                method          TEXT NOT NULL,
+                parent_receipt_id TEXT,
+                policy_hash     TEXT,
+                payload         TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_containment_run_id ON containment_receipts(run_id);
+            CREATE INDEX IF NOT EXISTS idx_containment_created ON containment_receipts(run_id, created_at);
+            ",
+        )
+        .context("failed to create v9 boundary/containment tables")?;
+        tracing::info!("v9: run_boundaries + containment_receipts");
         Ok(())
     }
 
@@ -1973,6 +2014,127 @@ impl TraceStore for SqliteStore {
             let conn = self.lock();
             let mut stmt =
                 conn.prepare("SELECT payload FROM verification_receipts WHERE id = ?1")?;
+            match stmt.query_row(params![id], |row| row.get::<_, String>(0)) {
+                Ok(p) => Ok(Some(serde_json::from_str(&p)?)),
+                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+                Err(e) => Err(e.into()),
+            }
+        };
+        tokio::task::yield_now().await;
+        result
+    }
+
+    async fn put_run_boundary(
+        &self,
+        boundary: &crate::boundary::ResolvedBoundary,
+    ) -> anyhow::Result<()> {
+        let payload = serde_json::to_string(boundary)?;
+        let resolved = boundary.resolved_at.to_rfc3339();
+        let run_id = boundary.run_id.clone();
+        let policy_hash = boundary.policy_hash.clone();
+        {
+            let conn = self.lock();
+            conn.execute(
+                "INSERT INTO run_boundaries (run_id, policy_hash, resolved_at, payload)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(run_id) DO UPDATE SET
+                   policy_hash = excluded.policy_hash,
+                   resolved_at = excluded.resolved_at,
+                   payload = excluded.payload",
+                params![run_id, policy_hash, resolved, payload],
+            )?;
+        }
+        tokio::task::yield_now().await;
+        Ok(())
+    }
+
+    async fn get_run_boundary(
+        &self,
+        run_id: &str,
+    ) -> anyhow::Result<Option<crate::boundary::ResolvedBoundary>> {
+        let run_id = run_id.to_string();
+        let result = {
+            let conn = self.lock();
+            let mut stmt =
+                conn.prepare("SELECT payload FROM run_boundaries WHERE run_id = ?1")?;
+            match stmt.query_row(params![run_id], |row| row.get::<_, String>(0)) {
+                Ok(p) => Ok(Some(serde_json::from_str(&p)?)),
+                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+                Err(e) => Err(e.into()),
+            }
+        };
+        tokio::task::yield_now().await;
+        result
+    }
+
+    async fn insert_containment_receipt(
+        &self,
+        receipt: &crate::boundary::ContainmentReceipt,
+    ) -> anyhow::Result<()> {
+        let payload = serde_json::to_string(receipt)?;
+        let claim_state = serde_json::to_string(&receipt.claim_state)?;
+        let result = serde_json::to_string(&receipt.result)?;
+        let created = receipt.created_at.to_rfc3339();
+        let parent = receipt.parent_receipt_id.clone();
+        let policy_hash = receipt.policy_hash.clone();
+        let id = receipt.id.clone();
+        let run_id = receipt.run_id.clone();
+        let method = receipt.method.clone();
+        {
+            let conn = self.lock();
+            conn.execute(
+                "INSERT INTO containment_receipts
+                   (id, run_id, created_at, claim_state, result, method, parent_receipt_id, policy_hash, payload)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    id,
+                    run_id,
+                    created,
+                    claim_state,
+                    result,
+                    method,
+                    parent,
+                    policy_hash,
+                    payload
+                ],
+            )?;
+        }
+        tokio::task::yield_now().await;
+        Ok(())
+    }
+
+    async fn list_containment_receipts(
+        &self,
+        run_id: &str,
+    ) -> anyhow::Result<Vec<crate::boundary::ContainmentReceipt>> {
+        let run_id = run_id.to_string();
+        let result = {
+            let conn = self.lock();
+            let mut stmt = conn.prepare(
+                "SELECT payload FROM containment_receipts WHERE run_id = ?1 ORDER BY created_at ASC",
+            )?;
+            let rows = stmt
+                .query_map(params![run_id], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut out = Vec::new();
+            for p in rows {
+                out.push(serde_json::from_str(&p)?);
+            }
+            Ok(out)
+        };
+        tokio::task::yield_now().await;
+        result
+    }
+
+    async fn get_containment_receipt(
+        &self,
+        id: &str,
+    ) -> anyhow::Result<Option<crate::boundary::ContainmentReceipt>> {
+        let id = id.to_string();
+        let result = {
+            let conn = self.lock();
+            let mut stmt =
+                conn.prepare("SELECT payload FROM containment_receipts WHERE id = ?1")?;
             match stmt.query_row(params![id], |row| row.get::<_, String>(0)) {
                 Ok(p) => Ok(Some(serde_json::from_str(&p)?)),
                 Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),

@@ -151,6 +151,8 @@ pub enum Command {
     Adapter(crate::cli_ext::AdapterArgs),
     /// Multi-project metadata index (1.6)
     Projects(crate::cli_ext::ProjectsArgs),
+    /// Boundary contracts, containment receipts, evidence gates (1.7)
+    Boundary(crate::cli_ext::BoundaryArgs),
 }
 
 #[derive(Args, Clone)]
@@ -596,6 +598,16 @@ pub struct RunArgs {
     /// Harness name metadata
     #[arg(long)]
     pub harness: Option<String>,
+    /// Path to boundary contract JSON (`blackbox.boundary/v1`) to attach after the run starts
+    #[arg(long)]
+    pub boundary: Option<PathBuf>,
+    /// Parent boundary contract JSON for inheritance (repeatable; root first)
+    #[arg(long = "boundary-parent")]
+    pub boundary_parent: Vec<PathBuf>,
+    /// Force fail-closed on the attached boundary
+    #[arg(long)]
+    pub boundary_fail_closed: bool,
+
     /// Harness version metadata
     #[arg(long)]
     pub harness_version: Option<String>,
@@ -1114,6 +1126,21 @@ impl Cli {
             Command::Budget(args) => crate::cli_ext::cmd_budget(args, self.json).await,
             Command::Adapter(args) => crate::cli_ext::cmd_adapter(args, self.json).await,
             Command::Projects(args) => crate::cli_ext::cmd_projects(args, self.json).await,
+            Command::Boundary(args) => {
+                let store = open_store(self)?;
+                let mut args = args.clone();
+                // Resolve run ids for subcommands that need them.
+                match &mut args.action {
+                    crate::cli_ext::BoundaryAction::Show { run_id }
+                    | crate::cli_ext::BoundaryAction::Set { run_id, .. }
+                    | crate::cli_ext::BoundaryAction::Evaluate { run_id, .. }
+                    | crate::cli_ext::BoundaryAction::Receipt { run_id, .. } => {
+                        *run_id = resolve_run_id(&store, run_id).await?;
+                    }
+                    crate::cli_ext::BoundaryAction::Validate { .. } => {}
+                }
+                crate::cli_ext::cmd_boundary(std::sync::Arc::new(store), &args, self.json).await
+            }
         }
     }
 }
@@ -1457,6 +1484,35 @@ async fn cmd_run(cli: &Cli, args: &RunArgs) -> anyhow::Result<()> {
         .with_policy(policy)
         .with_budget(budget);
     let run = supervisor.execute(&args).await?;
+
+    // 1.7: attach resolved boundary contract when --boundary is set.
+    if let Some(ref boundary_path) = args.boundary {
+        match crate::cli_ext::attach_boundary_to_run(
+            store.as_ref(),
+            &run.id,
+            boundary_path,
+            &args.boundary_parent,
+            args.boundary_fail_closed,
+        )
+        .await
+        {
+            Ok(resolved) => {
+                if !cli.json {
+                    eprintln!(
+                        "boundary: attached policy_hash={} to {}",
+                        &resolved.policy_hash[..16.min(resolved.policy_hash.len())],
+                        crate::util::short_id(&run.id)
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to attach boundary contract");
+                if !cli.json {
+                    eprintln!("warning: failed to attach boundary: {e}");
+                }
+            }
+        }
+    }
 
     // 1.6: persist typed experiment metadata when --experiment (or related) set.
     if args.experiment.is_some()

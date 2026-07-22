@@ -138,7 +138,7 @@ blackbox evidence list --run latest
 
 ## Correlation & trace identity
 
-Each supervised run mints a random `TraceIdentity`. Edges never upgrade temporal proximity alone to `confirmed`. Matching cooperative `trace_id` alone is at most `strongly_correlated` (closed residual risk). Unverified integrity never reaches `confirmed` even with a matching `run_id`; `hash_ok` / `signed_verified` is required.
+Each supervised run mints a random `TraceIdentity`. Edges never upgrade temporal proximity alone to `confirmed`. Matching cooperative `trace_id` alone is at most `strongly_correlated` (closed residual risk). A matching payload hash proves consistency but not source authenticity, so `hash_ok` is also capped below `confirmed`. Only evidence admitted by a trusted signature verifier can reach `confirmed`; NDJSON input cannot self-assert `signed_verified`.
 
 ## Detection & provenance
 
@@ -166,7 +166,8 @@ blackbox boundary validate path/to/boundary.json
 blackbox boundary set <run|latest> -f boundary.json
 blackbox boundary show <run|latest>
 blackbox boundary evaluate <run> --gate
-blackbox boundary receipt <run> --claim verified --result held --method post_run_canary
+blackbox boundary receipt <run> --claim verified --result held --method post_run_canary \
+  --control network_egress --evidence-hash <sha256>
 blackbox boundary detect <run> --emit-events
 blackbox boundary provenance <run> --declared dataset://case --gate
 blackbox evidence import proxy.ndjson --run latest

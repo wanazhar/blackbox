@@ -154,7 +154,7 @@ blackbox run [--name <label>] [--ci] [--eval] [--artifact-dir <dir>] [--tag <tag
 | `--seed` / `--dataset-case` | Experiment reproducibility fields |
 | `--max-wall` / `--max-processes` / `--max-output` / `--max-tool-calls` | Execution budgets (see [budgets guide](../guide/budgets-and-adapters.md)) |
 | `--max-memory` / `--max-cpu-percent` / `--contained` | Memory/CPU cgroup prefs; contained preflight |
-| `--boundary <file>` | Attach resolved `blackbox.boundary/v1` contract after the run |
+| `--boundary <file>` | Resolve and store `blackbox.boundary/v1` before the child starts |
 | `--boundary-parent <file>` | Parent boundary for inheritance (repeatable; root first) |
 | `--boundary-fail-closed` | Force fail-closed on the attached boundary |
 | `--insecure-raw` | Store raw PTY bytes as blobs (dangerous) |
@@ -1018,7 +1018,8 @@ blackbox boundary set <run-id|latest> -f <file.json> [--parent <parent.json>…]
 blackbox boundary evaluate <run-id|latest> [--present CLASS]… [--unavailable CLASS]… \
   [--artifact-provenance] [--gate]
 blackbox boundary receipt <run-id|latest> [--claim STATE] [--result RESULT] \
-  [--verifier ID] [--method NAME] [--control NAME] [--backend NAME] [--summary TEXT]
+  [--verifier ID] [--method NAME] [--control NAME] [--backend NAME] \
+  [--evidence-hash SHA256]… [--summary TEXT]
 ```
 
 | Subcommand | Role |
@@ -1043,7 +1044,7 @@ blackbox evidence import <file.ndjson> [--run <id|latest>] [--max-events N] \
 blackbox evidence list [--run <id|latest>] [--limit N]
 ```
 
-Import versioned `blackbox.evidence.event/v1` (or generic JSONL mapping). Idempotent on `(source, source_event_id)`. Payload hashes are verified when `original_payload_hash` is present. `--reject-unverified` fails closed for IR (only `hash_ok` / `signed_verified`).
+Import versioned `blackbox.evidence.event/v1` (or generic JSONL mapping). The event batch and its correlation edges commit atomically and are idempotent on `(source, source_event_id)`. Payload hashes are checked when `original_payload_hash` is present; this proves payload consistency, not sensor authenticity. Input cannot self-assert `signed_verified`: signed evidence requires a configured trusted verifier. `--reject-unverified` accepts successfully checked `hash_ok` evidence.
 
 ---
 

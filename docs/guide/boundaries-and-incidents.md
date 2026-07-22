@@ -46,12 +46,12 @@ Supports native `blackbox.evidence.event/v1`, generic JSONL, and adapters for **
 
 ```bash
 blackbox evidence import tests/fixtures/boundary_1_7/proxy_events.ndjson --run latest
-# Fail-closed IR: only hash_ok / signed_verified events
+# Fail-closed IR: require locally checked payload hashes
 blackbox evidence import events.ndjson --run latest --reject-unverified
 blackbox evidence list --run latest
 ```
 
-Import is idempotent on `(source, source_event_id)`, bounded, and rejects absolute/traversal path attributes. When `original_payload_hash` is present, the importer verifies sha256 of the `payload` / `raw` / `body` attribute (disable with `--no-verify-payload-hashes` only for private debugging). Unverified integrity **caps correlation confidence** below `confirmed`.
+Import is transactional with its generated edges, idempotent on `(source, source_event_id)`, bounded, and rejects absolute/traversal path attributes. When `original_payload_hash` is present, the importer verifies sha256 of the `payload` / `raw` / `body` attribute (disable with `--no-verify-payload-hashes` only for private debugging). A matching hash proves consistency, not sensor authenticity, and remains below `confirmed`. NDJSON cannot self-assert `signed_verified`; that state is reserved for a trusted verifier.
 
 ---
 

@@ -62,10 +62,13 @@ may be null/empty when the run was not linked or verified. Import restores them
 when present (new receipt ids if run ids are remapped).
 
 **1.7 fields** (`boundary`, containment/evidence/findings/provenance/trace_identity)
-are optional. Import remaps `run_id` (and regenerates ids when `--new-ids` /
-equivalent is used). Absolute/traversal path attributes remain rejected on
-evidence re-validation only if re-imported via the evidence importer; portable
-JSON restores stored payloads as previously accepted.
+are optional. If a field is present it must deserialize correctly; malformed
+trust data rejects the archive instead of being dropped. Import remaps
+`run_id`, regenerated entity ids, edge endpoints, finding citations, and
+receipt lineage when `--new-ids` (or equivalent) is used. Trust-artifact write
+failure rolls the run back. Absolute/traversal path attributes remain rejected
+on evidence re-validation only if re-imported via the evidence importer;
+portable JSON restores stored payloads as previously accepted.
 
 ### v1 vs v2
 

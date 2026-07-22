@@ -245,8 +245,8 @@ SSE streams and JSON APIs share the same auth middleware.
 |---|---|
 | External NDJSON import | Bounded size/count; idempotent; rejects loadable absolute/`..` path **attributes** |
 | Payload integrity | When `original_payload_hash` is present, sha256 of `payload`/`raw`/`body` is verified; false `hash_ok` claims demoted |
-| Fail-closed IR import | `evidence import --reject-unverified` keeps only `hash_ok` / `signed_verified` |
-| Correlation confidence | Cooperative `trace_id` alone ≤ strongly_correlated; unverified integrity never Confirmed |
+| Fail-closed IR import | `evidence import --reject-unverified` keeps locally checked `hash_ok`; NDJSON cannot self-assert `signed_verified` |
+| Correlation confidence | Cooperative `trace_id` and payload hashes do not authenticate a sensor; only trusted signature verification can reach Confirmed |
 | Process `object` paths | Absolute exe paths are allowed as labels (never opened) |
 | Containment “verified” | Requires verified+held on a real control — process-only absence of egress does **not** satisfy |
 | Forensic packs | `SecretScanner` + substring patterns + truncation; model claims need citations |
@@ -258,7 +258,7 @@ Guide: [boundaries-and-incidents.md](boundaries-and-incidents.md).
 
 | Risk | Closure |
 |---|---|
-| Unverified sensor feed treated as proof | Integrity caps correlation; payload hash verify on import; optional `--reject-unverified` |
+| Unverified sensor feed treated as proof | Payload hashes prove consistency only; Confirmed requires trusted signature verification |
 | Forensic pack leaks fixture secrets | Packs run the same `SecretScanner` as capture/export before write |
 | Anonymous loopback `serve` | Token auto-generated unless `--allow-anonymous` (loopback-only danger) |
 | Forged cooperative `trace_id` → Confirmed | Permanent unit gates; multi-signal + integrity required |
@@ -274,7 +274,7 @@ Guide: [boundaries-and-incidents.md](boundaries-and-incidents.md).
 5. Use passphrase `backup` for cold storage; test `restore` once.
 6. Prefer pinned `--token` / `BLACKBOX_SERVE_TOKEN` for `serve`; avoid `--allow-anonymous` on multi-user hosts.
 7. After expanding scanner patterns: `blackbox scrub --gc`.
-8. Treat imported external evidence as untrusted telemetry unless integrity is `hash_ok` / `signed_verified`.
+8. Treat imported external evidence as untrusted telemetry. `hash_ok` is a consistency check; only a configured trusted verifier may establish `signed_verified` authenticity.
 
 ---
 

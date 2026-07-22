@@ -8,6 +8,12 @@ use uuid::Uuid;
 
 /// Schema identifier for external evidence events.
 pub const EVIDENCE_EVENT_SCHEMA: &str = "blackbox.evidence.event/v1";
+/// Attribute carried by sanitized importer-generated telemetry anomaly records.
+pub const TELEMETRY_ANOMALY_ATTRIBUTE: &str = "blackbox.telemetry_anomaly";
+/// An imported record claimed an invalid signature.
+pub const TELEMETRY_ANOMALY_SIGNED_INVALID: &str = "signed_invalid";
+/// A sensor reused one source-local identity for conflicting content.
+pub const TELEMETRY_ANOMALY_SOURCE_IDENTITY_CONFLICT: &str = "source_identity_conflict";
 
 /// Clock uncertainty for multi-host correlation.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -330,6 +336,122 @@ impl ExternalEvidenceEvent {
         h.update(s.as_bytes());
         Ok(hex::encode(h.finalize()))
     }
+
+    /// Hash fields that describe the source observation, excluding Blackbox
+    /// IDs, ingest time, and run attachment. Used to distinguish an idempotent
+    /// replay from conflicting content under one source-local identity.
+    pub fn source_observation_hash(&self) -> anyhow::Result<String> {
+        let body = serde_json::json!({
+            "source": self.source,
+            "sensor": self.sensor,
+            "source_event_id": self.source_event_id,
+            "source_sequence": self.source_sequence,
+            "occurred_at": self.occurred_at,
+            "observed_at": self.observed_at,
+            "clock_uncertainty": self.clock_uncertainty,
+            "identity": self.identity,
+            "action": self.action,
+            "object": self.object,
+            "destination": self.destination,
+            "outcome": self.outcome,
+            "data_class": self.data_class,
+            "original_payload_hash": self.original_payload_hash,
+            "integrity": self.integrity,
+            "attributes": self.attributes,
+        });
+        let mut hash = Sha256::new();
+        hash.update(serde_json::to_vec(&body)?);
+        Ok(hex::encode(hash.finalize()))
+    }
+
+    /// Whether two records reuse a source-local identity for different source
+    /// observations. Blackbox ingest metadata is deliberately ignored.
+    pub fn conflicts_with_source_observation(&self, other: &Self) -> bool {
+        if self.source != other.source || self.source_event_id != other.source_event_id {
+            return false;
+        }
+        self.source_observation_hash().ok() != other.source_observation_hash().ok()
+    }
+
+    /// Build a bounded sanitized record proving that an invalid-signature
+    /// record was rejected. The untrusted record itself remains rejected.
+    pub fn signed_invalid_anomaly(rejected: &Self) -> anyhow::Result<Self> {
+        telemetry_anomaly(TELEMETRY_ANOMALY_SIGNED_INVALID, rejected, None)
+    }
+
+    /// Build an idempotent sanitized record proving source-identity reuse with
+    /// conflicting content. Both source-observation hashes are retained.
+    pub fn source_identity_conflict_anomaly(
+        existing: &Self,
+        conflicting: &Self,
+    ) -> anyhow::Result<Self> {
+        telemetry_anomaly(
+            TELEMETRY_ANOMALY_SOURCE_IDENTITY_CONFLICT,
+            conflicting,
+            Some(existing),
+        )
+    }
+}
+
+fn telemetry_anomaly(
+    kind: &str,
+    observed: &ExternalEvidenceEvent,
+    existing: Option<&ExternalEvidenceEvent>,
+) -> anyhow::Result<ExternalEvidenceEvent> {
+    let observed_hash = observed.source_observation_hash()?;
+    let existing_hash = existing
+        .map(ExternalEvidenceEvent::source_observation_hash)
+        .transpose()?;
+    let mut hashes = vec![observed_hash.clone()];
+    if let Some(ref hash) = existing_hash {
+        hashes.push(hash.clone());
+    }
+    hashes.sort();
+    let mut marker_hash = Sha256::new();
+    marker_hash.update(kind.as_bytes());
+    marker_hash.update(observed.source.as_bytes());
+    marker_hash.update(observed.source_event_id.as_bytes());
+    for hash in &hashes {
+        marker_hash.update(hash.as_bytes());
+    }
+    let marker_hash = hex::encode(marker_hash.finalize());
+
+    let mut marker = ExternalEvidenceEvent::new(
+        "blackbox-import",
+        "telemetry_integrity",
+        format!("{kind}:{}", &marker_hash[..32]),
+        EvidenceAction::Other("telemetry_anomaly".into()),
+    );
+    marker.id = format!("evext-anomaly-{}", &marker_hash[..32]);
+    marker.linked_run_id = observed
+        .linked_run_id
+        .clone()
+        .or_else(|| existing.and_then(|event| event.linked_run_id.clone()));
+    marker.integrity = EvidenceIntegrity::Transformed;
+    marker.transformations = vec!["sanitized_telemetry_anomaly_record".into()];
+    marker
+        .attributes
+        .insert(TELEMETRY_ANOMALY_ATTRIBUTE.into(), kind.into());
+    let mut source_identity_hash = Sha256::new();
+    source_identity_hash.update(observed.source.as_bytes());
+    source_identity_hash.update(b"\0");
+    source_identity_hash.update(observed.source_event_id.as_bytes());
+    marker.attributes.insert(
+        "evidence_source_identity_hash".into(),
+        hex::encode(source_identity_hash.finalize()).into(),
+    );
+    marker
+        .attributes
+        .insert("observed_content_hash".into(), observed_hash.into());
+    if let Some(hash) = existing_hash {
+        marker
+            .attributes
+            .insert("existing_content_hash".into(), hash.into());
+    }
+    marker.coverage_notes.push(format!(
+        "original telemetry rejected; preserved sanitized anomaly {kind}"
+    ));
+    Ok(marker)
 }
 
 fn is_pathish_key(k: &str) -> bool {

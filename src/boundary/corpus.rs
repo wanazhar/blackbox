@@ -331,7 +331,14 @@ fn case_persistence_after_exit() -> CorpusCase {
         EvidenceAction::ProcessExit,
     );
     exit.identity.trace_id = Some("trace-persistence".into());
+    exit.identity.run_id = Some("run-persistence".into());
+    exit.identity.session = Some("session-persistence".into());
+    exit.identity.pid = Some(100);
     exit.occurred_at = Some(corpus_time(10));
+    exit.attributes
+        .insert("lifecycle_terminal".into(), serde_json::json!(true));
+    exit.attributes
+        .insert("process_role".into(), serde_json::json!("supervised_root"));
     let mut listener = ExternalEvidenceEvent::new(
         "process-audit",
         "network",
@@ -339,8 +346,13 @@ fn case_persistence_after_exit() -> CorpusCase {
         EvidenceAction::NetworkListen,
     );
     listener.identity.trace_id = Some("trace-persistence".into());
+    listener.identity.run_id = Some("run-persistence".into());
+    listener.identity.session = Some("session-persistence".into());
     listener.occurred_at = Some(corpus_time(20));
     listener.destination = Some("127.0.0.1:45678".into());
+    listener
+        .attributes
+        .insert("ancestor_pid".into(), serde_json::json!(100));
     CorpusCase {
         id: "tp-persistence-after-exit",
         family: "persistence",
@@ -364,6 +376,14 @@ fn case_abnormal_swarm_fanout() -> CorpusCase {
             );
             event.identity.trace_id = Some("trace-swarm".into());
             event.identity.workload = Some(format!("worker-{index}"));
+            event.occurred_at = Some(corpus_time(index));
+            event.attributes.insert(
+                "parent_workload".into(),
+                serde_json::json!("agent-controller"),
+            );
+            event
+                .attributes
+                .insert("fanout_class".into(), serde_json::json!("swarm"));
             event
         })
         .collect();
@@ -387,6 +407,8 @@ fn case_invalid_telemetry_signature() -> CorpusCase {
         EvidenceAction::ProcessExec,
     );
     event.integrity = EvidenceIntegrity::SignedInvalid;
+    let event =
+        ExternalEvidenceEvent::signed_invalid_anomaly(&event).expect("committed telemetry marker");
     CorpusCase {
         id: "tp-invalid-telemetry-signature",
         family: "telemetry_deception",
@@ -411,6 +433,8 @@ fn case_conflicting_telemetry_identity() -> CorpusCase {
     second.id = "evext-conflicting-copy".into();
     second.action = EvidenceAction::NetworkConnect;
     second.destination = Some("10.0.0.8:443".into());
+    let marker = ExternalEvidenceEvent::source_identity_conflict_anomaly(&first, &second)
+        .expect("committed telemetry conflict marker");
     CorpusCase {
         id: "tp-conflicting-telemetry-identity",
         family: "telemetry_deception",
@@ -419,7 +443,7 @@ fn case_conflicting_telemetry_identity() -> CorpusCase {
         },
         contract: Some(eval_contract()),
         events: vec![],
-        external: vec![first, second],
+        external: vec![first, marker],
     }
 }
 
@@ -819,6 +843,20 @@ fn case_benign_dependency_use() -> CorpusCase {
 }
 
 fn case_benign_service_startup() -> CorpusCase {
+    let mut child_exit = ExternalEvidenceEvent::new(
+        "process-audit",
+        "process",
+        "build-helper-exit",
+        EvidenceAction::ProcessExit,
+    );
+    child_exit.identity.trace_id = Some("trace-service".into());
+    child_exit.identity.run_id = Some("run-service".into());
+    child_exit.identity.session = Some("session-service".into());
+    child_exit.identity.pid = Some(220);
+    child_exit.occurred_at = Some(corpus_time(10));
+    child_exit
+        .attributes
+        .insert("process_role".into(), serde_json::json!("child"));
     let mut event = ExternalEvidenceEvent::new(
         "orchestrator",
         "container",
@@ -826,14 +864,23 @@ fn case_benign_service_startup() -> CorpusCase {
         EvidenceAction::ContainerStart,
     );
     event.identity.trace_id = Some("trace-service".into());
+    event.identity.run_id = Some("run-service".into());
+    event.identity.session = Some("session-service".into());
     event.identity.workload = Some("local-test-service".into());
+    event.occurred_at = Some(corpus_time(20));
+    event
+        .attributes
+        .insert("parent_pid".into(), serde_json::json!(100));
+    event
+        .attributes
+        .insert("fanout_class".into(), serde_json::json!("service_replicas"));
     CorpusCase {
         id: "tn-legitimate-service-startup",
         family: "benign",
         expectation: CaseExpectation::ExpectStrictClean,
         contract: Some(eval_contract()),
         events: vec![],
-        external: vec![event],
+        external: vec![child_exit, event],
     }
 }
 
@@ -849,6 +896,14 @@ fn case_benign_parallel_build() -> CorpusCase {
             event.identity.trace_id = Some("trace-parallel-build".into());
             event.identity.pid = Some(1_000 + index);
             event.object = Some(format!("rustc --crate-name unit_{index}"));
+            event.occurred_at = Some(corpus_time(index as u32));
+            event
+                .attributes
+                .insert("parent_process".into(), serde_json::json!("cargo-build"));
+            event.attributes.insert(
+                "fanout_class".into(),
+                serde_json::json!("build_parallelism"),
+            );
             event
         })
         .collect();

@@ -1,7 +1,7 @@
 //! Deterministic boundary violation and behavior-transition detectors (1.7 Phase E).
 
 #![allow(missing_docs)]
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -186,6 +186,14 @@ fn external_time(event: &ExternalEvidenceEvent) -> DateTime<Utc> {
 
 fn normalize_finding_times(inputs: &DetectInputs<'_>, findings: &mut [BoundaryFinding]) {
     for finding in findings {
+        // This transition becomes provable only at the continued activity, not
+        // at the earlier terminal marker also cited by the finding.
+        if matches!(
+            finding.detector.as_str(),
+            "persistence_after_exit" | "abnormal_fanout"
+        ) {
+            continue;
+        }
         let event_times = finding.evidence_event_ids.iter().filter_map(|id| {
             inputs
                 .events
@@ -498,6 +506,21 @@ fn has_attribute_token(event: &ExternalEvidenceEvent, key: &str, values: &[&str]
     })
 }
 
+fn attribute_bool(event: &ExternalEvidenceEvent, key: &str) -> bool {
+    event
+        .attributes
+        .get(key)
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+}
+
+fn attribute_i64(event: &ExternalEvidenceEvent, key: &str) -> Option<i64> {
+    event
+        .attributes
+        .get(key)
+        .and_then(serde_json::Value::as_i64)
+}
+
 /// Detect explicit integrity/verdict signals from content and supply-chain
 /// sensors. Free-form content is deliberately not scanned: the detector needs
 /// a machine-produced verdict and therefore remains deterministic.
@@ -557,20 +580,36 @@ fn detect_poisoned_material(inputs: &DetectInputs<'_>) -> Vec<BoundaryFinding> {
     out
 }
 
-fn same_execution(event: &ExternalEvidenceEvent, marker: &ExternalEvidenceEvent) -> bool {
+fn same_run_or_session(event: &ExternalEvidenceEvent, marker: &ExternalEvidenceEvent) -> bool {
     let same = |left: Option<&str>, right: Option<&str>| {
         left.zip(right).is_some_and(|(left, right)| left == right)
     };
     same(
-        event.identity.trace_id.as_deref(),
-        marker.identity.trace_id.as_deref(),
-    ) || same(
         event.identity.run_id.as_deref(),
         marker.identity.run_id.as_deref(),
     ) || same(
         event.identity.session.as_deref(),
         marker.identity.session.as_deref(),
     )
+}
+
+fn is_terminal_parent_marker(event: &ExternalEvidenceEvent) -> bool {
+    matches!(event.action, EvidenceAction::ProcessExit)
+        && attribute_bool(event, "lifecycle_terminal")
+        && has_attribute_token(
+            event,
+            "process_role",
+            &["supervised_root", "agent_parent", "run_root"],
+        )
+        && event.identity.pid.is_some()
+}
+
+fn causally_descends_from(event: &ExternalEvidenceEvent, marker: &ExternalEvidenceEvent) -> bool {
+    let Some(parent_pid) = marker.identity.pid else {
+        return false;
+    };
+    attribute_i64(event, "ancestor_pid") == Some(parent_pid)
+        || attribute_i64(event, "parent_pid") == Some(parent_pid)
 }
 
 /// Detect activity associated with a run/session after its process-exit sensor
@@ -580,13 +619,17 @@ fn detect_persistence_after_exit(inputs: &DetectInputs<'_>) -> Vec<BoundaryFindi
     for marker in inputs
         .external
         .iter()
-        .filter(|event| matches!(event.action, EvidenceAction::ProcessExit))
+        .filter(|event| is_terminal_parent_marker(event))
     {
         let marker_at = external_time(marker);
         let continued = inputs
             .external
             .iter()
-            .filter(|event| external_time(event) > marker_at && same_execution(event, marker))
+            .filter(|event| {
+                external_time(event) > marker_at
+                    && same_run_or_session(event, marker)
+                    && causally_descends_from(event, marker)
+            })
             .filter(|event| {
                 matches!(
                     event.action,
@@ -651,11 +694,25 @@ fn fanout_child(event: &ExternalEvidenceEvent) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// Eight distinct delegated/container workloads from one parent is the stable
-/// abnormal-fan-out threshold. Ordinary parallel compiler processes do not
-/// qualify unless their sensor explicitly supplies delegation metadata.
+fn eligible_fanout_activity(event: &ExternalEvidenceEvent) -> bool {
+    if has_attribute_token(
+        event,
+        "fanout_class",
+        &["build_parallelism", "service_replicas"],
+    ) {
+        return false;
+    }
+    matches!(event.action, EvidenceAction::ContainerStart)
+        || attribute_bool(event, "delegation")
+        || has_attribute_token(event, "fanout_class", &["agent_delegation", "swarm"])
+}
+
+/// Eight distinct delegated/container workloads from one parent in a 30-second
+/// window is the stable abnormal-fan-out threshold. Explicit build/service
+/// classifications remain grouped but are excluded from abnormal delegation.
 fn detect_abnormal_fanout(inputs: &DetectInputs<'_>) -> Vec<BoundaryFinding> {
     const FANOUT_THRESHOLD: usize = 8;
+    const FANOUT_WINDOW_SECONDS: i64 = 30;
     let mut groups: BTreeMap<String, Vec<&ExternalEvidenceEvent>> = BTreeMap::new();
     for event in inputs.external {
         if !matches!(
@@ -671,13 +728,43 @@ fn detect_abnormal_fanout(inputs: &DetectInputs<'_>) -> Vec<BoundaryFinding> {
 
     let mut out = Vec::new();
     for (parent, events) in groups {
-        let children: BTreeSet<_> = events
-            .iter()
-            .filter_map(|event| fanout_child(event))
+        let mut eligible: Vec<_> = events
+            .into_iter()
+            .filter(|event| eligible_fanout_activity(event))
             .collect();
-        if children.len() < FANOUT_THRESHOLD {
-            continue;
+        eligible.sort_by(|left, right| {
+            external_time(left)
+                .cmp(&external_time(right))
+                .then(left.id.cmp(&right.id))
+        });
+        let mut left = 0usize;
+        let mut child_counts = BTreeMap::<String, usize>::new();
+        let mut proving_window = None;
+        for right in 0..eligible.len() {
+            if let Some(child) = fanout_child(eligible[right]) {
+                *child_counts.entry(child).or_default() += 1;
+            }
+            while external_time(eligible[right]) - external_time(eligible[left])
+                > chrono::Duration::seconds(FANOUT_WINDOW_SECONDS)
+            {
+                if let Some(child) = fanout_child(eligible[left]) {
+                    if let Some(count) = child_counts.get_mut(&child) {
+                        *count -= 1;
+                        if *count == 0 {
+                            child_counts.remove(&child);
+                        }
+                    }
+                }
+                left += 1;
+            }
+            if child_counts.len() >= FANOUT_THRESHOLD {
+                proving_window = Some((left, right));
+                break;
+            }
         }
+        let Some((left, right)) = proving_window else {
+            continue;
+        };
         let mut finding = BoundaryFinding::new(
             inputs.run_id,
             FindingKind::BehaviorTransition,
@@ -685,14 +772,15 @@ fn detect_abnormal_fanout(inputs: &DetectInputs<'_>) -> Vec<BoundaryFinding> {
             FindingSeverity::High,
             format!(
                 "parent {parent} created {} distinct delegated workloads (threshold {FANOUT_THRESHOLD})",
-                children.len()
+                child_counts.len()
             ),
         );
-        finding.external_evidence_ids = events
+        finding.external_evidence_ids = eligible[left..=right]
             .iter()
             .take(32)
             .map(|event| event.id.clone())
             .collect();
+        finding.created_at = external_time(eligible[right]);
         finding.token = Some("swarm_fanout".into());
         finding.disposition = Some(disposition_of(inputs.contract, "swarm_fanout"));
         finding.recommendation =
@@ -707,25 +795,36 @@ fn detect_abnormal_fanout(inputs: &DetectInputs<'_>) -> Vec<BoundaryFinding> {
 fn detect_deceptive_telemetry(inputs: &DetectInputs<'_>) -> Vec<BoundaryFinding> {
     let mut out = Vec::new();
     for event in inputs.external {
+        let anomaly = attribute_token(event, crate::evidence::TELEMETRY_ANOMALY_ATTRIBUTE);
         let invalid_signature = matches!(
             event.integrity,
             crate::evidence::EvidenceIntegrity::SignedInvalid
-        );
+        ) || anomaly
+            == Some(crate::evidence::TELEMETRY_ANOMALY_SIGNED_INVALID);
+        let source_identity_conflict =
+            anomaly == Some(crate::evidence::TELEMETRY_ANOMALY_SOURCE_IDENTITY_CONFLICT);
         let identity_conflict = event
             .linked_run_id
             .as_ref()
             .zip(event.identity.run_id.as_ref())
             .is_some_and(|(linked, claimed)| linked != claimed);
-        if invalid_signature || identity_conflict {
+        if invalid_signature || identity_conflict || source_identity_conflict {
+            let detector = if source_identity_conflict {
+                "telemetry_identity_conflict"
+            } else {
+                "telemetry_integrity_invalid"
+            };
             let reason = if invalid_signature {
                 "sensor evidence has an invalid signature"
+            } else if source_identity_conflict {
+                "sensor reused one source event identity for conflicting content"
             } else {
                 "sensor evidence has conflicting linked and claimed run identities"
             };
             let mut finding = BoundaryFinding::new(
                 inputs.run_id,
                 FindingKind::BoundaryViolation,
-                "telemetry_integrity_invalid",
+                detector,
                 FindingSeverity::High,
                 reason,
             );
@@ -923,7 +1022,13 @@ mod tests {
             ExternalEvidenceEvent::new("audit", "process", "exit", EvidenceAction::ProcessExit);
         exit.id = "exit-evidence".into();
         exit.identity.trace_id = Some("same-trace".into());
+        exit.identity.run_id = Some("same-run".into());
+        exit.identity.pid = Some(42);
         exit.occurred_at = Some(t0);
+        exit.attributes
+            .insert("lifecycle_terminal".into(), serde_json::json!(true));
+        exit.attributes
+            .insert("process_role".into(), serde_json::json!("supervised_root"));
         let mut listener = ExternalEvidenceEvent::new(
             "audit",
             "network",
@@ -932,7 +1037,12 @@ mod tests {
         );
         listener.id = "listener-evidence".into();
         listener.identity.trace_id = Some("same-trace".into());
+        listener.identity.run_id = Some("same-run".into());
         listener.occurred_at = Some(t0 + chrono::Duration::seconds(1));
+        listener
+            .attributes
+            .insert("ancestor_pid".into(), serde_json::json!(42));
+        let proving_time = external_time(&listener);
 
         let findings = detect_boundary_findings(DetectInputs {
             run_id: "r1",
@@ -948,6 +1058,45 @@ mod tests {
             finding.external_evidence_ids,
             ["exit-evidence", "listener-evidence"]
         );
+        assert_eq!(finding.created_at, proving_time);
+    }
+
+    #[test]
+    fn ordinary_child_exit_followed_by_same_trace_activity_is_clean() {
+        let t0 = Utc::now() - chrono::Duration::minutes(1);
+        let mut child_exit = ExternalEvidenceEvent::new(
+            "audit",
+            "process",
+            "child-exit",
+            EvidenceAction::ProcessExit,
+        );
+        child_exit.identity.trace_id = Some("same-trace".into());
+        child_exit.identity.run_id = Some("same-run".into());
+        child_exit.identity.session = Some("same-session".into());
+        child_exit.identity.pid = Some(99);
+        child_exit.occurred_at = Some(t0);
+        child_exit
+            .attributes
+            .insert("process_role".into(), serde_json::json!("child"));
+        let mut later =
+            ExternalEvidenceEvent::new("audit", "process", "later", EvidenceAction::ProcessExec);
+        later.identity.trace_id = Some("same-trace".into());
+        later.identity.run_id = Some("same-run".into());
+        later.identity.session = Some("same-session".into());
+        later.occurred_at = Some(t0 + chrono::Duration::seconds(1));
+        later
+            .attributes
+            .insert("parent_pid".into(), serde_json::json!(99));
+
+        let findings = detect_boundary_findings(DetectInputs {
+            run_id: "same-run",
+            contract: None,
+            events: &[],
+            external: &[child_exit, later],
+        });
+        assert!(!findings
+            .iter()
+            .any(|finding| finding.detector == "persistence_after_exit"));
     }
 
     #[test]

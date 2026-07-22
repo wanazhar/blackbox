@@ -1,0 +1,3 @@
+{"kind":"Event","apiVersion":"audit.k8s.io/v1","auditID":"k8s-malformed-001","stage":"ResponseComplete","requestURI":"/api/v1/pods"}
+{"eventVersion":"1.11","eventID":"aws-malformed-001","eventTime":"not-a-timestamp","eventSource":"iam.amazonaws.com"}
+{"insertId":"gcp-malformed-001","timestamp":"2026-07-22T09:03:00Z","protoPayload":{"@type":"type.googleapis.com/google.cloud.audit.AuditLog","serviceName":"storage.googleapis.com"}}

@@ -135,3 +135,113 @@ The temporary adversarial probe contained two behavior tests, passed as vulnerab
 ## Conclusion
 
 The release integration is structurally strong and its new CI/release gates exercise runtime behavior rather than searching source text. It is nevertheless **blocked**: the artifacts advertised as redacted/sanitized can serialize known fixture secrets, and model-analysis provenance is not yet independently verifiable or protected against a tampered input pack. Rows 10–12 and the implementation-complete status must remain open until the P1 closure criteria above have permanent regression coverage.
+
+---
+
+## Re-review after `d4664e8`
+
+**Re-reviewed commit:** `d4664e8` (`fix(boundary): close 1.7 integration review blockers`)
+
+**Re-review verdict:** **PASS**
+
+**Release recommendation:** The integration review no longer blocks closing issue #5 or proceeding to the remaining release steps, provided the final release qualification remains green on the exact release commit.
+
+The original findings above are retained as the historical review record. This section supersedes the original blocked verdict for the fixed commit.
+
+### Finding dispositions
+
+#### RESOLVED — P1 sanitized incident export coverage
+
+`build_incident_export` now resolves attachment payloads against original IDs before sanitization, converts the full incident, graph, attachment-hash labels, and unresolved-reference list to JSON values, and recursively scans every string value and object key with one per-export stable opaque replacement map. This includes tags, attachment IDs/reasons, graph nodes, evidence edges, typed flows, techniques, earliest-signal fields, hashes, and unresolved references. Equal secret substrings receive the same replacement, preserving internal references without exposing a reusable secret digest.
+
+The permanent `sanitized_export_scans_every_string_and_preserves_references` test places the fixture secret across all incident/graph field families, asserts absence from the complete serialized document, checks incident/graph/edge/flow/technique/signal references after replacement, and validates the export hash. An independent re-review probe used differently prefixed IDs and reasons and reached the same result: no raw fixture secret and all checked references remained equal.
+
+#### RESOLVED — P1 forensic pack whole-artifact redaction
+
+Pack construction now performs a recursive serialization-boundary scan over the complete `ForensicPack`, including event keys/values, external source/sensor fields, findings, edge endpoints/reasons, original pointers, coverage notes, and an optional incident graph. Model identity, claim text, and failure text are scanned again after analysis before the pack hash is recomputed.
+
+The permanent `complete_pack_serialization_redacts_every_hostile_field_family` test covers the previously missed edge, graph, external, finding, pointer, model-claim, and model-failure families and scans the complete serialized bytes. The independent re-review probe also placed the fixture secret in event IDs/metadata keys, edge endpoints/reasons, model identity, and model output; the complete pack contained no raw secret, its typed citation still resolved, and `validate_forensic_pack` passed.
+
+The documented limitation remains correct: `SecretScanner` and configured patterns reduce disclosure risk but are not declassification or a guarantee against novel secret formats.
+
+#### RESOLVED — P1 prompt/configuration provenance and incoming pack integrity
+
+The CLI no longer accepts caller-supplied fingerprint labels. It requires `--prompt-file` and `--configuration-file`, reads the exact bytes, and the library computes lowercase `sha256:<64 hex>` fingerprints internally. Empty inputs reject, malformed fingerprints on deserialized model claims reject, and different prompt/configuration bytes produce different recorded digests. The derived output remains caller-supplied and covered by the recomputed pack hash; documentation explicitly avoids claiming model invocation attestation or deterministic replay.
+
+`forensic analyze` now validates schema, exact citations, and the existing `pack_hash` before mutation. Both library and CLI tests prove a mismatched hash rejects without changing the in-memory pack or file. The independent probe separately computed SHA-256 over the supplied bytes and matched both recorded fingerprints, then confirmed a post-hash mutation rejected before analysis.
+
+#### RESOLVED — P2 exact citation resolution
+
+Citation creation uses canonical typed pointers (`event:`, `external:`, `finding:`), and insertion/validation now requires exact `original_pointers.contains(...)` equality. Suffix-only input rejects mutation-free in the permanent test and the independent probe. The earlier `ends_with` ambiguity is gone.
+
+#### RESOLVED — P2 meaningful memory qualification and timing brittleness
+
+The fixed wall-time assertions were removed from `incident_scale`; elapsed time is diagnostic only. The correctness tests still exercise 10,000 tied incident rows, cursor exhaustion, exact totals, stable ordering, bounded serialized detail, and CLI truncation honesty.
+
+The new Linux-only `incident_memory_bound` binary installs a tracking allocator, materializes the independently import-bounded 10,000 evidence/10,000 edge input before its baseline, then measures incremental graph-assembly peak allocation. It verifies exact totals and 64-item detail caps under a 32 MiB assembly-growth budget. The re-review run measured **4,114,804 bytes**, comfortably below the permanent budget. Documentation accurately limits this claim to Linux incremental assembly memory and does not claim total-process RSS or unbounded streaming.
+
+#### RESOLVED — P3 transformation-ledger accuracy
+
+The export ledger now records deterministic per-field value counts as either `redacted:<path>:<changed>/<scanned>` or `scanned_unchanged:<path>:<scanned>`, plus `sanitize:enabled`. It no longer reports unchanged fields as redacted. The exhaustive export test requires both a changed path and an unchanged path, and `export_hash` covers the ledger with the complete artifact.
+
+### Re-audit of Definition of Done
+
+| # | Re-review result | Evidence / limitation |
+|---|---|---|
+| 1 | Pass | Immutable stored resolved boundary and stable policy inheritance/hash tests remain unchanged and green. |
+| 2 | Pass | Containment states remain independently represented; configured cannot satisfy verified containment. |
+| 3 | Pass | Missing required sensors/receipts remains fail-closed as insufficient or containment-unproven. |
+| 4 | Pass | Versioned, bounded, atomic/idempotent import and integrity/path validation gates remain green. |
+| 5 | Pass | Process, network/proxy, Kubernetes, AWS, and GCP mapping/correlation behavior remains covered. |
+| 6 | Pass | Forged/cooperative identifiers and unverified integrity remain confidence-capped. |
+| 7 | Pass | Evidence-linked deterministic violation/transition tests remain green. |
+| 8 | Pass | Task correctness remains independently gateable from containment and provenance. |
+| 9 | Pass | Discovery/reuse/earliest-signal and typed delegation/credential/artifact flow reconstruction remains covered. |
+| 10 | Pass | Complete hostile pack serialization is secret-free under current scanner rules; typed citations resolve exactly and pack integrity validates. |
+| 11 | Pass | Derived claims retain origin/model/output, internally computed exact-input fingerprints, exact citations, and mutation-free pre-analysis integrity validation. This records inputs/output; it does not attest that a model actually consumed them. |
+| 12 | Pass | Incident exchange recursively sanitizes all serialized content/reference fields, preserves internal references, records accurate transformations, and detects post-export tampering. |
+| 13 | Pass | Permanent imported adversarial and benign fixture families and quality thresholds remain in the 1.7 suite. |
+| 14 | Pass | 10k storage/query/detail correctness plus measured Linux incremental assembly memory are permanent CI/release gates; wall time is diagnostic. |
+| 15 | Pass | Docs state sensor, retention, partial-capture, sanitization, local-model, memory-measurement, and non-prevention limitations without claiming complete observability or declassification. |
+| 16 | Pass | The exact fixed commit passes focused gates, clippy/format/docs, and the full Unix quick trust/integrity/boundary qualifier. |
+
+### Re-review verification
+
+```text
+cargo test --test boundary_1_7_completion -- --nocapture
+  PASS: 3 passed
+
+cargo test --lib forensic::pack::tests -- --nocapture
+  PASS: 7 passed
+
+cargo test --lib incident::export::tests -- --nocapture
+  PASS: 3 passed
+
+cargo test --test incident_memory_bound -- --nocapture
+  PASS: 1 passed; measured peak assembly growth 4,114,804 bytes / 33,554,432-byte budget
+
+cargo test --test incident_scale -- --nocapture
+  PASS: 3 passed; timing diagnostic only
+
+independent temporary hostile re-review probe
+  PASS: 3 passed (deep incident/reference sanitization; forensic/model sanitization and exact input hashes; pre-analysis tamper rejection)
+  The probe was removed before this review-only commit.
+
+cargo clippy --all-targets -- -D warnings
+  PASS
+
+cargo fmt --check
+  PASS
+
+python3 scripts/check_doc_links.py
+  PASS: checked 483 file links + 89 anchors in 65 Markdown files
+
+./scripts/release-qualify-unix.sh --quick
+  PASS: 0 failed
+  report: release-artifacts/qualify-20260722T161839Z.md
+  report sha256: 7dab422b98496201fa1f555ea9f5249cca563486de6b3d314c197b0e90f402e6
+```
+
+### Final conclusion
+
+All original P1, P2, and P3 findings are resolved with production behavior and permanent adversarial tests. DoD rows 10–15 now have executable evidence aligned with their documented limitations, and the overall 16-item audit passes on `d4664e8`. **Boundary 1.7 integration review 01 is PASS.**

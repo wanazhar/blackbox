@@ -6,6 +6,7 @@
 //! supports that claim. It does **not** enforce sandbox/firewall policy by
 //! default — see the threat model in `docs/plan/agent-boundary-1.7.md`.
 
+mod canary;
 mod containment;
 mod contract;
 mod correlate;
@@ -14,8 +15,12 @@ mod evidence;
 mod identity;
 mod provenance;
 mod resolve;
+mod trust;
 mod vocab;
 
+pub use canary::{
+    launch_containment_receipts, post_run_canary_receipts, LaunchBackendInfo,
+};
 pub use containment::{
     ContainmentClaimState, ContainmentReceipt, ContainmentResult, ContainmentScope,
 };
@@ -44,6 +49,9 @@ pub use provenance::{
 };
 pub use resolve::{
     load_boundary_file, resolve_boundary, ResolvedBoundary, ResolveOpts,
+};
+pub use trust::{
+    build_boundary_trust, trust_fails_score, BoundaryTrustView, BOUNDARY_TRUST_SCHEMA,
 };
 pub use vocab::{
     well_known, CapabilityToken, DataClassToken, Disposition, EffectToken, IdentityToken,

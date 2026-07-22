@@ -169,6 +169,15 @@ pub struct GateArgs {
     #[arg(long, default_value = "variant")]
     /// Group by.
     pub group_by: String,
+    /// Require boundary evidence gate ok on all runs (1.7)
+    #[arg(long)]
+    pub require_boundary_ok: bool,
+    /// Require provenance gate ok on all runs (1.7)
+    #[arg(long)]
+    pub require_provenance_ok: bool,
+    /// Fail when any run has critical boundary findings (1.7)
+    #[arg(long)]
+    pub fail_on_critical_findings: bool,
 }
 
 #[derive(Args, Clone)]
@@ -524,6 +533,20 @@ pub enum IncidentAction {
         #[arg(long)]
         reason: Option<String>,
     },
+    /// Export incident (optionally sanitized) as integrity-checked JSON
+    Export {
+        /// Incident id
+        id: String,
+        /// Output path (`-` = stdout)
+        #[arg(short = 'o', long, default_value = "-")]
+        output: PathBuf,
+        /// Redact secret-like tokens in free text
+        #[arg(long, default_value_t = true)]
+        sanitize: bool,
+        /// Allow unresolved attachment references
+        #[arg(long)]
+        allow_unresolved: bool,
+    },
 }
 
 #[derive(Args, Clone)]
@@ -547,6 +570,29 @@ pub enum ForensicAction {
         /// Max events in the pack window
         #[arg(long, default_value_t = 200)]
         max_events: usize,
+    },
+    /// Attach local model-derived claims to an existing pack (citations required)
+    Analyze {
+        /// Path to forensic pack JSON
+        pack: PathBuf,
+        /// Model name (local identifier)
+        #[arg(long, default_value = "local")]
+        model: String,
+        /// Claim text (repeatable via multiple flags not supported — single claim)
+        #[arg(long)]
+        claim: String,
+        /// Citation ids (event/finding/external ids)
+        #[arg(long = "cite")]
+        cite: Vec<String>,
+        /// Record model refusal
+        #[arg(long)]
+        refused: bool,
+        /// Record model failure message
+        #[arg(long)]
+        failure: Option<String>,
+        /// Output path (default overwrite pack)
+        #[arg(short = 'o', long)]
+        output: Option<PathBuf>,
     },
 }
 
@@ -916,12 +962,16 @@ pub async fn cmd_report(
             run.ended_at
                 .map(|e| (e - run.started_at).num_milliseconds().max(0) as u64)
         });
+        let trust = load_run_trust(store.as_ref(), &rid).await;
         rows.push(RunReportInput {
             run,
             meta,
             receipts,
             capture_complete: true, // conservative default without coverage event
             duration_ms,
+            boundary_ok: trust.as_ref().map(|t| t.trust_ok && !t.evidence_gate_failed),
+            provenance_ok: trust.as_ref().map(|t| !t.provenance_gate_failed),
+            critical_findings: trust.as_ref().map(|t| t.critical_finding_count).unwrap_or(0),
         });
     }
     let report = build_experiment_report(
@@ -983,12 +1033,16 @@ pub async fn cmd_gate(
             run.ended_at
                 .map(|e| (e - run.started_at).num_milliseconds().max(0) as u64)
         });
+        let trust = load_run_trust(store.as_ref(), &rid).await;
         rows.push(RunReportInput {
             run,
             meta,
             receipts,
             capture_complete: true,
             duration_ms,
+            boundary_ok: trust.as_ref().map(|t| t.trust_ok && !t.evidence_gate_failed),
+            provenance_ok: trust.as_ref().map(|t| !t.provenance_gate_failed),
+            critical_findings: trust.as_ref().map(|t| t.critical_finding_count).unwrap_or(0),
         });
     }
     let report = build_experiment_report(
@@ -1004,6 +1058,9 @@ pub async fn cmd_gate(
         fail_on_insufficient_evidence: true,
         baseline_key: args.baseline.clone(),
         candidate_key: args.candidate.clone(),
+        require_boundary_ok: args.require_boundary_ok,
+        require_provenance_ok: args.require_provenance_ok,
+        fail_on_critical_findings: args.fail_on_critical_findings,
         ..Default::default()
     };
     if let Some(ref s) = args.max_p95_duration_regression {
@@ -2258,6 +2315,78 @@ pub async fn cmd_incident(
             );
             Ok(())
         }
+        IncidentAction::Export {
+            id,
+            output: out_path,
+            sanitize,
+            allow_unresolved,
+        } => {
+            use crate::incident::{
+                build_incident_export, build_incident_graph, validate_incident_export, GraphInputs,
+            };
+            let inc = store
+                .get_incident(id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("incident not found: {id}"))?;
+            let mut findings_by_run = Vec::new();
+            let mut external = Vec::new();
+            let mut edges = Vec::new();
+            let mut payloads = Vec::new();
+            for rid in inc.run_ids() {
+                let findings = store.list_boundary_findings(rid).await.unwrap_or_default();
+                payloads.push((
+                    rid.to_string(),
+                    serde_json::to_string(&findings).unwrap_or_default(),
+                ));
+                findings_by_run.push((rid.to_string(), findings));
+                external.extend(
+                    store
+                        .list_external_evidence_for_run(rid)
+                        .await
+                        .unwrap_or_default(),
+                );
+                edges.extend(store.list_evidence_edges(rid).await.unwrap_or_default());
+            }
+            let graph = build_incident_graph(
+                &inc,
+                &GraphInputs {
+                    findings_by_run,
+                    external,
+                    edges,
+                    run_end_times: vec![],
+                },
+            );
+            let doc = build_incident_export(&inc, Some(&graph), &payloads, *sanitize);
+            if let Err(errs) = validate_incident_export(&doc, *allow_unresolved) {
+                anyhow::bail!("incident export invalid: {}", errs.join("; "));
+            }
+            let text = serde_json::to_string_pretty(&doc)?;
+            if out_path.as_os_str() == "-" {
+                if json {
+                    return output::emit_ok("incident_export", &doc);
+                }
+                println!("{text}");
+            } else {
+                std::fs::write(out_path, text)?;
+                if !json {
+                    println!(
+                        "incident export {} hash={}",
+                        out_path.display(),
+                        &doc.export_hash[..16.min(doc.export_hash.len())]
+                    );
+                } else {
+                    return output::emit_ok(
+                        "incident_export",
+                        &serde_json::json!({
+                            "path": out_path,
+                            "export_hash": doc.export_hash,
+                            "unresolved": doc.unresolved_references.len(),
+                        }),
+                    );
+                }
+            }
+            Ok(())
+        }
     }
 }
 
@@ -2324,5 +2453,65 @@ pub async fn cmd_forensic(
             }
             Ok(())
         }
+        ForensicAction::Analyze {
+            pack: pack_path,
+            model,
+            claim,
+            cite,
+            refused,
+            failure,
+            output: out_path,
+        } => {
+            use crate::forensic::{apply_model_analysis, ModelAnalysisInput};
+            let raw = std::fs::read_to_string(pack_path)?;
+            let mut pack_doc: crate::forensic::ForensicPack = serde_json::from_str(&raw)?;
+            let claims = if claim.is_empty() {
+                Vec::new()
+            } else {
+                vec![(claim.clone(), cite.clone())]
+            };
+            let input = ModelAnalysisInput {
+                model: model.clone(),
+                prompt_fingerprint: None,
+                claims,
+                refused: *refused,
+                failure: failure.clone(),
+            };
+            apply_model_analysis(&mut pack_doc, &input).map_err(|e| {
+                anyhow::anyhow!("model analysis rejected: {}", e.join("; "))
+            })?;
+            let text = serde_json::to_string_pretty(&pack_doc)?;
+            let dest = out_path.as_ref().unwrap_or(pack_path);
+            std::fs::write(dest, &text)?;
+            if json {
+                return output::emit_ok("forensic_analyze", &pack_doc);
+            }
+            println!(
+                "forensic pack updated {} claims={}",
+                dest.display(),
+                pack_doc.derived_claims.len()
+            );
+            Ok(())
+        }
     }
+}
+
+
+async fn load_run_trust(
+    store: &dyn TraceStore,
+    run_id: &str,
+) -> Option<crate::boundary::BoundaryTrustView> {
+    let boundary = store.get_run_boundary(run_id).await.ok().flatten();
+    let findings = store.list_boundary_findings(run_id).await.ok()?;
+    let containment = store.list_containment_receipts(run_id).await.ok()?;
+    let provenance = store.list_provenance_records(run_id).await.ok()?;
+    let external = store.list_external_evidence_for_run(run_id).await.ok()?;
+    Some(crate::boundary::build_boundary_trust(
+        boundary.as_ref(),
+        &findings,
+        &containment,
+        &provenance,
+        &external,
+        &[],
+    ))
 }

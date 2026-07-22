@@ -36,6 +36,7 @@ For the full map (agents, reference, internals), see the [docs index](../README.
 | [Store integrity (`fsck`)](fsck-and-integrity.md) | Spool recovery, deep blob checks, safe repair |
 | [Verification receipts](verification.md) | Execution vs verification vs capture |
 | [Experiments & gates](experiments.md) | Typed metadata, reports, CI gates |
+| [Boundaries & incidents](boundaries-and-incidents.md) | Authorization, evidence import, IR packs (1.7) |
 | [Capsules & MCP cassettes](capsules-and-cassettes.md) | Reproduction packages; experimental protocol replay |
 | [Budgets & adapters](budgets-and-adapters.md) | Enforcement honesty; NDJSON adapters; project index |
 | [Overhead](overhead.md) | Soft benches, stats, cost knobs |

@@ -32,6 +32,9 @@ fn row(
         receipts,
         capture_complete: true,
         duration_ms: Some(100),
+        boundary_ok: None,
+        provenance_ok: None,
+        critical_findings: 0,
     }
 }
 

@@ -3,6 +3,6 @@
 mod pack;
 
 pub use pack::{
-    build_forensic_pack, validate_claim_citations, ForensicClaim, ForensicPack, ForensicPackOpts,
-    FORENSIC_PACK_SCHEMA,
+    apply_model_analysis, build_forensic_pack, validate_claim_citations, ForensicClaim,
+    ForensicPack, ForensicPackOpts, ModelAnalysisInput, FORENSIC_PACK_SCHEMA,
 };

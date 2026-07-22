@@ -59,6 +59,21 @@ pub struct VariantMetrics {
     #[serde(skip_serializing_if = "Option::is_none")]
     /// Domain confirmed rate.
     pub domain_confirmed_rate: Option<f64>,
+    /// Fraction of runs with boundary trust_ok (1.7).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boundary_ok_rate: Option<f64>,
+    /// Fraction of runs with provenance ok (1.7).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance_ok_rate: Option<f64>,
+    /// Critical boundary findings across variant runs.
+    #[serde(default)]
+    pub critical_findings: usize,
+    /// Run ids that failed boundary trust.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub boundary_failed_runs: Vec<String>,
+    /// Run ids that failed provenance.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provenance_failed_runs: Vec<String>,
     /// Denominator note.
     pub denominator_note: String,
 }
@@ -96,6 +111,12 @@ pub struct RunReportInput {
     pub capture_complete: bool,
     /// Duration in milliseconds.
     pub duration_ms: Option<u64>,
+    /// Boundary trust ok when evaluated (1.7); None = unknown / not evaluated.
+    pub boundary_ok: Option<bool>,
+    /// Provenance gate ok when evaluated (1.7).
+    pub provenance_ok: Option<bool>,
+    /// Critical finding count (1.7).
+    pub critical_findings: usize,
 }
 
 /// Build a cohort report. Never declares a winner from n=1 without insufficient_evidence.
@@ -132,6 +153,13 @@ pub fn build_experiment_report(
         let mut capture_complete = 0usize;
         let mut excluded = 0usize;
         let mut durations: Vec<f64> = Vec::new();
+        let mut boundary_ok_n = 0usize;
+        let mut boundary_eval_n = 0usize;
+        let mut provenance_ok_n = 0usize;
+        let mut provenance_eval_n = 0usize;
+        let mut critical_findings = 0usize;
+        let mut boundary_failed_runs = Vec::new();
+        let mut provenance_failed_runs = Vec::new();
 
         for item in items {
             if matches!(item.run.status, RunStatus::Succeeded) {
@@ -159,6 +187,23 @@ pub fn build_experiment_report(
             if let Some(d) = item.duration_ms.or(item.run.duration_ms) {
                 durations.push(d as f64);
             }
+            if let Some(ok) = item.boundary_ok {
+                boundary_eval_n += 1;
+                if ok {
+                    boundary_ok_n += 1;
+                } else {
+                    boundary_failed_runs.push(item.run.id.clone());
+                }
+            }
+            if let Some(ok) = item.provenance_ok {
+                provenance_eval_n += 1;
+                if ok {
+                    provenance_ok_n += 1;
+                } else {
+                    provenance_failed_runs.push(item.run.id.clone());
+                }
+            }
+            critical_findings += item.critical_findings;
         }
 
         let verified_rate = if run_count > 0 {
@@ -168,6 +213,16 @@ pub fn build_experiment_report(
         };
         let domain_confirmed_rate = if run_count > 0 {
             Some(domain_confirmed as f64 / run_count as f64)
+        } else {
+            None
+        };
+        let boundary_ok_rate = if boundary_eval_n > 0 {
+            Some(boundary_ok_n as f64 / boundary_eval_n as f64)
+        } else {
+            None
+        };
+        let provenance_ok_rate = if provenance_eval_n > 0 {
+            Some(provenance_ok_n as f64 / provenance_eval_n as f64)
         } else {
             None
         };
@@ -194,8 +249,13 @@ pub fn build_experiment_report(
             duration_p95_ms: p95,
             verified_rate,
             domain_confirmed_rate,
+            boundary_ok_rate,
+            provenance_ok_rate,
+            critical_findings,
+            boundary_failed_runs,
+            provenance_failed_runs,
             denominator_note: format!(
-                "rates use run_count={run_count}; domain_confirmed requires Passed+Confirmed confidence"
+                "rates use run_count={run_count}; domain_confirmed requires Passed+Confirmed confidence; boundary/provenance rates use evaluated subset"
             ),
         });
     }

@@ -1192,6 +1192,7 @@ impl Cli {
                     crate::cli_ext::ForensicAction::Pack { run_id, .. } => {
                         *run_id = resolve_run_id(&store, run_id).await?;
                     }
+                    crate::cli_ext::ForensicAction::Analyze { .. } => {}
                 }
                 crate::cli_ext::cmd_forensic(std::sync::Arc::new(store), &args, self.json).await
             }
@@ -1554,6 +1555,7 @@ async fn cmd_run(cli: &Cli, args: &RunArgs) -> anyhow::Result<()> {
     }
 
     // 1.7: attach resolved boundary contract when --boundary is set.
+    let mut attached_boundary = None;
     if let Some(ref boundary_path) = args.boundary {
         match crate::cli_ext::attach_boundary_to_run(
             store.as_ref(),
@@ -1572,12 +1574,79 @@ async fn cmd_run(cli: &Cli, args: &RunArgs) -> anyhow::Result<()> {
                         crate::util::short_id(&run.id)
                     );
                 }
+                attached_boundary = Some(resolved);
             }
             Err(e) => {
                 tracing::warn!(error = %e, "failed to attach boundary contract");
                 if !cli.json {
                     eprintln!("warning: failed to attach boundary: {e}");
                 }
+            }
+        }
+    }
+
+    // 1.7: launch containment canaries (honest claims; not enforcement).
+    {
+        use crate::boundary::{launch_containment_receipts, post_run_canary_receipts, LaunchBackendInfo};
+        let backend = LaunchBackendInfo {
+            backend: if args.contained {
+                "contained".into()
+            } else {
+                "none".into()
+            },
+            isolation_active: args.contained,
+            network_restricted: false,
+            ..Default::default()
+        };
+        let boundary = if attached_boundary.is_some() {
+            attached_boundary.clone()
+        } else {
+            store.get_run_boundary(&run.id).await.ok().flatten()
+        };
+        for r in launch_containment_receipts(&run.id, boundary.as_ref(), &backend) {
+            let _ = store.insert_containment_receipt(&r).await;
+        }
+        // Post-run canary from capture/external evidence.
+        let events = store.get_events(&run.id).await.unwrap_or_default();
+        let external = store
+            .list_external_evidence_for_run(&run.id)
+            .await
+            .unwrap_or_default();
+        let process_present = events.iter().any(|e| {
+            matches!(e.source, crate::core::event::EventSource::Process)
+        });
+        let public_egress = external.iter().any(|e| {
+            e.destination
+                .as_deref()
+                .map(|d| d.starts_with("http://") || d.starts_with("https://"))
+                .unwrap_or(false)
+        }) || events.iter().any(|e| {
+            e.metadata
+                .get("url")
+                .or_else(|| e.metadata.get("destination"))
+                .and_then(|v| v.as_str())
+                .map(|d| d.starts_with("http://") || d.starts_with("https://"))
+                .unwrap_or(false)
+        });
+        for r in post_run_canary_receipts(
+            &run.id,
+            boundary.as_ref(),
+            public_egress,
+            process_present,
+        ) {
+            let _ = store.insert_containment_receipt(&r).await;
+        }
+        // Auto-detect findings when boundary present.
+        if boundary.is_some() {
+            use crate::boundary::{detect_boundary_findings, DetectInputs};
+            let findings = detect_boundary_findings(DetectInputs {
+                run_id: &run.id,
+                contract: boundary.as_ref().map(|b| &b.contract),
+                events: &events,
+                external: &external,
+            });
+            for f in findings {
+                let _ = store.insert_boundary_finding(&f).await;
             }
         }
     }

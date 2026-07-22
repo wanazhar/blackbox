@@ -21,6 +21,9 @@ fn gate_fails_insufficient_evidence() {
         receipts: vec![],
         capture_complete: true,
         duration_ms: Some(10),
+        boundary_ok: None,
+        provenance_ok: None,
+        critical_findings: 0,
     }];
     let report = build_experiment_report("e", "variant", &rows, 3);
     let result = evaluate_gate(
@@ -55,6 +58,9 @@ fn gate_min_verified_rate_ignores_execution_only() {
             receipts: vec![], // unverified
             capture_complete: true,
             duration_ms: Some(10),
+            boundary_ok: None,
+            provenance_ok: None,
+            critical_findings: 0,
         });
     }
     // Add a second variant with verified passes so we leave insufficient_evidence.
@@ -74,6 +80,9 @@ fn gate_min_verified_rate_ignores_execution_only() {
             receipts: vec![r],
             capture_complete: true,
             duration_ms: Some(10),
+            boundary_ok: None,
+            provenance_ok: None,
+            critical_findings: 0,
         });
     }
     let report = build_experiment_report("e", "variant", &rows, 3);
@@ -87,8 +96,7 @@ fn gate_min_verified_rate_ignores_execution_only() {
         },
     );
     assert!(!result.passed);
-    assert!(result
-        .failures
-        .iter()
-        .any(|f| f.rule == "min_verified_rate"));
+    assert!(result.failures.iter().any(|f| {
+        f.rule == "min_verified_rate" || f.rule == "min_domain_confirmed_rate"
+    }));
 }

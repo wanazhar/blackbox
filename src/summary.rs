@@ -115,6 +115,9 @@ pub struct SummaryView {
     /// Incremental run aggregates when available (1.5 L1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aggregates: Option<RunAggregates>,
+    /// Boundary / containment / provenance trust rollup (1.7).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boundary_trust: Option<crate::boundary::BoundaryTrustView>,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -559,6 +562,62 @@ pub async fn build_summary(
         quality,
     ));
 
+    // 1.7: boundary trust rollup (findings, containment, provenance, evidence gate).
+    let boundary = store.get_run_boundary(&run.id).await.ok().flatten();
+    let findings = store
+        .list_boundary_findings(&run.id)
+        .await
+        .unwrap_or_default();
+    let containment = store
+        .list_containment_receipts(&run.id)
+        .await
+        .unwrap_or_default();
+    let provenance = store
+        .list_provenance_records(&run.id)
+        .await
+        .unwrap_or_default();
+    let external = store
+        .list_external_evidence_for_run(&run.id)
+        .await
+        .unwrap_or_default();
+    let mut present_classes = Vec::new();
+    for e in &events {
+        match e.source {
+            crate::core::event::EventSource::Process => present_classes.push("process".into()),
+            crate::core::event::EventSource::Network => present_classes.push("network".into()),
+            crate::core::event::EventSource::Terminal => present_classes.push("pty".into()),
+            crate::core::event::EventSource::Filesystem => {
+                present_classes.push("filesystem".into())
+            }
+            _ => {}
+        }
+    }
+    present_classes.sort();
+    present_classes.dedup();
+    if !external.is_empty() && !present_classes.iter().any(|c| c == "network") {
+        // External network sensors count toward network evidence class.
+        if external.iter().any(|e| {
+            matches!(
+                e.action,
+                crate::evidence::EvidenceAction::HttpRequest
+                    | crate::evidence::EvidenceAction::NetworkConnect
+                    | crate::evidence::EvidenceAction::ProxyDeny
+                    | crate::evidence::EvidenceAction::ProxyAllow
+                    | crate::evidence::EvidenceAction::DnsQuery
+            )
+        }) {
+            present_classes.push("network".into());
+        }
+    }
+    let boundary_trust = Some(crate::boundary::build_boundary_trust(
+        boundary.as_ref(),
+        &findings,
+        &containment,
+        &provenance,
+        &external,
+        &present_classes,
+    ));
+
     // Tool facts from aggregates (independent of display window).
     let mut tool_names = Vec::new();
     for ev in &events {
@@ -713,6 +772,7 @@ pub async fn build_summary(
         outcome,
         analysis_scope: Some(analysis_scope),
         aggregates: Some(aggregates),
+        boundary_trust,
     })
 }
 

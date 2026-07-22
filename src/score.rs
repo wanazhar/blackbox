@@ -64,6 +64,28 @@ pub struct EvalScore {
     pub estimated_cost_usd: Option<f64>,
     /// Wall clock of score build (always present for scorer hygiene).
     pub scored_at: String,
+    // ── 1.7 boundary trust (additive) ──
+    /// Boundary policy hash when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boundary_policy_hash: Option<String>,
+    /// Evidence gate status (`sufficient`, `insufficient_evidence`, …).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boundary_evidence_status: Option<String>,
+    /// True when fail-closed boundary evidence gate failed.
+    #[serde(default)]
+    pub boundary_gate_failed: bool,
+    /// Provenance status when evaluated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance_status: Option<String>,
+    /// True when provenance gate failed (independent of task success).
+    #[serde(default)]
+    pub provenance_gate_failed: bool,
+    /// Critical boundary findings count.
+    #[serde(default)]
+    pub boundary_critical_findings: usize,
+    /// Combined trust rollup ok (no fail-closed / critical findings).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trust_ok: Option<bool>,
 }
 
 impl EvalScore {
@@ -76,10 +98,15 @@ impl EvalScore {
     /// // `from_run_summary` — see module docs for full workflow.
     /// ```
     pub fn from_run_summary(run: &Run, summary: &SummaryView) -> Self {
+        let trust = summary.boundary_trust.as_ref();
+        let trust_fail = trust
+            .map(crate::boundary::trust_fails_score)
+            .unwrap_or(false);
         let failed = matches!(
             run.status,
             crate::core::run::RunStatus::Failed | crate::core::run::RunStatus::Cancelled
-        ) || run.exit_code.is_some_and(|c| c != 0);
+        ) || run.exit_code.is_some_and(|c| c != 0)
+            || trust_fail;
 
         let mut by_sev: BTreeMap<String, usize> = BTreeMap::new();
         let mut by_kind: BTreeMap<String, usize> = BTreeMap::new();
@@ -113,6 +140,13 @@ impl EvalScore {
             error_count: summary.errors.len(),
             estimated_cost_usd: run.estimated_cost_usd,
             scored_at: chrono::Utc::now().to_rfc3339(),
+            boundary_policy_hash: trust.and_then(|t| t.policy_hash.clone()),
+            boundary_evidence_status: trust.and_then(|t| t.evidence_status.clone()),
+            boundary_gate_failed: trust.map(|t| t.evidence_gate_failed).unwrap_or(false),
+            provenance_status: trust.and_then(|t| t.provenance_status.clone()),
+            provenance_gate_failed: trust.map(|t| t.provenance_gate_failed).unwrap_or(false),
+            boundary_critical_findings: trust.map(|t| t.critical_finding_count).unwrap_or(0),
+            trust_ok: trust.map(|t| t.trust_ok),
         }
     }
 
@@ -188,6 +222,7 @@ mod tests {
             outcome: None,
             analysis_scope: None,
             aggregates: None,
+            boundary_trust: None,
         }
     }
 

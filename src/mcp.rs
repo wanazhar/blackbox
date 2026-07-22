@@ -272,6 +272,49 @@ fn tools_list() -> Value {
                     }
                 }),
             ),
+            tool_def(
+                "blackbox_boundary",
+                "Boundary contract + trust rollup for a run (1.7): policy hash, findings, containment, provenance.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "run_id": { "type": "string", "default": "latest" }
+                    }
+                }),
+            ),
+            tool_def(
+                "blackbox_evidence",
+                "List external evidence linked to a run (1.7).",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "run_id": { "type": "string", "default": "latest" },
+                        "limit": { "type": "integer", "default": 50 }
+                    }
+                }),
+            ),
+            tool_def(
+                "blackbox_incident",
+                "List incidents or show one by id (1.7).",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "string" },
+                        "limit": { "type": "integer", "default": 20 }
+                    }
+                }),
+            ),
+            tool_def(
+                "blackbox_forensic",
+                "Build forensic pack metadata for a run (1.7); redacted summaries, not raw secrets.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "run_id": { "type": "string", "default": "latest" },
+                        "max_events": { "type": "integer", "default": 100 }
+                    }
+                }),
+            ),
         ]
     })
 }
@@ -309,6 +352,10 @@ async fn handle_tool_call(
         "blackbox_claim" => tool_claim(store_override, &args).await,
         "blackbox_resolve" => tool_resolve(store_override, &args).await,
         "blackbox_memory_update" => tool_memory_update(store_override, &args).await,
+        "blackbox_boundary" => tool_boundary(store_override, &args).await,
+        "blackbox_evidence" => tool_evidence(store_override, &args).await,
+        "blackbox_incident" => tool_incident(store_override, &args).await,
+        "blackbox_forensic" => tool_forensic(store_override, &args).await,
         other => Err(rpc_err(-32602, &format!("unknown tool: {other}"))),
     }
 }
@@ -953,6 +1000,156 @@ async fn tool_doctor(store_override: Option<&std::path::Path>) -> Result<Value, 
         "attention_level": sticky.as_ref().map(|s| s.attention_level.as_str()).unwrap_or("none"),
     });
     Ok(tool_ok(&v))
+}
+
+async fn tool_boundary(
+    store_override: Option<&std::path::Path>,
+    args: &Value,
+) -> Result<Value, Value> {
+    let (_d, store) = open_ctx(store_override).await?;
+    let store = store
+        .ok_or_else(|| rpc_err(-32000, "no store; run blackbox enable / record a run first"))?;
+    let run_id = args
+        .get("run_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("latest");
+    let run = resolve_run(&store, run_id).await?;
+    let boundary = store.get_run_boundary(&run.id).await.ok().flatten();
+    let findings = store
+        .list_boundary_findings(&run.id)
+        .await
+        .map_err(|e| rpc_err(-32000, &e.to_string()))?;
+    let containment = store
+        .list_containment_receipts(&run.id)
+        .await
+        .map_err(|e| rpc_err(-32000, &e.to_string()))?;
+    let provenance = store
+        .list_provenance_records(&run.id)
+        .await
+        .map_err(|e| rpc_err(-32000, &e.to_string()))?;
+    let external = store
+        .list_external_evidence_for_run(&run.id)
+        .await
+        .map_err(|e| rpc_err(-32000, &e.to_string()))?;
+    let trust = crate::boundary::build_boundary_trust(
+        boundary.as_ref(),
+        &findings,
+        &containment,
+        &provenance,
+        &external,
+        &[],
+    );
+    Ok(tool_ok(&json!({
+        "run_id": run.id,
+        "boundary": boundary,
+        "trust": trust,
+        "findings": findings,
+        "containment_receipts": containment,
+        "provenance_records": provenance,
+    })))
+}
+
+async fn tool_evidence(
+    store_override: Option<&std::path::Path>,
+    args: &Value,
+) -> Result<Value, Value> {
+    let (_d, store) = open_ctx(store_override).await?;
+    let store = store
+        .ok_or_else(|| rpc_err(-32000, "no store; run blackbox enable / record a run first"))?;
+    let run_id = args
+        .get("run_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("latest");
+    let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
+    let run = resolve_run(&store, run_id).await?;
+    let mut events = store
+        .list_external_evidence_for_run(&run.id)
+        .await
+        .map_err(|e| rpc_err(-32000, &e.to_string()))?;
+    events.truncate(limit);
+    Ok(tool_ok(&json!({
+        "run_id": run.id,
+        "count": events.len(),
+        "events": events,
+    })))
+}
+
+async fn tool_incident(
+    store_override: Option<&std::path::Path>,
+    args: &Value,
+) -> Result<Value, Value> {
+    let (_d, store) = open_ctx(store_override).await?;
+    let store = store
+        .ok_or_else(|| rpc_err(-32000, "no store; run blackbox enable / record a run first"))?;
+    if let Some(id) = args.get("id").and_then(|v| v.as_str()) {
+        let inc = store
+            .get_incident(id)
+            .await
+            .map_err(|e| rpc_err(-32000, &e.to_string()))?
+            .ok_or_else(|| rpc_err(-32000, &format!("incident not found: {id}")))?;
+        return Ok(tool_ok(&serde_json::to_value(&inc).unwrap_or(json!({}))));
+    }
+    let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
+    let mut list = store
+        .list_incidents()
+        .await
+        .map_err(|e| rpc_err(-32000, &e.to_string()))?;
+    list.truncate(limit);
+    Ok(tool_ok(&json!({ "incidents": list, "count": list.len() })))
+}
+
+async fn tool_forensic(
+    store_override: Option<&std::path::Path>,
+    args: &Value,
+) -> Result<Value, Value> {
+    let (_d, store) = open_ctx(store_override).await?;
+    let store = store
+        .ok_or_else(|| rpc_err(-32000, "no store; run blackbox enable / record a run first"))?;
+    let run_id = args
+        .get("run_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("latest");
+    let max_events = args
+        .get("max_events")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(100) as usize;
+    let run = resolve_run(&store, run_id).await?;
+    let boundary = store.get_run_boundary(&run.id).await.ok().flatten();
+    let events = store
+        .get_events(&run.id)
+        .await
+        .map_err(|e| rpc_err(-32000, &e.to_string()))?;
+    let external = store
+        .list_external_evidence_for_run(&run.id)
+        .await
+        .unwrap_or_default();
+    let findings = store
+        .list_boundary_findings(&run.id)
+        .await
+        .unwrap_or_default();
+    let edges = store.list_evidence_edges(&run.id).await.unwrap_or_default();
+    let pack = crate::forensic::build_forensic_pack(
+        &run.id,
+        boundary.as_ref(),
+        &events,
+        &external,
+        &findings,
+        &edges,
+        &crate::forensic::ForensicPackOpts {
+            max_events,
+            ..Default::default()
+        },
+    );
+    Ok(tool_ok(&json!({
+        "run_id": run.id,
+        "pack_hash": pack.pack_hash,
+        "policy_hash": pack.policy_hash,
+        "findings": pack.findings.len(),
+        "event_window": pack.event_window.len(),
+        "coverage_gaps": pack.coverage_gaps,
+        "derived_claims": pack.derived_claims,
+        "fingerprints": pack.fingerprints,
+    })))
 }
 
 #[cfg(test)]

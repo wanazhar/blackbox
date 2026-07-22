@@ -177,6 +177,7 @@ Operator-facing notes for shipped harnesses: [docs/guide/adapters.md](docs/guide
 | `src/boundary/` + `tests/boundary_contract.rs` | 1.7 boundary contracts, containment, detect, provenance |
 | `src/evidence/` + `src/incident/` + `src/forensic/` | 1.7 external evidence, incidents, forensic packs |
 | `tests/boundary_1_7_full.rs` | 1.7 end-to-end pipeline |
+| `tests/boundary_trust_integration.rs` | score trust fail + portable 1.7 round-trip |
 | `tests/fixtures/docs/` | Static golden samples for docs contracts |
 | `.github/workflows/ci.yml` | test + clippy + doc link check (docs stay in-repo; no Pages) |
 | `tests/security.rs` | Security invariants |

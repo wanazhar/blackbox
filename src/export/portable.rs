@@ -129,6 +129,27 @@ pub async fn export_portable(
         .await
         .unwrap_or_default();
 
+    // 1.7: boundary trust artifacts (survive export/import).
+    let boundary = store.get_run_boundary(&run.id).await.ok().flatten();
+    let containment_receipts = store
+        .list_containment_receipts(&run.id)
+        .await
+        .unwrap_or_default();
+    let external_evidence = store
+        .list_external_evidence_for_run(&run.id)
+        .await
+        .unwrap_or_default();
+    let evidence_edges = store.list_evidence_edges(&run.id).await.unwrap_or_default();
+    let boundary_findings = store
+        .list_boundary_findings(&run.id)
+        .await
+        .unwrap_or_default();
+    let provenance_records = store
+        .list_provenance_records(&run.id)
+        .await
+        .unwrap_or_default();
+    let trace_identity = store.get_trace_identity(&run.id).await.ok().flatten();
+
     let output = serde_json::json!({
         "version": PORTABLE_VERSION,
         "run": run_val,
@@ -137,6 +158,13 @@ pub async fn export_portable(
         "experiment_meta": experiment_meta,
         "experiment": experiment_manifest,
         "verification_receipts": verification_receipts,
+        "boundary": boundary,
+        "containment_receipts": containment_receipts,
+        "external_evidence": external_evidence,
+        "evidence_edges": evidence_edges,
+        "boundary_findings": boundary_findings,
+        "provenance_records": provenance_records,
+        "trace_identity": trace_identity,
         "exported_at": chrono::Utc::now().to_rfc3339(),
     });
 
@@ -586,6 +614,78 @@ pub async fn import_portable(
         }
     }
 
+    // 1.7 optional artifacts
+    let mut boundary: Option<crate::boundary::ResolvedBoundary> = root
+        .get("boundary")
+        .filter(|v| !v.is_null())
+        .and_then(|v| serde_json::from_value(v.clone()).ok());
+    if let Some(ref mut b) = boundary {
+        b.run_id = run.id.clone();
+    }
+    let mut containment_receipts: Vec<crate::boundary::ContainmentReceipt> = root
+        .get("containment_receipts")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+    for r in &mut containment_receipts {
+        r.run_id = run.id.clone();
+        if new_ids {
+            r.id = format!("contain-{}", uuid::Uuid::new_v4());
+            r.parent_receipt_id = None;
+        }
+    }
+    let mut external_evidence: Vec<crate::evidence::ExternalEvidenceEvent> = root
+        .get("external_evidence")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+    for e in &mut external_evidence {
+        e.linked_run_id = Some(run.id.clone());
+        if new_ids {
+            e.id = format!("evext-{}", uuid::Uuid::new_v4());
+            // Keep source_event_id; idempotency key may collide on re-import — suffix.
+            e.source_event_id = format!("{}#{}", e.source_event_id, &run.id[..8.min(run.id.len())]);
+        }
+    }
+    let mut evidence_edges: Vec<crate::boundary::EvidenceEdge> = root
+        .get("evidence_edges")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+    for e in &mut evidence_edges {
+        e.run_id = Some(run.id.clone());
+        if new_ids {
+            e.id = format!("edge-{}", uuid::Uuid::new_v4());
+        }
+    }
+    let mut boundary_findings: Vec<crate::boundary::BoundaryFinding> = root
+        .get("boundary_findings")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+    for f in &mut boundary_findings {
+        f.run_id = run.id.clone();
+        if new_ids {
+            f.id = format!("find-{}", uuid::Uuid::new_v4());
+        }
+    }
+    let mut provenance_records: Vec<crate::boundary::ProvenanceRecord> = root
+        .get("provenance_records")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+    for p in &mut provenance_records {
+        p.run_id = run.id.clone();
+        if new_ids {
+            p.id = format!("prov-{}", uuid::Uuid::new_v4());
+        }
+    }
+    let mut trace_identity: Option<crate::boundary::TraceIdentity> = root
+        .get("trace_identity")
+        .filter(|v| !v.is_null())
+        .and_then(|v| serde_json::from_value(v.clone()).ok());
+    if let Some(ref mut t) = trace_identity {
+        t.run_id = run.id.clone();
+        if new_ids {
+            t.trace_id = uuid::Uuid::new_v4().to_string();
+        }
+    }
+
     // ── Permanent writes with rollback journal ──
     let mut journal = ImportJournal::default();
     match promote_import(
@@ -597,6 +697,13 @@ pub async fn import_portable(
             experiment_manifest: experiment_manifest.as_ref(),
             experiment_meta: experiment_meta.as_ref(),
             verification_receipts: &verification_receipts,
+            boundary: boundary.as_ref(),
+            containment_receipts: &containment_receipts,
+            external_evidence: &external_evidence,
+            evidence_edges: &evidence_edges,
+            boundary_findings: &boundary_findings,
+            provenance_records: &provenance_records,
+            trace_identity: trace_identity.as_ref(),
         },
         &mut journal,
     )
@@ -642,6 +749,13 @@ struct PromoteExtras<'a> {
     experiment_manifest: Option<&'a crate::experiment::ExperimentManifest>,
     experiment_meta: Option<&'a crate::experiment::RunExperimentMeta>,
     verification_receipts: &'a [crate::verification::VerificationReceipt],
+    boundary: Option<&'a crate::boundary::ResolvedBoundary>,
+    containment_receipts: &'a [crate::boundary::ContainmentReceipt],
+    external_evidence: &'a [crate::evidence::ExternalEvidenceEvent],
+    evidence_edges: &'a [crate::boundary::EvidenceEdge],
+    boundary_findings: &'a [crate::boundary::BoundaryFinding],
+    provenance_records: &'a [crate::boundary::ProvenanceRecord],
+    trace_identity: Option<&'a crate::boundary::TraceIdentity>,
 }
 
 async fn promote_import(
@@ -691,6 +805,43 @@ async fn promote_import(
     for receipt in extras.verification_receipts {
         if let Err(e) = store.insert_verification_receipt(receipt).await {
             tracing::warn!(error = %e, receipt_id = %receipt.id, "portable import: receipt skipped");
+        }
+    }
+
+    // 1.7: restore boundary trust artifacts (best-effort).
+    if let Some(b) = extras.boundary {
+        if let Err(e) = store.put_run_boundary(b).await {
+            tracing::warn!(error = %e, "portable import: boundary skipped");
+        }
+    }
+    for r in extras.containment_receipts {
+        if let Err(e) = store.insert_containment_receipt(r).await {
+            tracing::warn!(error = %e, "portable import: containment receipt skipped");
+        }
+    }
+    for e in extras.external_evidence {
+        if let Err(err) = store.insert_external_evidence(e).await {
+            tracing::warn!(error = %err, "portable import: external evidence skipped");
+        }
+    }
+    for e in extras.evidence_edges {
+        if let Err(err) = store.insert_evidence_edge(e).await {
+            tracing::warn!(error = %err, "portable import: evidence edge skipped");
+        }
+    }
+    for f in extras.boundary_findings {
+        if let Err(err) = store.insert_boundary_finding(f).await {
+            tracing::warn!(error = %err, "portable import: finding skipped");
+        }
+    }
+    for p in extras.provenance_records {
+        if let Err(err) = store.insert_provenance_record(p).await {
+            tracing::warn!(error = %err, "portable import: provenance skipped");
+        }
+    }
+    if let Some(t) = extras.trace_identity {
+        if let Err(e) = store.put_trace_identity(t).await {
+            tracing::warn!(error = %e, "portable import: trace identity skipped");
         }
     }
 

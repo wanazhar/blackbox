@@ -27,6 +27,7 @@ Blackbox docs are split by **who is reading** and **what question they have**. T
 | Store integrity (`fsck`) | [guide/fsck-and-integrity.md](guide/fsck-and-integrity.md) |
 | Verification receipts | [guide/verification.md](guide/verification.md) |
 | Experiments & CI gates | [guide/experiments.md](guide/experiments.md) |
+| Boundaries & incidents (1.7) | [guide/boundaries-and-incidents.md](guide/boundaries-and-incidents.md) |
 | Capsules & MCP cassettes | [guide/capsules-and-cassettes.md](guide/capsules-and-cassettes.md) |
 | Budgets & external adapters | [guide/budgets-and-adapters.md](guide/budgets-and-adapters.md) |
 | Performance / disk | [guide/overhead.md](guide/overhead.md) |

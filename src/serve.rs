@@ -117,6 +117,11 @@ pub async fn serve(store: Arc<SqliteStore>, opts: ServeOptions) -> anyhow::Resul
         .route("/api/runs/{id}/events/page", get(api_events_page))
         .route("/api/runs/{id}/events/stream", get(api_event_stream))
         .route("/api/runs/{id}/anomalies", get(api_anomalies))
+        .route("/api/runs/{id}/boundary", get(api_run_boundary))
+        .route("/api/runs/{id}/findings", get(api_run_findings))
+        .route("/api/runs/{id}/evidence", get(api_run_evidence))
+        .route("/api/incidents", get(api_incidents))
+        .route("/api/incidents/{id}", get(api_incident))
         .route("/api/search", get(api_search))
         .route("/api/status", get(api_status))
         .route("/api/handoff", get(api_handoff))
@@ -1292,6 +1297,92 @@ async fn api_anomalies(
     .into_response())
 }
 
+async fn api_run_boundary(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Response, AppError> {
+    let run_id = resolve_prefix(state.store.as_ref(), &id).await?;
+    if state.store.get_run(&run_id).await?.is_none() {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    }
+    let boundary = state.store.get_run_boundary(&run_id).await?;
+    let findings = state.store.list_boundary_findings(&run_id).await?;
+    let containment = state.store.list_containment_receipts(&run_id).await?;
+    let provenance = state.store.list_provenance_records(&run_id).await?;
+    let external = state.store.list_external_evidence_for_run(&run_id).await?;
+    let trust = crate::boundary::build_boundary_trust(
+        boundary.as_ref(),
+        &findings,
+        &containment,
+        &provenance,
+        &external,
+        &[],
+    );
+    Ok(Json(serde_json::json!({
+        "run_id": run_id,
+        "boundary": boundary,
+        "trust": trust,
+        "containment_receipts": containment,
+        "provenance_records": provenance,
+    }))
+    .into_response())
+}
+
+async fn api_run_findings(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Response, AppError> {
+    let run_id = resolve_prefix(state.store.as_ref(), &id).await?;
+    if state.store.get_run(&run_id).await?.is_none() {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    }
+    let findings = state.store.list_boundary_findings(&run_id).await?;
+    Ok(Json(serde_json::json!({
+        "run_id": run_id,
+        "count": findings.len(),
+        "findings": findings,
+    }))
+    .into_response())
+}
+
+async fn api_run_evidence(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Response, AppError> {
+    let run_id = resolve_prefix(state.store.as_ref(), &id).await?;
+    if state.store.get_run(&run_id).await?.is_none() {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    }
+    let events = state.store.list_external_evidence_for_run(&run_id).await?;
+    Ok(Json(serde_json::json!({
+        "run_id": run_id,
+        "count": events.len(),
+        "events": events,
+    }))
+    .into_response())
+}
+
+async fn api_incidents(State(state): State<AppState>) -> Result<Response, AppError> {
+    let mut list = state.store.list_incidents().await?;
+    // Dashboard default page size
+    list.truncate(100);
+    Ok(Json(serde_json::json!({
+        "count": list.len(),
+        "incidents": list,
+    }))
+    .into_response())
+}
+
+async fn api_incident(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Response, AppError> {
+    match state.store.get_incident(&id).await? {
+        Some(inc) => Ok(Json(inc).into_response()),
+        None => Ok(StatusCode::NOT_FOUND.into_response()),
+    }
+}
+
 #[derive(Deserialize)]
 struct EventsQuery {
     limit: Option<usize>,
@@ -1735,6 +1826,9 @@ mod testing {
             .route("/api/runs/{id}", get(api_run))
             .route("/api/runs/{id}/events", get(api_events))
             .route("/api/runs/{id}/anomalies", get(api_anomalies))
+            .route("/api/runs/{id}/boundary", get(api_run_boundary))
+            .route("/api/runs/{id}/findings", get(api_run_findings))
+            .route("/api/incidents", get(api_incidents))
             .with_state(state)
     }
 

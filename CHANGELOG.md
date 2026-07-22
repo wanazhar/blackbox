@@ -34,8 +34,19 @@ Epic: [issue #5](https://github.com/wanazhar/blackbox/issues/5). Plan: [docs/pla
 - `forensic pack`
 - `run --boundary` / `--boundary-parent` / `--boundary-fail-closed`
 
+#### Depth (integration)
+- Summary/postmortem `boundary_trust`; score fails on provenance/critical findings even with exit 0
+- Experiment `gate --require-boundary-ok --require-provenance-ok --fail-on-critical-findings`
+- Portable export/import of boundary, containment, evidence, edges, findings, provenance, trace identity
+- Sensor adapters: Falco-like, HTTP proxy, process audit JSON
+- Auto launch/post-run containment canaries + auto-detect on boundary runs
+- Incident sanitized export with integrity hash; forensic `analyze` for local model claims
+- MCP: `blackbox_boundary`, `blackbox_evidence`, `blackbox_incident`, `blackbox_forensic`
+- Dashboard API: `/api/runs/{id}/boundary|findings|evidence`, `/api/incidents`
+- Operator guide: [docs/guide/boundaries-and-incidents.md](docs/guide/boundaries-and-incidents.md)
+
 #### Tests & fixtures
-- `tests/boundary_contract.rs`, `tests/boundary_1_7_full.rs`
+- `tests/boundary_contract.rs`, `tests/boundary_1_7_full.rs`, `tests/boundary_trust_integration.rs`
 - `tests/fixtures/boundary_1_7/` (proxy, credential, benign admin)
 
 ## [1.6.0] — 2026-07-21

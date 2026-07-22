@@ -275,6 +275,91 @@ fn short_hash(s: &str) -> String {
     hex::encode(&h.finalize()[..4])
 }
 
+/// Optional local/offline model-assisted analysis input.
+///
+/// Blackbox never requires a hosted provider. Callers pass model output;
+/// this function only validates citations and records refusal/failure.
+#[derive(Debug, Clone)]
+pub struct ModelAnalysisInput {
+    pub model: String,
+    pub prompt_fingerprint: Option<String>,
+    /// Free-form model claims as (text, citation ids).
+    pub claims: Vec<(String, Vec<String>)>,
+    /// Model refused to analyze.
+    pub refused: bool,
+    /// Model/runtime failure message.
+    pub failure: Option<String>,
+}
+
+/// Attach model-derived claims to a pack (citations must resolve).
+pub fn apply_model_analysis(
+    pack: &mut ForensicPack,
+    input: &ModelAnalysisInput,
+) -> Result<(), Vec<String>> {
+    if input.refused {
+        pack.derived_claims.push(ForensicClaim {
+            claim: "model refused analysis".into(),
+            citations: pack.original_pointers.iter().take(1).cloned().collect(),
+            origin: "model".into(),
+            confidence: Some("unknown".into()),
+            model: Some(input.model.clone()),
+            refused: Some(true),
+        });
+        if pack.derived_claims.last().unwrap().citations.is_empty() {
+            pack.coverage_gaps
+                .push("model_refusal_without_evidence_pointer".into());
+        }
+        pack.pack_hash = hash_pack(pack);
+        return Ok(());
+    }
+    if let Some(ref fail) = input.failure {
+        pack.derived_claims.push(ForensicClaim {
+            claim: format!("model analysis failed: {fail}"),
+            citations: pack.original_pointers.iter().take(1).cloned().collect(),
+            origin: "model".into(),
+            confidence: Some("unknown".into()),
+            model: Some(input.model.clone()),
+            refused: Some(false),
+        });
+        pack.coverage_gaps.push("model_analysis_failure".into());
+        pack.pack_hash = hash_pack(pack);
+        return Ok(());
+    }
+    let mut errs = Vec::new();
+    for (text, cits) in &input.claims {
+        if cits.is_empty() {
+            errs.push(format!("model claim has no citations: {text}"));
+            continue;
+        }
+        let ok = cits.iter().all(|c| {
+            pack.original_pointers.iter().any(|p| p.ends_with(c.as_str()))
+                || pack.findings.iter().any(|f| f.id == *c)
+        });
+        if !ok {
+            errs.push(format!("model claim has dangling citations: {text}"));
+            continue;
+        }
+        pack.derived_claims.push(ForensicClaim {
+            claim: text.clone(),
+            citations: cits.clone(),
+            origin: "model".into(),
+            confidence: Some("weakly_correlated".into()),
+            model: Some(input.model.clone()),
+            refused: None,
+        });
+    }
+    if let Some(ref fp) = input.prompt_fingerprint {
+        pack.coverage_gaps
+            .push(format!("model_prompt_fingerprint:{fp}"));
+    }
+    pack.pack_hash = hash_pack(pack);
+    if errs.is_empty() {
+        Ok(())
+    } else {
+        Err(errs)
+    }
+}
+
 /// Validate that every citation in derived claims points at an original pointer.
 pub fn validate_claim_citations(pack: &ForensicPack) -> Result<(), Vec<String>> {
     let mut errs = Vec::new();

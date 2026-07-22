@@ -203,6 +203,11 @@ fn parse_line(line: &str, opts: &ImportOptions) -> Result<ExternalEvidenceEvent,
         return Err(format!("unsupported schema {schema:?}"));
     }
 
+    // Sensor-specific adapters (Falco / proxy / process audit).
+    if let Some(ev) = super::adapters::map_sensor_event(obj) {
+        return Ok(ev);
+    }
+
     // Generic JSONL mapping (OpenTelemetry-ish / loose).
     map_generic(obj, opts)
 }

@@ -1,0 +1,108 @@
+# Boundaries, evidence, and incidents
+
+Record what an agent was **authorized** to do, import external telemetry, detect boundary crossings, and reconstruct multi-run incidents — without treating Blackbox as a sandbox, firewall, or SIEM.
+
+Reference: [boundary.md](../reference/boundary.md) · Plan: [agent-boundary-1.7.md](../plan/agent-boundary-1.7.md).
+
+---
+
+## When to use
+
+| Job | Command |
+|---|---|
+| Govern an eval / agent run | `run --boundary file.json` |
+| Import proxy/process logs | `evidence import events.ndjson --run latest` |
+| Check containment honesty | `boundary evaluate latest --gate` |
+| Fail CI on provenance cheat | `boundary provenance latest --task-passed true --gate` |
+| Swarm reconstruction | `incident create --run r1 --run r2` |
+| Local IR pack | `forensic pack latest -o pack.json` |
+
+**When not to:** expecting Blackbox to *block* egress or kill processes. Receipts and gates record evidence; they do not enforce policy by default.
+
+---
+
+## Boundary contract (quick start)
+
+```bash
+# Validate + hash
+blackbox boundary validate tests/fixtures/boundary_1_7/eval_boundary.json
+
+# Attach at launch
+blackbox run --boundary tests/fixtures/boundary_1_7/eval_boundary.json \
+  --boundary-fail-closed -- echo hi
+
+# After the run: launch canaries are automatic; detect + evaluate
+blackbox boundary detect latest
+blackbox boundary evaluate latest --gate   # exit 2 if fail-closed failure
+```
+
+Postmortem JSON includes `boundary_trust`. `score.json` sets `failed=true` when fail-closed boundary/provenance gates fail or critical findings exist — even if exit code is 0.
+
+---
+
+## Evidence import
+
+Supports native `blackbox.evidence.event/v1`, generic JSONL, and adapters for **Falco-like**, **HTTP proxy**, and **process audit** shapes.
+
+```bash
+blackbox evidence import tests/fixtures/boundary_1_7/proxy_events.ndjson --run latest
+blackbox evidence list --run latest
+```
+
+Import is idempotent on `(source, source_event_id)`, bounded, and rejects absolute/traversal path attributes.
+
+---
+
+## Provenance vs task success
+
+```bash
+# Correct answer obtained via prohibited network still fails provenance
+blackbox boundary provenance latest \
+  --declared local-dataset \
+  --task-passed true \
+  --gate
+```
+
+Experiment gates:
+
+```bash
+blackbox gate --experiment exp1 \
+  --require-boundary-ok \
+  --require-provenance-ok \
+  --fail-on-critical-findings
+```
+
+---
+
+## Incidents & forensic packs
+
+```bash
+blackbox incident create --title "egress-swarm" --run latest
+blackbox incident show <inc-id>
+blackbox incident export <inc-id> -o incident.json --sanitize
+
+blackbox forensic pack latest -o pack.json
+# Optional local model claims (citations required; never replace evidence)
+blackbox forensic analyze pack.json --model local-llm \
+  --claim "public egress after probe" --cite find-...
+```
+
+---
+
+## MCP & dashboard
+
+| Surface | Path |
+|---|---|
+| MCP | `blackbox_boundary`, `blackbox_evidence`, `blackbox_incident`, `blackbox_forensic` |
+| API | `/api/runs/{id}/boundary`, `/findings`, `/evidence`, `/api/incidents` |
+
+---
+
+## Honesty limits
+
+- Configured ≠ enforced ≠ verified containment  
+- Cooperative `trace_id` alone is not confirmed attribution  
+- Missing sensors → `insufficient_evidence`, not silent success  
+- Blackbox is **not** an EDR/SIEM/firewall  
+
+See also: [verification](verification.md) · [security](security.md) · [experiments](experiments.md).

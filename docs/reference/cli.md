@@ -21,7 +21,7 @@ Every command accepts global `--json` for machine-readable output (`blackbox.cli
 | **Hygiene** | [`scrub`](#24-scrub) · [`doctor`](#25-doctor) · [`stats`](#29-stats) · [`gc`](#30-gc) · [`rm`](#26-rm) · [`purge`](#27-purge) · [`tags`](#28-tags-tag) |
 | **Integrity / verification** | [`fsck`](#36-fsck) · [`verify`](#37-verify) · [`experiment`](#38-experiment) · [`report`](#39-report) · [`gate`](#40-gate) |
 | **Capsules / budgets / index** | [`capsule`](#41-capsule) · [`cassette`](#42-cassette-experimental) · [`budget`](#43-budget) · [`adapter`](#44-adapter) · [`projects`](#45-projects) |
-| **Boundary / containment (1.7)** | [`boundary`](#46-boundary) · [`evidence`](#47-evidence) · [`incident`](#48-incident) · [`forensic`](#49-forensic) |
+| **Boundary / containment (1.7)** | [`boundary`](#46-boundary) · [`evidence`](#47-evidence) · [`incident`](#48-incident) · [`forensic`](#49-forensic) · guide [boundaries-and-incidents](../guide/boundaries-and-incidents.md) |
 | **Shell** | [`completions`](#35-completions) |
 
 Guide shortcuts: [getting-started](../guide/getting-started.md) · [debug](../guide/debug-a-failure.md) · [config](../guide/configuration.md) · [security](../guide/security.md) · [fsck](../guide/fsck-and-integrity.md) · [verification](../guide/verification.md).
@@ -1052,9 +1052,10 @@ blackbox incident create [--title T] [--run id]…
 blackbox incident list
 blackbox incident show <id> [--graph]
 blackbox incident attach <id> [--run id] [--evidence id] [--reason text]
+blackbox incident export <id> [-o path] [--sanitize] [--allow-unresolved]
 ```
 
-Multi-run incident object with optional reconstruction graph.
+Multi-run incident object with optional reconstruction graph and sanitized export.
 
 ---
 
@@ -1062,9 +1063,10 @@ Multi-run incident object with optional reconstruction graph.
 
 ```bash
 blackbox forensic pack <run-id|latest> [-o pack.json] [--max-events N]
+blackbox forensic analyze <pack.json> --model local [--claim text --cite id…] [--refused]
 ```
 
-Bounded local forensic pack (redacted; citation-validated).
+Bounded local forensic pack (redacted; citation-validated). `analyze` attaches local model claims only with valid citations.
 
 ---
 

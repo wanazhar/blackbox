@@ -34,6 +34,15 @@ pub struct GateConfig {
     /// `min_verified_rate` (weakly correlated passes do not satisfy the gate).
     #[serde(default = "default_true")]
     pub require_domain_confirmed: bool,
+    /// Fail when any run has fail-closed boundary evidence gate failure (1.7).
+    #[serde(default)]
+    pub require_boundary_ok: bool,
+    /// Fail when any run has provenance gate failure (1.7).
+    #[serde(default)]
+    pub require_provenance_ok: bool,
+    /// Fail when any run has critical boundary findings (1.7).
+    #[serde(default)]
+    pub fail_on_critical_findings: bool,
 }
 
 fn default_true() -> bool {
@@ -52,6 +61,9 @@ impl Default for GateConfig {
             baseline_key: None,
             candidate_key: None,
             require_domain_confirmed: true,
+            require_boundary_ok: false,
+            require_provenance_ok: false,
+            fail_on_critical_findings: false,
         }
     }
 }
@@ -116,6 +128,73 @@ pub fn evaluate_gate(report: &ExperimentReport, config: &GateConfig) -> GateResu
                         v.key, v.run_count
                     ),
                     contributing_runs: vec![],
+                });
+            }
+        }
+    }
+
+    if config.require_boundary_ok {
+        for v in &report.variants {
+            if let Some(rate) = v.boundary_ok_rate {
+                if rate < 1.0 {
+                    failures.push(GateRuleFailure {
+                        rule: "require_boundary_ok".into(),
+                        message: format!(
+                            "variant {} boundary_ok_rate={rate:.3} < 1.0 (containment/evidence gate)",
+                            v.key
+                        ),
+                        contributing_runs: v.boundary_failed_runs.clone(),
+                    });
+                }
+            } else if config.fail_on_insufficient_evidence {
+                failures.push(GateRuleFailure {
+                    rule: "require_boundary_ok".into(),
+                    message: format!(
+                        "variant {} missing boundary trust data (insufficient evidence)",
+                        v.key
+                    ),
+                    contributing_runs: vec![],
+                });
+            }
+        }
+    }
+
+    if config.require_provenance_ok {
+        for v in &report.variants {
+            if let Some(rate) = v.provenance_ok_rate {
+                if rate < 1.0 {
+                    failures.push(GateRuleFailure {
+                        rule: "require_provenance_ok".into(),
+                        message: format!(
+                            "variant {} provenance_ok_rate={rate:.3} < 1.0 (task success is independent)",
+                            v.key
+                        ),
+                        contributing_runs: v.provenance_failed_runs.clone(),
+                    });
+                }
+            } else if config.fail_on_insufficient_evidence {
+                failures.push(GateRuleFailure {
+                    rule: "require_provenance_ok".into(),
+                    message: format!(
+                        "variant {} missing provenance trust data",
+                        v.key
+                    ),
+                    contributing_runs: vec![],
+                });
+            }
+        }
+    }
+
+    if config.fail_on_critical_findings {
+        for v in &report.variants {
+            if v.critical_findings > 0 {
+                failures.push(GateRuleFailure {
+                    rule: "fail_on_critical_findings".into(),
+                    message: format!(
+                        "variant {} has {} critical boundary finding(s)",
+                        v.key, v.critical_findings
+                    ),
+                    contributing_runs: v.boundary_failed_runs.clone(),
                 });
             }
         }

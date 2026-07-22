@@ -124,3 +124,90 @@ fixtures and preserve the tested identity fields, but principal-aware
 correlation is absent and malformed cloud outcomes can be asserted as success.
 Resolve both P1 findings and the schema/store P2 acceptance gaps before merging
 this task into the 1.7 completion branch.
+
+---
+
+## Re-review after remediation
+
+| Field | Value |
+|---|---|
+| Remediation | `a5259cdc9f6a6cf5a1bfd8a39ee9eb00ccf47c49` |
+| Re-review verdict | **Pass** |
+| Date | 2026-07-22 |
+
+The remediation closes every blocking finding from the initial review. No new
+P1 or P2 issue was found.
+
+### Resolution of prior findings
+
+1. **Principal-aware correlation — resolved.** `CorrelationContext` now accepts
+   an expected infrastructure principal, records matching/conflicting principal
+   reasons, and caps a principal conflict at `weakly_correlated`
+   (`src/boundary/correlate.rs:137-157`, `195-210`, and `291-300`). Both the
+   Kubernetes and GCP paths correlate on principal, workload, and trace identity
+   without `linked_run_id`, `identity.run_id`, or a default import run link
+   (`tests/evidence_orchestration.rs:130-157` and `174-231`). The GCP case is a
+   real cloud-audit path after persistence, not a synthetic edge.
+2. **Malformed cloud outcomes — resolved.** AWS distinguishes an absent
+   `errorCode` from a present invalid value and GCP distinguishes an absent
+   status from a malformed status code. Invalid representations first map to
+   `unknown` and are then rejected as malformed required fields
+   (`src/evidence/adapters.rs:187-203`, `270-290`, and `558-599`). Permanent AWS
+   numeric and GCP string-code fixtures are rejected.
+3. **SQLite survival — resolved.** The cloud integration atomically inserts the
+   normalized AWS/GCP batch, reads the GCP event from SQLite, checks action,
+   outcome, provider principal, workload, and trace, then correlates the stored
+   value (`tests/evidence_orchestration.rs:174-231`). The stored event has no
+   fabricated run link.
+4. **Kubernetes `sourceIPs` validation — resolved.** A non-empty array of
+   non-empty strings is required (`src/evidence/adapters.rs:133-146` and
+   `601-608`). The numeric-element fixture is rejected.
+5. **Actionable diagnostics — resolved.** Recognized malformed sensor events use
+   the checked adapter path, which returns the adapter's field-level reason to
+   the importer instead of falling through to the generic `source is required`
+   error (`src/evidence/adapters.rs:35-53` and
+   `src/evidence/import.rs:222-230`). Tests require diagnostics naming
+   `sourceIPs`, `errorCode`, and `protoPayload.status.code`
+   (`tests/evidence_orchestration.rs:107-127`).
+
+### Attribution honesty
+
+Unverified Kubernetes/GCP records with matching trace, workload, and principal
+remain `strongly_correlated`, not `confirmed`. Cooperative trace identity alone
+also remains below `confirmed`, and a conflicting principal downgrades the edge
+to `weakly_correlated` (`src/boundary/correlate.rs:238-300`). This preserves the
+original integrity cap while allowing provider principal and workload to
+contribute to attribution.
+
+### Independent verification
+
+Executed from the isolated `boundary-17-sensors` worktree at the remediation
+commit:
+
+```text
+cargo test --lib evidence::adapters -- --nocapture
+  3 passed; 0 failed
+
+cargo test --lib boundary::correlate -- --nocapture
+  7 passed; 0 failed
+
+cargo test --test evidence_orchestration -- --nocapture
+  5 passed; 0 failed
+
+cargo clippy --all-targets -- -D warnings
+  passed
+
+cargo fmt --check
+  passed
+
+git diff a5259cd^ a5259cd --check
+  passed
+```
+
+### Final disposition
+
+**Pass.** The sensor task now provides schema-safe Kubernetes, AWS, and GCP
+mapping; principal-aware multi-signal correlation without manufactured run
+identity; honest confidence caps; transactional SQLite survival; strict
+malformed-field rejection; and actionable importer diagnostics. It is ready to
+merge into the 1.7 completion branch.

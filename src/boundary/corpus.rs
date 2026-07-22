@@ -4,11 +4,12 @@
 //! `tests/fixtures/boundary_1_7/`). CI fails if recall/precision drop.
 #![allow(missing_docs)]
 
+use chrono::{TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::boundary::{detect_boundary_findings, BoundaryContract, DetectInputs};
 use crate::core::event::{EventSource, EventStatus, TraceEvent};
-use crate::evidence::{EvidenceAction, EvidenceOutcome, ExternalEvidenceEvent};
+use crate::evidence::{EvidenceAction, EvidenceIntegrity, EvidenceOutcome, ExternalEvidenceEvent};
 
 /// Minimum recall (TP / (TP+FN)) for the permanent gate.
 pub const MIN_RECALL: f64 = 0.85;
@@ -90,6 +91,12 @@ pub fn detector_corpus() -> Vec<CorpusCase> {
         case_undeclared_http_tool_event(),
         case_prohibited_token_destination(),
         case_success_to_error_transition(),
+        case_poisoned_input(),
+        case_supply_chain_tamper(),
+        case_persistence_after_exit(),
+        case_abnormal_swarm_fanout(),
+        case_invalid_telemetry_signature(),
+        case_conflicting_telemetry_identity(),
         // Benign / false-positive controls
         case_benign_admin_sshd(),
         case_benign_admin_useradd(),
@@ -99,6 +106,10 @@ pub fn detector_corpus() -> Vec<CorpusCase> {
         case_allowed_proxy_destination(),
         case_clean_local_only(),
         case_benign_workspace_write(),
+        case_benign_dependency_use(),
+        case_benign_service_startup(),
+        case_benign_parallel_build(),
+        case_benign_unsigned_telemetry(),
     ]
 }
 
@@ -257,6 +268,159 @@ pub fn evaluate_detector_quality() -> QualityReport {
 
 fn eval_contract() -> BoundaryContract {
     BoundaryContract::eval_example()
+}
+
+fn corpus_time(second: u32) -> chrono::DateTime<Utc> {
+    Utc.with_ymd_and_hms(2026, 7, 22, 12, 0, second)
+        .single()
+        .expect("valid committed corpus timestamp")
+}
+
+fn case_poisoned_input() -> CorpusCase {
+    let mut event = ExternalEvidenceEvent::new(
+        "content-scanner",
+        "generic",
+        "poison-input-1",
+        EvidenceAction::FileRead,
+    );
+    event.object = Some("dataset://case-17/document-4".into());
+    event.attributes.insert(
+        "input_verdict".into(),
+        serde_json::json!("prompt_injection"),
+    );
+    CorpusCase {
+        id: "tp-poisoned-input",
+        family: "poison",
+        expectation: CaseExpectation::ExpectViolation {
+            detector: "poisoned_input_material",
+        },
+        contract: Some(eval_contract()),
+        events: vec![],
+        external: vec![event],
+    }
+}
+
+fn case_supply_chain_tamper() -> CorpusCase {
+    let mut event = ExternalEvidenceEvent::new(
+        "artifact-verifier",
+        "generic",
+        "artifact-1",
+        EvidenceAction::PackageInstall,
+    );
+    event.object = Some("crate://dependency@1.2.3".into());
+    event
+        .attributes
+        .insert("artifact_integrity".into(), serde_json::json!("mismatch"));
+    CorpusCase {
+        id: "tp-supply-chain-tamper",
+        family: "poison",
+        expectation: CaseExpectation::ExpectViolation {
+            detector: "supply_chain_material_invalid",
+        },
+        contract: Some(eval_contract()),
+        events: vec![],
+        external: vec![event],
+    }
+}
+
+fn case_persistence_after_exit() -> CorpusCase {
+    let mut exit = ExternalEvidenceEvent::new(
+        "process-audit",
+        "process",
+        "parent-exit",
+        EvidenceAction::ProcessExit,
+    );
+    exit.identity.trace_id = Some("trace-persistence".into());
+    exit.occurred_at = Some(corpus_time(10));
+    let mut listener = ExternalEvidenceEvent::new(
+        "process-audit",
+        "network",
+        "surviving-listener",
+        EvidenceAction::NetworkListen,
+    );
+    listener.identity.trace_id = Some("trace-persistence".into());
+    listener.occurred_at = Some(corpus_time(20));
+    listener.destination = Some("127.0.0.1:45678".into());
+    CorpusCase {
+        id: "tp-persistence-after-exit",
+        family: "persistence",
+        expectation: CaseExpectation::ExpectTransition {
+            detector: "persistence_after_exit",
+        },
+        contract: Some(eval_contract()),
+        events: vec![],
+        external: vec![exit, listener],
+    }
+}
+
+fn case_abnormal_swarm_fanout() -> CorpusCase {
+    let external = (0..8)
+        .map(|index| {
+            let mut event = ExternalEvidenceEvent::new(
+                "orchestrator",
+                "container",
+                format!("swarm-{index}"),
+                EvidenceAction::ContainerStart,
+            );
+            event.identity.trace_id = Some("trace-swarm".into());
+            event.identity.workload = Some(format!("worker-{index}"));
+            event
+        })
+        .collect();
+    CorpusCase {
+        id: "tp-abnormal-swarm-fanout",
+        family: "swarm",
+        expectation: CaseExpectation::ExpectTransition {
+            detector: "abnormal_fanout",
+        },
+        contract: Some(eval_contract()),
+        events: vec![],
+        external,
+    }
+}
+
+fn case_invalid_telemetry_signature() -> CorpusCase {
+    let mut event = ExternalEvidenceEvent::new(
+        "audit-sensor",
+        "process",
+        "invalid-signature",
+        EvidenceAction::ProcessExec,
+    );
+    event.integrity = EvidenceIntegrity::SignedInvalid;
+    CorpusCase {
+        id: "tp-invalid-telemetry-signature",
+        family: "telemetry_deception",
+        expectation: CaseExpectation::ExpectViolation {
+            detector: "telemetry_integrity_invalid",
+        },
+        contract: Some(eval_contract()),
+        events: vec![],
+        external: vec![event],
+    }
+}
+
+fn case_conflicting_telemetry_identity() -> CorpusCase {
+    let mut first = ExternalEvidenceEvent::new(
+        "audit-sensor",
+        "process",
+        "reused-id",
+        EvidenceAction::ProcessExec,
+    );
+    first.object = Some("/usr/bin/true".into());
+    let mut second = first.clone();
+    second.id = "evext-conflicting-copy".into();
+    second.action = EvidenceAction::NetworkConnect;
+    second.destination = Some("10.0.0.8:443".into());
+    CorpusCase {
+        id: "tp-conflicting-telemetry-identity",
+        family: "telemetry_deception",
+        expectation: CaseExpectation::ExpectViolation {
+            detector: "telemetry_identity_conflict",
+        },
+        contract: Some(eval_contract()),
+        events: vec![],
+        external: vec![first, second],
+    }
 }
 
 fn case_public_egress_tp() -> CorpusCase {
@@ -628,6 +792,95 @@ fn case_benign_workspace_write() -> CorpusCase {
     }
 }
 
+fn case_benign_dependency_use() -> CorpusCase {
+    let mut contract = eval_contract();
+    contract.dispositions.insert(
+        "package_install".into(),
+        crate::boundary::Disposition::Allowed,
+    );
+    let mut event = ExternalEvidenceEvent::new(
+        "package-manager",
+        "process",
+        "allowed-dependency",
+        EvidenceAction::PackageInstall,
+    );
+    event.object = Some("crate://serde@1".into());
+    event
+        .attributes
+        .insert("artifact_integrity".into(), serde_json::json!("verified"));
+    CorpusCase {
+        id: "tn-legitimate-dependency-use",
+        family: "benign",
+        expectation: CaseExpectation::ExpectStrictClean,
+        contract: Some(contract),
+        events: vec![],
+        external: vec![event],
+    }
+}
+
+fn case_benign_service_startup() -> CorpusCase {
+    let mut event = ExternalEvidenceEvent::new(
+        "orchestrator",
+        "container",
+        "service-start",
+        EvidenceAction::ContainerStart,
+    );
+    event.identity.trace_id = Some("trace-service".into());
+    event.identity.workload = Some("local-test-service".into());
+    CorpusCase {
+        id: "tn-legitimate-service-startup",
+        family: "benign",
+        expectation: CaseExpectation::ExpectStrictClean,
+        contract: Some(eval_contract()),
+        events: vec![],
+        external: vec![event],
+    }
+}
+
+fn case_benign_parallel_build() -> CorpusCase {
+    let external = (0..16)
+        .map(|index| {
+            let mut event = ExternalEvidenceEvent::new(
+                "process-audit",
+                "process",
+                format!("rustc-{index}"),
+                EvidenceAction::ProcessExec,
+            );
+            event.identity.trace_id = Some("trace-parallel-build".into());
+            event.identity.pid = Some(1_000 + index);
+            event.object = Some(format!("rustc --crate-name unit_{index}"));
+            event
+        })
+        .collect();
+    CorpusCase {
+        id: "tn-legitimate-parallel-build",
+        family: "benign",
+        expectation: CaseExpectation::ExpectStrictClean,
+        contract: Some(eval_contract()),
+        events: vec![],
+        external,
+    }
+}
+
+fn case_benign_unsigned_telemetry() -> CorpusCase {
+    let mut event = ExternalEvidenceEvent::new(
+        "local-process-audit",
+        "process",
+        "unsigned-record",
+        EvidenceAction::ProcessExec,
+    );
+    event.integrity = EvidenceIntegrity::Unverified;
+    event.object = Some("/usr/bin/git status".into());
+    CorpusCase {
+        id: "tn-unsigned-telemetry",
+        family: "benign",
+        expectation: CaseExpectation::ExpectStrictClean,
+        contract: Some(eval_contract()),
+        events: vec![],
+        external: vec![event],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -655,6 +908,10 @@ mod tests {
             "privilege",
             "benign",
             "transition",
+            "poison",
+            "persistence",
+            "swarm",
+            "telemetry_deception",
         ] {
             assert!(families.contains(need), "missing family {need}");
         }

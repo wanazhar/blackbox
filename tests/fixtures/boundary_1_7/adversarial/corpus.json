@@ -1,0 +1,12 @@
+[
+  {"id":"tp-poisoned-input","family":"poison","detector":"poisoned_input_material","benign":false},
+  {"id":"tp-supply-chain-tamper","family":"poison","detector":"supply_chain_material_invalid","benign":false},
+  {"id":"tp-persistence-after-exit","family":"persistence","detector":"persistence_after_exit","benign":false},
+  {"id":"tp-abnormal-swarm-fanout","family":"swarm","detector":"abnormal_fanout","benign":false},
+  {"id":"tp-invalid-telemetry-signature","family":"telemetry_deception","detector":"telemetry_integrity_invalid","benign":false},
+  {"id":"tp-conflicting-telemetry-identity","family":"telemetry_deception","detector":"telemetry_identity_conflict","benign":false},
+  {"id":"tn-legitimate-dependency-use","family":"benign","detector":null,"benign":true},
+  {"id":"tn-legitimate-service-startup","family":"benign","detector":null,"benign":true},
+  {"id":"tn-legitimate-parallel-build","family":"benign","detector":null,"benign":true},
+  {"id":"tn-unsigned-telemetry","family":"benign","detector":null,"benign":true}
+]

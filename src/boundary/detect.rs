@@ -1,6 +1,8 @@
 //! Deterministic boundary violation and behavior-transition detectors (1.7 Phase E).
 
 #![allow(missing_docs)]
+use std::collections::{BTreeMap, BTreeSet};
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -159,6 +161,10 @@ pub fn detect_boundary_findings(inputs: DetectInputs<'_>) -> Vec<BoundaryFinding
     out.extend(detect_public_network_probe(&inputs));
     out.extend(detect_package_install(&inputs));
     out.extend(detect_privilege_signals(&inputs));
+    out.extend(detect_poisoned_material(&inputs));
+    out.extend(detect_persistence_after_exit(&inputs));
+    out.extend(detect_abnormal_fanout(&inputs));
+    out.extend(detect_deceptive_telemetry(&inputs));
     out.extend(detect_behavior_transitions(&inputs));
     normalize_finding_times(&inputs, &mut out);
     out.extend(detect_execution_after_violation(&inputs, &out));
@@ -476,6 +482,296 @@ fn detect_privilege_signals(inputs: &DetectInputs<'_>) -> Vec<BoundaryFinding> {
     out
 }
 
+fn attribute_token<'a>(event: &'a ExternalEvidenceEvent, key: &str) -> Option<&'a str> {
+    event
+        .attributes
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+}
+
+fn has_attribute_token(event: &ExternalEvidenceEvent, key: &str, values: &[&str]) -> bool {
+    attribute_token(event, key).is_some_and(|value| {
+        values
+            .iter()
+            .any(|candidate| value.eq_ignore_ascii_case(candidate))
+    })
+}
+
+/// Detect explicit integrity/verdict signals from content and supply-chain
+/// sensors. Free-form content is deliberately not scanned: the detector needs
+/// a machine-produced verdict and therefore remains deterministic.
+fn detect_poisoned_material(inputs: &DetectInputs<'_>) -> Vec<BoundaryFinding> {
+    let mut out = Vec::new();
+    for event in inputs.external {
+        let poisoned_input = has_attribute_token(
+            event,
+            "input_verdict",
+            &["poisoned", "prompt_injection", "malicious"],
+        ) || has_attribute_token(
+            event,
+            "content_verdict",
+            &["poisoned", "prompt_injection", "malicious"],
+        );
+        let invalid_artifact = has_attribute_token(
+            event,
+            "artifact_integrity",
+            &["mismatch", "invalid", "tampered"],
+        ) || has_attribute_token(
+            event,
+            "supply_chain_verdict",
+            &["malicious", "compromised", "poisoned"],
+        );
+        if !poisoned_input && !invalid_artifact {
+            continue;
+        }
+
+        let (detector, token, summary) = if invalid_artifact {
+            (
+                "supply_chain_material_invalid",
+                "package_install",
+                "supply-chain sensor reported invalid or compromised material",
+            )
+        } else {
+            (
+                "poisoned_input_material",
+                "undeclared_answer_sources",
+                "content sensor reported poisoned or malicious input",
+            )
+        };
+        let disposition = disposition_of(inputs.contract, token);
+        let mut finding = BoundaryFinding::new(
+            inputs.run_id,
+            FindingKind::BoundaryViolation,
+            detector,
+            FindingSeverity::High,
+            summary,
+        );
+        finding.external_evidence_ids.push(event.id.clone());
+        finding.token = Some(token.into());
+        finding.disposition = Some(disposition);
+        finding.recommendation =
+            Some("quarantine the cited material and verify its origin before reuse".into());
+        out.push(finding);
+    }
+    out
+}
+
+fn same_execution(event: &ExternalEvidenceEvent, marker: &ExternalEvidenceEvent) -> bool {
+    let same = |left: Option<&str>, right: Option<&str>| {
+        left.zip(right).is_some_and(|(left, right)| left == right)
+    };
+    same(
+        event.identity.trace_id.as_deref(),
+        marker.identity.trace_id.as_deref(),
+    ) || same(
+        event.identity.run_id.as_deref(),
+        marker.identity.run_id.as_deref(),
+    ) || same(
+        event.identity.session.as_deref(),
+        marker.identity.session.as_deref(),
+    )
+}
+
+/// Detect activity associated with a run/session after its process-exit sensor
+/// signal. Both the exit marker and continued activity are cited.
+fn detect_persistence_after_exit(inputs: &DetectInputs<'_>) -> Vec<BoundaryFinding> {
+    let mut out = Vec::new();
+    for marker in inputs
+        .external
+        .iter()
+        .filter(|event| matches!(event.action, EvidenceAction::ProcessExit))
+    {
+        let marker_at = external_time(marker);
+        let continued = inputs
+            .external
+            .iter()
+            .filter(|event| external_time(event) > marker_at && same_execution(event, marker))
+            .filter(|event| {
+                matches!(
+                    event.action,
+                    EvidenceAction::ProcessExec
+                        | EvidenceAction::NetworkListen
+                        | EvidenceAction::ContainerStart
+                        | EvidenceAction::FileWrite
+                )
+            })
+            .min_by_key(|event| external_time(event));
+        let Some(continued) = continued else {
+            continue;
+        };
+        let mut finding = BoundaryFinding::new(
+            inputs.run_id,
+            FindingKind::BehaviorTransition,
+            "persistence_after_exit",
+            FindingSeverity::Critical,
+            "activity associated with the run continued after its process-exit signal",
+        );
+        finding.external_evidence_ids = vec![marker.id.clone(), continued.id.clone()];
+        finding.created_at = external_time(continued);
+        finding.token = Some("persistence".into());
+        finding.disposition = Some(disposition_of(inputs.contract, "persistence"));
+        finding.recommendation =
+            Some("inspect surviving descendants, listeners, and persistence artifacts".into());
+        out.push(finding);
+    }
+    out
+}
+
+fn fanout_parent(event: &ExternalEvidenceEvent) -> Option<String> {
+    for key in ["delegator", "parent_workload", "parent_process"] {
+        if let Some(value) = attribute_token(event, key) {
+            return Some(format!("{key}:{value}"));
+        }
+    }
+    if matches!(event.action, EvidenceAction::ContainerStart) {
+        return event
+            .identity
+            .trace_id
+            .as_deref()
+            .map(|value| format!("trace:{value}"))
+            .or_else(|| {
+                event
+                    .identity
+                    .run_id
+                    .as_deref()
+                    .map(|value| format!("run:{value}"))
+            });
+    }
+    None
+}
+
+fn fanout_child(event: &ExternalEvidenceEvent) -> Option<String> {
+    event
+        .identity
+        .workload
+        .as_deref()
+        .or(event.identity.container.as_deref())
+        .or(event.object.as_deref())
+        .map(str::to_owned)
+}
+
+/// Eight distinct delegated/container workloads from one parent is the stable
+/// abnormal-fan-out threshold. Ordinary parallel compiler processes do not
+/// qualify unless their sensor explicitly supplies delegation metadata.
+fn detect_abnormal_fanout(inputs: &DetectInputs<'_>) -> Vec<BoundaryFinding> {
+    const FANOUT_THRESHOLD: usize = 8;
+    let mut groups: BTreeMap<String, Vec<&ExternalEvidenceEvent>> = BTreeMap::new();
+    for event in inputs.external {
+        if !matches!(
+            event.action,
+            EvidenceAction::ContainerStart | EvidenceAction::ProcessExec
+        ) {
+            continue;
+        }
+        if let (Some(parent), Some(_)) = (fanout_parent(event), fanout_child(event)) {
+            groups.entry(parent).or_default().push(event);
+        }
+    }
+
+    let mut out = Vec::new();
+    for (parent, events) in groups {
+        let children: BTreeSet<_> = events
+            .iter()
+            .filter_map(|event| fanout_child(event))
+            .collect();
+        if children.len() < FANOUT_THRESHOLD {
+            continue;
+        }
+        let mut finding = BoundaryFinding::new(
+            inputs.run_id,
+            FindingKind::BehaviorTransition,
+            "abnormal_fanout",
+            FindingSeverity::High,
+            format!(
+                "parent {parent} created {} distinct delegated workloads (threshold {FANOUT_THRESHOLD})",
+                children.len()
+            ),
+        );
+        finding.external_evidence_ids = events
+            .iter()
+            .take(32)
+            .map(|event| event.id.clone())
+            .collect();
+        finding.token = Some("swarm_fanout".into());
+        finding.disposition = Some(disposition_of(inputs.contract, "swarm_fanout"));
+        finding.recommendation =
+            Some("confirm delegation was authorized and inspect every cited workload".into());
+        out.push(finding);
+    }
+    out
+}
+
+/// Detect invalid integrity results and internally contradictory telemetry.
+/// Unsigned (`unverified`) evidence is a coverage limitation, not deception.
+fn detect_deceptive_telemetry(inputs: &DetectInputs<'_>) -> Vec<BoundaryFinding> {
+    let mut out = Vec::new();
+    for event in inputs.external {
+        let invalid_signature = matches!(
+            event.integrity,
+            crate::evidence::EvidenceIntegrity::SignedInvalid
+        );
+        let identity_conflict = event
+            .linked_run_id
+            .as_ref()
+            .zip(event.identity.run_id.as_ref())
+            .is_some_and(|(linked, claimed)| linked != claimed);
+        if invalid_signature || identity_conflict {
+            let reason = if invalid_signature {
+                "sensor evidence has an invalid signature"
+            } else {
+                "sensor evidence has conflicting linked and claimed run identities"
+            };
+            let mut finding = BoundaryFinding::new(
+                inputs.run_id,
+                FindingKind::BoundaryViolation,
+                "telemetry_integrity_invalid",
+                FindingSeverity::High,
+                reason,
+            );
+            finding.external_evidence_ids.push(event.id.clone());
+            finding.token = Some("telemetry_integrity".into());
+            finding.recommendation = Some(
+                "exclude the cited record from confirmed claims and inspect the sensor".into(),
+            );
+            out.push(finding);
+        }
+    }
+
+    let mut by_source_identity: BTreeMap<(&str, &str), &ExternalEvidenceEvent> = BTreeMap::new();
+    for event in inputs.external {
+        let key = (event.source.as_str(), event.source_event_id.as_str());
+        if let Some(previous) = by_source_identity.get(&key) {
+            let conflicts = previous.action != event.action
+                || previous.outcome != event.outcome
+                || previous.destination != event.destination
+                || previous.object != event.object;
+            if conflicts {
+                let mut finding = BoundaryFinding::new(
+                    inputs.run_id,
+                    FindingKind::BoundaryViolation,
+                    "telemetry_identity_conflict",
+                    FindingSeverity::High,
+                    format!(
+                        "source {} reused event identity {} for conflicting records",
+                        event.source, event.source_event_id
+                    ),
+                );
+                finding.external_evidence_ids = vec![previous.id.clone(), event.id.clone()];
+                finding.token = Some("telemetry_integrity".into());
+                finding.recommendation = Some(
+                    "preserve both records and inspect replay, collision, or sensor compromise"
+                        .into(),
+                );
+                out.push(finding);
+            }
+        } else {
+            by_source_identity.insert(key, event);
+        }
+    }
+    out
+}
+
 fn detect_behavior_transitions(inputs: &DetectInputs<'_>) -> Vec<BoundaryFinding> {
     let mut out = Vec::new();
     // First error after a run of successes → transition marker.
@@ -618,5 +914,64 @@ mod tests {
             .unwrap();
         assert_eq!(continued.created_at, t1);
         assert_eq!(continued.external_evidence_ids.len(), 1);
+    }
+
+    #[test]
+    fn persistence_finding_cites_exit_and_surviving_activity() {
+        let t0 = Utc::now() - chrono::Duration::minutes(1);
+        let mut exit =
+            ExternalEvidenceEvent::new("audit", "process", "exit", EvidenceAction::ProcessExit);
+        exit.id = "exit-evidence".into();
+        exit.identity.trace_id = Some("same-trace".into());
+        exit.occurred_at = Some(t0);
+        let mut listener = ExternalEvidenceEvent::new(
+            "audit",
+            "network",
+            "listener",
+            EvidenceAction::NetworkListen,
+        );
+        listener.id = "listener-evidence".into();
+        listener.identity.trace_id = Some("same-trace".into());
+        listener.occurred_at = Some(t0 + chrono::Duration::seconds(1));
+
+        let findings = detect_boundary_findings(DetectInputs {
+            run_id: "r1",
+            contract: None,
+            events: &[],
+            external: &[exit, listener],
+        });
+        let finding = findings
+            .iter()
+            .find(|finding| finding.detector == "persistence_after_exit")
+            .expect("persistence finding");
+        assert_eq!(
+            finding.external_evidence_ids,
+            ["exit-evidence", "listener-evidence"]
+        );
+    }
+
+    #[test]
+    fn invalid_signature_flags_but_unsigned_telemetry_does_not() {
+        let mut invalid =
+            ExternalEvidenceEvent::new("audit", "process", "invalid", EvidenceAction::ProcessExec);
+        invalid.integrity = crate::evidence::EvidenceIntegrity::SignedInvalid;
+        let unsigned =
+            ExternalEvidenceEvent::new("audit", "process", "unsigned", EvidenceAction::ProcessExec);
+        let invalid_findings = detect_boundary_findings(DetectInputs {
+            run_id: "r1",
+            contract: None,
+            events: &[],
+            external: &[invalid],
+        });
+        assert!(invalid_findings
+            .iter()
+            .any(|finding| finding.detector == "telemetry_integrity_invalid"));
+        let unsigned_findings = detect_boundary_findings(DetectInputs {
+            run_id: "r1",
+            contract: None,
+            events: &[],
+            external: &[unsigned],
+        });
+        assert!(unsigned_findings.is_empty());
     }
 }

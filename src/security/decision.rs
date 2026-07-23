@@ -12,7 +12,7 @@ use crate::protocol::canonical_hash;
 pub const SECURITY_DECISION_SCHEMA: &str = "blackbox.security.decision/v1";
 
 /// Allow / deny / warn / require_approval.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DecisionKind {
     /// Action permitted.
@@ -24,6 +24,7 @@ pub enum DecisionKind {
     /// Must wait for human/agent approval.
     RequireApproval,
     /// Decision could not be determined.
+    #[default]
     Unknown,
 }
 
@@ -206,12 +207,6 @@ pub struct SecurityDecisionBuilder {
     evidence_refs: Vec<String>,
     attributes: Option<Value>,
     id: Option<String>,
-}
-
-impl Default for DecisionKind {
-    fn default() -> Self {
-        Self::Unknown
-    }
 }
 
 impl SecurityDecisionBuilder {

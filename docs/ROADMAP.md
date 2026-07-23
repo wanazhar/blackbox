@@ -4,6 +4,10 @@ What “good” means for blackbox, what each major version promised, and how ea
 release keeps those promises executable.
 
 This is **product direction**, not a how-to. Operators: [guide/README.md](guide/README.md).
+**1.9 (in progress):**
+[issue #7](https://github.com/wanazhar/blackbox/issues/7) — evidence protocol,
+embeddability, native harness integration. Plan:
+[plan/evidence-protocol-1.9.md](plan/evidence-protocol-1.9.md).
 **1.8 (shipped 1.8.0):**
 [issue #6](https://github.com/wanazhar/blackbox/issues/6) — typed policy
 semantics, calibrated findings, citation-complete forensics. Plan:
@@ -50,6 +54,7 @@ If a change weakens a bar, it needs an explicit docs + test story.
 | **1.6** | **Verified runs & reproducibility** | Shipped **1.6.0** — [issue #4](https://github.com/wanazhar/blackbox/issues/4) |
 | **1.7** | **Agent boundary evidence & incident reconstruction** | Shipped **1.7.0** — [issue #5](https://github.com/wanazhar/blackbox/issues/5) |
 | **1.8** | **Evidence semantics & forensic rigor** | Shipped **1.8.0** — [issue #6](https://github.com/wanazhar/blackbox/issues/6) · [plan](plan/evidence-semantics-1.8.md) |
+| **1.9** | **Evidence protocol & embeddability** | In progress — [issue #7](https://github.com/wanazhar/blackbox/issues/7) · [plan](plan/evidence-protocol-1.9.md) |
 
 ### 1.1 adoption bar (permanent)
 
@@ -245,3 +250,25 @@ Epic: [issue #6](https://github.com/wanazhar/blackbox/issues/6). Plan:
 | **B1** | Frozen benchmark | ✅ Separately versioned scenario fingerprints, per-detector/integrity/sensor-loss reports, release gate |
 | **O1** | Layered output | ✅ Dashboard, API, MCP, incidents, trace findings, and forensic collections label semantic layers |
 | **Q1** | Permanent gates | ✅ Full `release-qualify-unix.sh` green for 1.8.0 |
+
+---
+
+## 1.9 bar (in progress)
+
+Epic: [issue #7](https://github.com/wanazhar/blackbox/issues/7). Plan:
+[plan/evidence-protocol-1.9.md](plan/evidence-protocol-1.9.md). Spec:
+[`/spec`](../spec/README.md). Operator guide:
+[guide/native-integrations.md](guide/native-integrations.md).
+
+| Id | Criterion | Intent / status |
+|---|---|---|
+| **P1/P2** | Independent schemas + canonical form | ✅ `/spec`, `/test-vectors`, dual-encoder identity |
+| **P3** | Schema validation in CI | ✅ `tests/protocol_vectors.rs` |
+| **N1/N2** | Native ingest + transports | ✅ `NativeRecorder`, NDJSON, Unix socket |
+| **S1/S2** | Security decisions + reconciliation | ✅ `blackbox.security.decision/v1`, typed outcomes |
+| **C1** | Evidence commitments | ✅ Hash chain, run root, optional Ed25519 |
+| **O1** | OTLP interop | ✅ Export/import + loss ledger |
+| **F1** | Conformance runner | ✅ `blackbox conform` Core/Recorder/Boundary/Forensic |
+| **I1** | Reference integration | ✅ Claude Code hooks adapter |
+| **A1** | Architecture boundaries | ✅ Protocol APIs free of clap/SQLite types |
+| **Q1** | Permanent gates | 1.4–1.8 gates remain green; 1.9 suite in CI |

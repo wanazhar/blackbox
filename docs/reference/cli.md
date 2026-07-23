@@ -22,6 +22,7 @@ Every command accepts global `--json` for machine-readable output (`blackbox.cli
 | **Integrity / verification** | [`fsck`](#36-fsck) · [`verify`](#37-verify) · [`experiment`](#38-experiment) · [`report`](#39-report) · [`gate`](#40-gate) |
 | **Capsules / budgets / index** | [`capsule`](#41-capsule) · [`cassette`](#42-cassette-experimental) · [`budget`](#43-budget) · [`adapter`](#44-adapter) · [`projects`](#45-projects) |
 | **Boundary / containment (1.7)** | [`boundary`](#46-boundary) · [`evidence`](#47-evidence) · [`incident`](#48-incident) · [`forensic`](#49-forensic) · guide [boundaries-and-incidents](../guide/boundaries-and-incidents.md) |
+| **Protocol / native (1.9)** | [`conform`](#50-conform-19) · guide [native-integrations](../guide/native-integrations.md) · [spec](../../spec/README.md) |
 | **Shell** | [`completions`](#35-completions) |
 
 Guide shortcuts: [getting-started](../guide/getting-started.md) · [debug](../guide/debug-a-failure.md) · [config](../guide/configuration.md) · [security](../guide/security.md) · [fsck](../guide/fsck-and-integrity.md) · [verification](../guide/verification.md).
@@ -1082,6 +1083,20 @@ blackbox forensic analyze <pack.json> --model local \
 ```
 
 Bounded local forensic pack (recursively redacted; exact-citation and content-hash validated). `analyze` hashes the exact bytes read from prompt/configuration files inside Blackbox, then attaches sanitized local model output. It rejects a malformed/tampered input pack without rewriting it and does not run a model.
+
+---
+
+## 50. `conform` (1.9)
+
+```bash
+blackbox conform [--profile core|recorder|boundary|forensic] [--vectors PATH] [--json]
+```
+
+Public protocol conformance runner. Profiles declare mandatory cases for
+canonical form, native ingest, security decisions, and forensic commitments.
+Exit non-zero under `--strict` (default) when any mandatory case fails.
+Schemas: [`/spec`](../../spec/README.md). Vectors: [`/test-vectors`](../../test-vectors/).
+Native integration guide: [native-integrations.md](../guide/native-integrations.md).
 
 ---
 

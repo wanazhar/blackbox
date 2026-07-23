@@ -4,6 +4,24 @@ All notable changes to **blackbox** are documented here.
 
 ## [Unreleased]
 
+### 1.9 — Evidence protocol & embeddability (in progress)
+
+Epic: [issue #7](https://github.com/wanazhar/blackbox/issues/7). Plan:
+[docs/plan/evidence-protocol-1.9.md](docs/plan/evidence-protocol-1.9.md).
+
+- Implementation-neutral protocol under `/spec` with canonical JSON rules,
+  stability inventory, and `/test-vectors` (Phase A).
+- `NativeRecorder` in-process API plus bounded NDJSON and Unix socket transports
+  with idempotent retries (Phase B).
+- `blackbox.security.decision/v1` receipts, action fingerprints, and
+  action↔effect reconciliation outcomes (Phase C).
+- Append-only run evidence hash chains, run roots, optional Ed25519 signatures,
+  and offline tamper detection (Phase D).
+- OTLP export/import foundation with explicit semantic loss ledger (Phase E).
+- `blackbox conform` public suite (Core/Recorder/Boundary/Forensic) and Claude
+  Code hooks reference integration (Phase F).
+- Protocol property tests; packaging remains a single published crate (Phase G).
+
 ## [1.8.0] — 2026-07-23
 
 ### 1.8 — Evidence semantics & forensic rigor

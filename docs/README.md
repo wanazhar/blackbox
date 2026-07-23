@@ -68,6 +68,8 @@ mkdocs serve                           # http://127.0.0.1:8000 only on your mach
 | Project memory pack schema | [reference/memory-pack.md](reference/memory-pack.md) |
 | Eval score.json | [reference/score.md](reference/score.md) |
 | Boundary / evidence / incidents (1.7–1.8) | [reference/boundary.md](reference/boundary.md) |
+| Native ingest / hooks / OTLP (1.9) | [guide/native-integrations.md](guide/native-integrations.md) |
+| Evidence protocol schemas (1.9) | [../spec/README.md](../spec/README.md) |
 | Stream / portable formats | [reference/stream-protocol.md](reference/stream-protocol.md), [reference/portable-format.md](reference/portable-format.md) |
 | Ambient decision order (normative) | [ambient-contract.md](ambient-contract.md) |
 
@@ -85,6 +87,8 @@ mkdocs serve                           # http://127.0.0.1:8000 only on your mach
 | [reference/boundary.md](reference/boundary.md) | Boundary / containment / evidence / incidents (1.7–1.8) |
 | [reference/score.md](reference/score.md) | Eval `score.json` including trust fields |
 | [reference/stream-protocol.md](reference/stream-protocol.md) | NDJSON stream |
+| [../spec/README.md](../spec/README.md) | Evidence protocol schemas + canonical rules (1.9) |
+| [guide/native-integrations.md](guide/native-integrations.md) | Native ingest, Claude hooks, OTLP, conform |
 
 ---
 

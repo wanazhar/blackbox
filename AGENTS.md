@@ -73,6 +73,15 @@ AnalysisPass   Export/Import    Serve/SSE      UI / CLI
 | `src/summary.rs` | Run summary builder | `build_summary` |
 | `src/transcript.rs` | Transcript rebuild | Transcript from store |
 | `src/boundary/` | Agent boundary contracts (1.7–1.8) | contracts, typed selectors, calibrated findings, containment, detect, provenance, correlate |
+| `src/protocol/` | Evidence protocol (1.9) | canonical JSON, schema catalog, stability, validation |
+| `src/native/` | Native ingest without PTY (1.9) | `NativeRecorder`, NDJSON, Unix socket |
+| `src/security/` | Security decisions (1.9) | decision receipts, action fingerprints, reconciliation |
+| `src/commitment/` | Run evidence commitments (1.9) | event hashes, chain, Ed25519 sign/verify |
+| `src/otlp/` | OTLP interop (1.9) | export, import, loss ledger |
+| `src/conformance/` | Conformance runner (1.9) | Core/Recorder/Boundary/Forensic profiles |
+| `src/integrations/` | Native harness refs (1.9) | Claude Code hooks adapter |
+| `spec/` | Published protocol schemas (1.9) | JSON Schema + canonical rules |
+| `test-vectors/` | Protocol test vectors (1.9) | valid/invalid/canonical/tamper |
 | `src/evidence/` | External evidence import (1.7) | `ExternalEvidenceEvent`, NDJSON importer |
 | `src/incident/` | Multi-run incidents (1.7–1.8) | `Incident`, graph, typed continuation |
 | `src/forensic/` | Forensic packs (1.7) | `ForensicPack` |
@@ -270,5 +279,6 @@ No Makefile or justfile -- use cargo directly. Stable Rust, edition 2021.
 - **1.6** = Verified runs & reproducibility — **1.6.0**
 - **1.7** = Agent boundary evidence & incident reconstruction — **1.7.0**
 - **1.8** = Evidence semantics & forensic rigor — **1.8.0** ([issue #6](https://github.com/wanazhar/blackbox/issues/6))
+- **1.9** = Evidence protocol, embeddability, native harness integration — in progress ([issue #7](https://github.com/wanazhar/blackbox/issues/7))
 
 Qualify before tag: `./scripts/release-qualify-unix.sh`. See `docs/ROADMAP.md`.

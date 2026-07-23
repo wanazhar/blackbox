@@ -215,10 +215,9 @@ mod tests {
         let _ = server.process_buffer(&rec, &fin).await;
 
         let run = store.get_run(&run_id).await.unwrap().unwrap();
-        assert_eq!(
-            format!("{:?}", run.status).to_lowercase().contains("succeed"),
-            true
-        );
+        assert!(format!("{:?}", run.status)
+            .to_lowercase()
+            .contains("succeed"));
         let events = store.get_events(&run_id).await.unwrap();
         assert!(events.iter().any(|e| e.kind == "tool.call"));
     }

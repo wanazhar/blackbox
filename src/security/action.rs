@@ -158,29 +158,21 @@ fn normalize_target(s: &str) -> String {
 
 fn normalize_path(p: &str) -> String {
     let p = p.trim().replace('\\', "/");
-    // Collapse // and strip trailing slash (except root).
-    let mut out = String::new();
+    let absolute = p.starts_with('/');
+    let mut parts: Vec<&str> = Vec::new();
     for part in p.split('/') {
-        if part.is_empty() && !out.is_empty() {
+        if part.is_empty() || part == "." {
             continue;
         }
-        if !out.is_empty() && out != "/" {
-            out.push('/');
-        } else if out.is_empty() && p.starts_with('/') {
-            out.push('/');
-        }
-        if part.is_empty() {
-            continue;
-        }
-        if part == "." {
-            continue;
-        }
-        out.push_str(part);
+        parts.push(part);
     }
-    if out.is_empty() {
-        p
+    if parts.is_empty() {
+        return if absolute { "/".into() } else { p };
+    }
+    if absolute {
+        format!("/{}", parts.join("/"))
     } else {
-        out
+        parts.join("/")
     }
 }
 

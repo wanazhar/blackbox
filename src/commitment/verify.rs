@@ -318,7 +318,7 @@ mod tests {
     fn detects_deletion() {
         let events = vec![ev("r", 1, "a"), ev("r", 2, "b"), ev("r", 3, "c")];
         let c = build_run_commitment("r", &events, &[], None, None, true);
-        let partial: Vec<_> = events.iter().cloned().take(2).collect();
+        let partial: Vec<_> = events.iter().take(2).cloned().collect();
         let report = verify_commitment(&c, &partial, None, &[]);
         assert!(!report.ok);
     }

@@ -33,7 +33,7 @@ fn detects_insertion_deletion_replacement_reordering() {
     assert!(!r.ok);
 
     // Deletion
-    let deleted: Vec<_> = events.iter().cloned().take(2).collect();
+    let deleted: Vec<_> = events.iter().take(2).cloned().collect();
     let r = verify_commitment(&commitment, &deleted, None, &[]);
     assert!(!r.ok);
     assert!(r.chain.faults.iter().any(|f| matches!(
@@ -72,7 +72,7 @@ fn optional_signature_verify_and_key_states() {
 
     // Revoked
     let pk = signed.public_key.clone();
-    let report = verify_commitment(&c, &events, None, &[pk.clone()]);
+    let report = verify_commitment(&c, &events, None, std::slice::from_ref(&pk));
     assert_eq!(report.signature, SignatureStatus::RevokedKey);
 
     // Direct API
@@ -86,12 +86,11 @@ fn optional_signature_verify_and_key_states() {
 fn commitment_validates_protocol_schema() {
     let events = vec![ev("r", 1, "x")];
     let c = build_run_commitment("r", &events, &[], None, None, false);
-    let mut v = serde_json::to_value(&c).unwrap();
+    let v = serde_json::to_value(&c).unwrap();
     // ensure required fields present
     assert!(v.get("root_hash").is_some());
     let report = validate_json_object(&v);
     assert!(report.ok, "{:?}", report.errors);
-    let _ = v;
 }
 
 #[test]

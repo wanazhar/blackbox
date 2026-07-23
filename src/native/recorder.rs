@@ -154,8 +154,8 @@ impl IdempotencyCache {
     }
 
     fn insert(&mut self, key: String, result: IdempotentResult) {
-        if self.map.contains_key(&key) {
-            self.map.insert(key, result);
+        if let std::collections::hash_map::Entry::Occupied(mut e) = self.map.entry(key.clone()) {
+            e.insert(result);
             return;
         }
         while self.order.len() >= self.max {

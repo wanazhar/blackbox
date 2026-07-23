@@ -122,7 +122,7 @@ pub fn build_boundary_trust(
         let allowed: Vec<String> = boundary
             .map(|b| {
                 let mut a = b.contract.allowed.provenance.clone();
-                a.extend(b.contract.allowed.network.clone());
+                a.extend(b.contract.allowed.network_as_strings());
                 a
             })
             .unwrap_or_default();

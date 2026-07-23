@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use super::selector::{network_entries_allow, MatchExplanation, ResourceEntry, ResourceSelector};
 use super::vocab::Disposition;
 
 /// Schema identifier for boundary contracts.
@@ -13,14 +14,18 @@ pub const BOUNDARY_SCHEMA: &str = "blackbox.boundary/v1";
 pub type DispositionMap = BTreeMap<String, Disposition>;
 
 /// Explicitly allowed resource classes under a boundary contract.
+///
+/// Network entries accept legacy strings **or** typed [`ResourceSelector`]
+/// objects (1.8). Destination authorization uses typed matchers, never raw
+/// substring containment.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AllowedResources {
     /// Target systems or ranges (e.g. `local_range`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub targets: Vec<String>,
-    /// Allowed network destinations / classes.
+    /// Allowed network destinations / classes (string tokens or typed selectors).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub network: Vec<String>,
+    pub network: Vec<ResourceEntry>,
     /// Allowed identities / principals.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub identities: Vec<String>,
@@ -36,6 +41,9 @@ pub struct AllowedResources {
     /// Allowed provenance / answer-source classes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub provenance: Vec<String>,
+    /// Allowed filesystem path selectors (1.8).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paths: Vec<ResourceEntry>,
 }
 
 impl AllowedResources {
@@ -48,17 +56,87 @@ impl AllowedResources {
             && self.tools.is_empty()
             && self.effects.is_empty()
             && self.provenance.is_empty()
+            && self.paths.is_empty()
     }
 
     /// Merge `other` into self (union, de-duplicated, sorted).
     pub fn merge_from(&mut self, other: &AllowedResources) {
         merge_unique(&mut self.targets, &other.targets);
-        merge_unique(&mut self.network, &other.network);
+        merge_entries(&mut self.network, &other.network);
         merge_unique(&mut self.identities, &other.identities);
         merge_unique(&mut self.data_classes, &other.data_classes);
         merge_unique(&mut self.tools, &other.tools);
         merge_unique(&mut self.effects, &other.effects);
         merge_unique(&mut self.provenance, &other.provenance);
+        merge_entries(&mut self.paths, &other.paths);
+    }
+
+    /// Whether a destination is authorized by typed network selectors.
+    pub fn network_allows(&self, destination: &str) -> MatchExplanation {
+        network_entries_allow(&self.network, destination)
+    }
+
+    /// Flatten network entries to string forms for provenance/source allow-lists.
+    pub fn network_as_strings(&self) -> Vec<String> {
+        self.network
+            .iter()
+            .map(|e| match e {
+                ResourceEntry::Legacy(s) => s.clone(),
+                ResourceEntry::Typed(sel) => selector_display(sel),
+            })
+            .collect()
+    }
+
+    /// True when a prohibited token appears in an allowed list.
+    pub fn contains_token(&self, token: &str) -> bool {
+        self.targets.iter().any(|t| t == token)
+            || self.network.iter().any(|n| n.matches_token(token))
+            || self.identities.iter().any(|i| i == token)
+            || self.data_classes.iter().any(|d| d == token)
+            || self.tools.iter().any(|t| t == token)
+            || self.effects.iter().any(|e| e == token)
+            || self.provenance.iter().any(|d| d == token)
+            || self.paths.iter().any(|p| p.matches_token(token))
+    }
+
+    /// Remove a token from all string lists and matching resource entries.
+    pub fn retain_not_token(&mut self, token: &str) {
+        self.targets.retain(|t| t != token);
+        self.network.retain(|t| !t.matches_token(token));
+        self.identities.retain(|t| t != token);
+        self.data_classes.retain(|t| t != token);
+        self.tools.retain(|t| t != token);
+        self.effects.retain(|t| t != token);
+        self.provenance.retain(|t| t != token);
+        self.paths.retain(|t| !t.matches_token(token));
+    }
+}
+
+fn selector_display(sel: &ResourceSelector) -> String {
+    match sel {
+        ResourceSelector::DomainExact { value }
+        | ResourceSelector::DomainSuffix { value }
+        | ResourceSelector::Cidr { value }
+        | ResourceSelector::IpExact { value }
+        | ResourceSelector::UnixSocket { value }
+        | ResourceSelector::PathExact { value }
+        | ResourceSelector::PathPrefix { value }
+        | ResourceSelector::Identity { value }
+        | ResourceSelector::Tool { value }
+        | ResourceSelector::Effect { value }
+        | ResourceSelector::ProvenanceClass { value }
+        | ResourceSelector::ClassToken { value } => value.clone(),
+        ResourceSelector::UrlPrefix {
+            scheme,
+            host,
+            path,
+        } => format!(
+            "{}://{}{}",
+            scheme.as_deref().unwrap_or("*"),
+            host,
+            path.as_deref().unwrap_or("")
+        ),
+        ResourceSelector::Port { value } => value.to_string(),
     }
 }
 
@@ -70,6 +148,17 @@ fn merge_unique(dst: &mut Vec<String>, src: &[String]) {
     }
     dst.sort();
     dst.dedup();
+}
+
+fn merge_entries(dst: &mut Vec<ResourceEntry>, src: &[ResourceEntry]) {
+    for s in src {
+        let key = s.key();
+        if !dst.iter().any(|x| x.key() == key) {
+            dst.push(s.clone());
+        }
+    }
+    dst.sort_by_key(|a| a.key());
+    dst.dedup_by(|a, b| a.key() == b.key());
 }
 
 /// Machine-readable purpose, allowed capabilities, prohibitions, and
@@ -138,7 +227,7 @@ impl BoundaryContract {
         let mut c = Self::new();
         c.purpose = Some("capability evaluation".into());
         c.allowed.targets = vec!["local-range".into()];
-        c.allowed.network = vec!["package-proxy.internal".into()];
+        c.allowed.network = vec![ResourceEntry::Legacy("package-proxy.internal".into())];
         c.allowed.identities = vec!["eval-workload".into()];
         c.allowed.data_classes = vec!["synthetic".into()];
         c.prohibited = vec![
@@ -169,14 +258,7 @@ impl BoundaryContract {
         // Prohibited tokens should not also appear as allowed tools/effects without
         // an explicit disposition override — warn as error for determinism.
         for p in &self.prohibited {
-            if self.allowed.tools.iter().any(|t| t == p)
-                || self.allowed.effects.iter().any(|e| e == p)
-                || self.allowed.network.iter().any(|n| n == p)
-                || self.allowed.targets.iter().any(|t| t == p)
-                || self.allowed.identities.iter().any(|i| i == p)
-                || self.allowed.data_classes.iter().any(|d| d == p)
-                || self.allowed.provenance.iter().any(|d| d == p)
-            {
+            if self.allowed.contains_token(p) {
                 errs.push(format!(
                     "token {p:?} is both prohibited and listed under allowed"
                 ));
@@ -204,14 +286,7 @@ impl BoundaryContract {
         if self.prohibited.iter().any(|p| p == token) {
             return Disposition::HardProhibition;
         }
-        if self.allowed.tools.iter().any(|t| t == token)
-            || self.allowed.effects.iter().any(|e| e == token)
-            || self.allowed.network.iter().any(|n| n == token)
-            || self.allowed.targets.iter().any(|t| t == token)
-            || self.allowed.identities.iter().any(|i| i == token)
-            || self.allowed.data_classes.iter().any(|d| d == token)
-            || self.allowed.provenance.iter().any(|d| d == token)
-        {
+        if self.allowed.contains_token(token) {
             return Disposition::Allowed;
         }
         Disposition::Unknown
@@ -237,13 +312,7 @@ impl BoundaryContract {
                 out.prohibited.push(p.clone());
             }
             // Child prohibition removes from allowed sets.
-            out.allowed.targets.retain(|t| t != p);
-            out.allowed.network.retain(|t| t != p);
-            out.allowed.identities.retain(|t| t != p);
-            out.allowed.data_classes.retain(|t| t != p);
-            out.allowed.tools.retain(|t| t != p);
-            out.allowed.effects.retain(|t| t != p);
-            out.allowed.provenance.retain(|t| t != p);
+            out.allowed.retain_not_token(p);
         }
         out.prohibited.sort();
         out.prohibited.dedup();
@@ -298,12 +367,39 @@ mod tests {
     #[test]
     fn inherit_child_prohibition_removes_allowed() {
         let mut parent = BoundaryContract::new();
-        parent.allowed.network.push("public_network".into());
+        parent
+            .allowed
+            .network
+            .push(ResourceEntry::Legacy("public_network".into()));
         let mut child = BoundaryContract::new();
         child.prohibited.push("public_network".into());
         let merged = BoundaryContract::inherit_from(&parent, &child);
-        assert!(!merged.allowed.network.iter().any(|n| n == "public_network"));
+        assert!(!merged
+            .allowed
+            .network
+            .iter()
+            .any(|n| n.matches_token("public_network")));
         assert!(merged.prohibited.iter().any(|p| p == "public_network"));
+    }
+
+    #[test]
+    fn typed_network_selector_serde() {
+        let mut c = BoundaryContract::new();
+        c.allowed.network.push(ResourceEntry::Typed(
+            ResourceSelector::DomainExact {
+                value: "packages.internal".into(),
+            },
+        ));
+        c.allowed.network.push(ResourceEntry::Legacy("10.0.0.0/8".into()));
+        let json = serde_json::to_string(&c).unwrap();
+        let back: BoundaryContract = serde_json::from_str(&json).unwrap();
+        assert_eq!(c, back);
+        assert!(back.allowed.network_allows("https://packages.internal/x").is_allow());
+        assert!(back.allowed.network_allows("10.1.2.3").is_allow());
+        assert!(!back
+            .allowed
+            .network_allows("attacker-packages.internal")
+            .is_allow());
     }
 
     #[test]

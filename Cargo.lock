@@ -233,6 +233,7 @@ dependencies = [
  "futures-util",
  "hex",
  "hmac",
+ "ipnet",
  "libc",
  "notify",
  "object_store",
@@ -256,6 +257,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid",
 ]
 

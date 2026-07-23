@@ -574,7 +574,11 @@ fn case_benign_admin_useradd() -> CorpusCase {
 fn case_allowed_proxy_destination() -> CorpusCase {
     let mut c = BoundaryContract::eval_example();
     // Allow the package proxy host explicitly.
-    c.allowed.network.push("package-proxy.internal".into());
+    c.allowed
+        .network
+        .push(crate::boundary::ResourceEntry::Legacy(
+            "package-proxy.internal".into(),
+        ));
     let mut ext =
         ExternalEvidenceEvent::new("proxy", "proxy", "allow-1", EvidenceAction::HttpRequest);
     ext.destination = Some("https://package-proxy.internal/pypi/simple".into());

@@ -1,8 +1,9 @@
 # Roadmap and quality bar
 
-What “good” means for blackbox, what each major version promised, what **1.4–1.6** shipped, and what **1.7** has qualified for release.
+What “good” means for blackbox, what each major version promised, what **1.4–1.6** shipped, and what **1.7–1.8** target next.
 
 This is **product direction**, not a how-to. Operators: [guide/README.md](guide/README.md).
+**1.8 (in progress):** [issue #6](https://github.com/wanazhar/blackbox/issues/6) — typed policy semantics, calibrated findings, citation-complete forensics. Plan: [plan/evidence-semantics-1.8.md](plan/evidence-semantics-1.8.md).
 **1.7 (implementation complete; release pending):** [issue #5](https://github.com/wanazhar/blackbox/issues/5) — agent boundaries, containment evidence, incident reconstruction. Plan: [plan/agent-boundary-1.7.md](plan/agent-boundary-1.7.md).
 **1.6 (shipped 1.6.0):** [issue #4](https://github.com/wanazhar/blackbox/issues/4) — verified runs, experiments, reproducibility, durable evidence.
 **1.5 plan (shipped):** [plan/trace-integrity-1.5.md](plan/trace-integrity-1.5.md). Epic: [issue #3](https://github.com/wanazhar/blackbox/issues/3).
@@ -44,6 +45,7 @@ If a change weakens a bar, it needs an explicit docs + test story.
 | **1.5** | **Trace integrity & scale** | Shipped **1.5.0** — [issue #3](https://github.com/wanazhar/blackbox/issues/3) |
 | **1.6** | **Verified runs & reproducibility** | Shipped **1.6.0** — [issue #4](https://github.com/wanazhar/blackbox/issues/4) |
 | **1.7** | **Agent boundary evidence & incident reconstruction** | Implementation complete; qualified before tag — [issue #5](https://github.com/wanazhar/blackbox/issues/5) |
+| **1.8** | **Evidence semantics & forensic rigor** | In progress — [issue #6](https://github.com/wanazhar/blackbox/issues/6) · [plan](plan/evidence-semantics-1.8.md) |
 
 ### 1.1 adoption bar (permanent)
 

@@ -72,9 +72,9 @@ AnalysisPass   Export/Import    Serve/SSE      UI / CLI
 | `src/pipeline/batch_ingest.rs` | Bounded batch SQLite writer (1.5) | `BatchIngestor` |
 | `src/summary.rs` | Run summary builder | `build_summary` |
 | `src/transcript.rs` | Transcript rebuild | Transcript from store |
-| `src/boundary/` | Agent boundary contracts (1.7) | contracts, containment, detect, provenance, correlate |
+| `src/boundary/` | Agent boundary contracts (1.7–1.8) | contracts, typed selectors, calibrated findings, containment, detect, provenance, correlate |
 | `src/evidence/` | External evidence import (1.7) | `ExternalEvidenceEvent`, NDJSON importer |
-| `src/incident/` | Multi-run incidents (1.7) | `Incident`, graph |
+| `src/incident/` | Multi-run incidents (1.7–1.8) | `Incident`, graph, typed continuation |
 | `src/forensic/` | Forensic packs (1.7) | `ForensicPack` |
 | `src/views.rs` | JSON view types | All `*View` structs for `--json` |
 | `src/output.rs` | Output formatting | JSON envelope, human formatting |

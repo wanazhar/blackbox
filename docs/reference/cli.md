@@ -1092,8 +1092,11 @@ Bounded local forensic pack (recursively redacted; exact-citation and content-ha
 blackbox conform [--profile core|recorder|boundary|forensic] [--vectors PATH] [--json]
 ```
 
-Public protocol conformance runner. Profiles declare mandatory cases for
-canonical form, native ingest, security decisions, and forensic commitments.
+Public protocol conformance runner. Each machine-readable case declares
+`mandatory`, `optional`, or `unsupported_ok`; unsupported capabilities are
+explicit skips rather than silent passes. Profiles cover canonical form,
+native ingest, security decisions, citations, redaction, migration, and
+forensic commitments.
 Exit non-zero under `--strict` (default) when any mandatory case fails.
 Schemas: [`/spec`](../../spec/README.md). Vectors: [`/test-vectors`](../../test-vectors/).
 Native integration guide: [native-integrations.md](../guide/native-integrations.md).

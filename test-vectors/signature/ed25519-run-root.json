@@ -1,0 +1,15 @@
+{
+  "id": "ed25519-run-root",
+  "description": "Deterministic Ed25519 signature over the canonical run-root hex string",
+  "expect": "pass",
+  "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "root_hash": "abababababababababababababababababababababababababababababababab",
+  "public_key": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
+  "signature": "0235194acd272148c4a5a0f2807d4580716cba46531b969e1165406cddcb8f60a0bb107ec6182e52fd12ae24eca80c527f9ffeb2d7b4f875d13f9c3c1cfca007",
+  "states": {
+    "trusted": "valid",
+    "not_in_trust_set": "unknown_key",
+    "revoked": "revoked_key",
+    "modified_root": "invalid"
+  }
+}

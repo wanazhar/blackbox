@@ -1,0 +1,19 @@
+{
+  "id": "commitment-chain-mutations",
+  "description": "Every supported post-commit event mutation must fail verification",
+  "expect": "fail",
+  "base_events": [
+    {"id": "e1", "sequence": 1, "kind": "tool.call"},
+    {"id": "e2", "sequence": 2, "kind": "tool.result"},
+    {"id": "e3", "sequence": 3, "kind": "run.ended"}
+  ],
+  "mutations": [
+    {"kind": "insert", "at": 1},
+    {"kind": "delete", "at": 1},
+    {"kind": "replace", "at": 1},
+    {"kind": "reorder", "left": 0, "right": 1},
+    {"kind": "truncate", "length": 2},
+    {"kind": "replay", "at": 1},
+    {"kind": "mixed_version", "at": 1, "schema": "blackbox.event/v2"}
+  ]
+}

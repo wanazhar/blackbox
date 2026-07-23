@@ -1,0 +1,12 @@
+{
+  "id": "unsupported-version",
+  "description": "Unknown schema versions fail predictably",
+  "expect": "fail",
+  "input": {
+    "schema": "blackbox.run/v99",
+    "id": "run-future",
+    "status": "running",
+    "started_at": "2026-07-23T00:00:00Z"
+  },
+  "expected_error_path": "/schema"
+}

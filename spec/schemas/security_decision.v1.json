@@ -23,10 +23,10 @@
     },
     "policy_hash": { "type": ["string", "null"] },
     "rule_ids": { "type": "array", "items": { "type": "string" } },
-    "identity": { "type": "object" },
-    "override": { "type": ["object", "null"] },
+    "identity": { "type": ["object", "null"] },
+    "override_info": { "type": ["object", "null"] },
     "acknowledgement": { "type": ["object", "null"] },
-    "decided_at": { "type": "string", "minLength": 1 },
+    "decided_at": { "type": "string", "pattern": "Z$" },
     "integrity": {
       "type": "string",
       "enum": ["unverified", "hash_ok", "signed_verified", "signed_invalid"]

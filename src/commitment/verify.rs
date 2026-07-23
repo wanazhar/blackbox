@@ -82,6 +82,12 @@ pub struct CommitmentVerifyReport {
     pub root_ok: bool,
     /// Signature status (Missing if none).
     pub signature: SignatureStatus,
+    /// full | partial_unproven
+    pub verification_scope: String,
+    /// Events supplied to this verification.
+    pub events_provided: u64,
+    /// Events covered by the committed root.
+    pub events_committed: u64,
     /// Limitations still apply even when ok.
     pub limitations: Vec<String>,
 }
@@ -274,13 +280,25 @@ pub fn verify_commitment(
         }
     };
 
-    let ok = chain.ok && root_ok;
+    let full_range = commitment.event_count == events.len() as u64;
+    let ok = chain.ok && root_ok && full_range;
+    let mut limitations = commitment.limitations.clone();
+    if !full_range {
+        limitations.push("partial_range_not_cryptographically_proven_without_range_proof".into());
+    }
     CommitmentVerifyReport {
         ok,
         chain,
         root_ok,
         signature,
-        limitations: commitment.limitations.clone(),
+        verification_scope: if full_range {
+            "full".into()
+        } else {
+            "partial_unproven".into()
+        },
+        events_provided: events.len() as u64,
+        events_committed: commitment.event_count,
+        limitations,
     }
 }
 
@@ -330,11 +348,12 @@ mod tests {
         c.links.swap(0, 1);
         let report = verify_commitment(&c, &events, None, &[]);
         assert!(!report.ok);
-        assert!(report
-            .chain
-            .faults
-            .iter()
-            .any(|f| matches!(f, ChainFault::Reordering { .. } | ChainFault::LinkCorrupt { .. } | ChainFault::PrevMismatch { .. })));
+        assert!(report.chain.faults.iter().any(|f| matches!(
+            f,
+            ChainFault::Reordering { .. }
+                | ChainFault::LinkCorrupt { .. }
+                | ChainFault::PrevMismatch { .. }
+        )));
     }
 
     #[test]
@@ -345,10 +364,12 @@ mod tests {
         replaced[1].kind = "TAMPERED".into();
         let report = verify_commitment(&c, &replaced, None, &[]);
         assert!(!report.ok);
-        assert!(report.chain.faults.iter().any(|f| matches!(
-            f,
-            ChainFault::Replacement { .. } | ChainFault::LinkCorrupt { .. }
-        )) || !report.root_ok);
+        assert!(
+            report.chain.faults.iter().any(|f| matches!(
+                f,
+                ChainFault::Replacement { .. } | ChainFault::LinkCorrupt { .. }
+            )) || !report.root_ok
+        );
     }
 
     #[test]
@@ -383,5 +404,20 @@ mod tests {
         // Signature may still verify over the *committed* root_hash bytes,
         // but overall ok is false and limitations still apply.
         assert!(!report.limitations.is_empty());
+    }
+
+    #[test]
+    fn partial_range_reports_proof_limit_explicitly() {
+        let events = vec![ev("r", 1, "a"), ev("r", 2, "b"), ev("r", 3, "c")];
+        let commitment = build_run_commitment("r", &events, &[], None, None, false);
+        let report = verify_commitment(&commitment, &events[1..], None, &[]);
+        assert!(!report.ok);
+        assert_eq!(report.verification_scope, "partial_unproven");
+        assert_eq!(report.events_provided, 2);
+        assert_eq!(report.events_committed, 3);
+        assert!(report
+            .limitations
+            .iter()
+            .any(|limitation| limitation.contains("range_proof")));
     }
 }

@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/wanazhar/blackbox/spec/schemas/forensic_pack.v1.json",
+  "title": "Blackbox forensic pack v1",
+  "type": "object",
+  "required": ["schema", "run_id", "created_at", "event_window", "edges", "fingerprints", "findings", "external_summaries", "coverage_gaps", "original_pointers", "pack_hash"],
+  "properties": {
+    "schema": {"const": "blackbox.forensic.pack/v1"},
+    "evidence_layers": {"type": "object"},
+    "run_id": {"type": "string", "minLength": 1},
+    "created_at": {"type": "string", "pattern": "Z$"},
+    "policy_hash": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "scope": {"type": ["object", "null"]},
+    "event_window": {"type": "array"},
+    "edges": {"type": "array"},
+    "fingerprints": {"type": "array", "items": {"type": "string"}},
+    "findings": {"type": "array"},
+    "external_summaries": {"type": "array"},
+    "coverage_gaps": {"type": "array", "items": {"type": "string"}},
+    "original_pointers": {"type": "array", "items": {"type": "string"}},
+    "derived_claims": {"type": "array"},
+    "containment_receipts": {"type": "array"},
+    "provenance_records": {"type": "array"},
+    "required_evidence": {"type": "array", "items": {"type": "string"}},
+    "incident_graph": {"type": ["object", "null"]},
+    "pack_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  },
+  "additionalProperties": true
+}

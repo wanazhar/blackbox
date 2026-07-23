@@ -28,6 +28,8 @@ Inventory is embedded in the reference implementation as
   compatible) unless a schema is marked fail-closed for a specific path.
 - Producers SHOULD NOT use unknown fields to assert integrity upgrades.
 - Canonical hashes include unknown fields that are present.
+- Unknown schema ids or unsupported `/vN` versions fail predictably. Unknown
+  fields are forward-compatible; unknown semantics are not interpreted as v1.
 
 ## Portable archives
 

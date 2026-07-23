@@ -1,0 +1,9 @@
+{
+  "id": "citation-complete",
+  "description": "Every derived claim citation resolves to an immutable original pointer",
+  "expect": "pass",
+  "original_pointers": ["event:e1", "external:x1", "finding:f1"],
+  "claims": [
+    {"claim": "the tool call preceded the external effect", "citations": ["event:e1", "external:x1"]}
+  ]
+}

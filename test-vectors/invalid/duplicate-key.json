@@ -1,0 +1,7 @@
+{
+  "id": "duplicate-key",
+  "description": "Duplicate keys are rejected rather than silently taking the last value",
+  "expect": "fail_raw",
+  "raw_input": "{\"schema\":\"blackbox.run/v1\",\"id\":\"first\",\"id\":\"second\",\"status\":\"running\",\"started_at\":\"2026-07-23T00:00:00Z\"}",
+  "expected_error": "duplicate object key"
+}

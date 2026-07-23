@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/wanazhar/blackbox/spec/schemas/portable.v2.json",
+  "title": "Blackbox portable archive v2 envelope",
+  "type": "object",
+  "required": ["schema"],
+  "properties": {
+    "schema": {"const": "blackbox.portable/v2"},
+    "format": {"type": "string"},
+    "manifest": {"type": "object"},
+    "run": {"type": "object"},
+    "events": {"type": "array"},
+    "blobs": {"type": "object"},
+    "integrity": {"type": "object"}
+  },
+  "additionalProperties": true
+}

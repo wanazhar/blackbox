@@ -7,7 +7,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use blackbox::protocol::{
     canonical_hash, canonical_string, find_schema, validate_json_object, SCHEMA_CATALOG,
@@ -28,6 +28,10 @@ struct VectorFile {
     expected_hash: Option<String>,
     #[serde(default)]
     expected_error_path: Option<String>,
+    #[serde(default)]
+    raw_input: Option<String>,
+    #[serde(default)]
+    expected_error: Option<String>,
 }
 
 fn repo_root() -> PathBuf {
@@ -47,8 +51,8 @@ fn load_vectors(dir: &str) -> Vec<(PathBuf, VectorFile)> {
             continue;
         }
         let text = fs::read_to_string(&path).unwrap();
-        let v: VectorFile = serde_json::from_str(&text)
-            .unwrap_or_else(|e| panic!("parse {}: {e}", path.display()));
+        let v: VectorFile =
+            serde_json::from_str(&text).unwrap_or_else(|e| panic!("parse {}: {e}", path.display()));
         out.push((path, v));
     }
     out.sort_by(|a, b| a.0.cmp(&b.0));
@@ -76,7 +80,9 @@ fn catalog_matches_spec_file() {
 #[test]
 fn surface_inventory_nonempty() {
     assert!(SURFACE_INVENTORY.len() >= 10);
-    assert!(SURFACE_INVENTORY.iter().any(|s| s.name == "blackbox.run/v1"));
+    assert!(SURFACE_INVENTORY
+        .iter()
+        .any(|s| s.name == "blackbox.run/v1"));
     assert!(SURFACE_INVENTORY
         .iter()
         .any(|s| s.name == "blackbox.security.decision/v1"));
@@ -88,18 +94,23 @@ fn valid_vectors_pass() {
         assert_eq!(v.expect, "pass", "{}", path.display());
         let input = v.input.expect("input");
         let report = validate_json_object(&input);
-        assert!(
-            report.ok,
-            "vector {} failed: {:?}",
-            v.id,
-            report.errors
-        );
+        assert!(report.ok, "vector {} failed: {:?}", v.id, report.errors);
     }
 }
 
 #[test]
 fn invalid_vectors_fail() {
     for (path, v) in load_vectors("invalid") {
+        if v.expect == "fail_raw" {
+            let error =
+                blackbox::protocol::parse_json_strict(v.raw_input.as_deref().expect("raw_input"))
+                    .unwrap_err()
+                    .to_string();
+            if let Some(expected) = v.expected_error.as_deref() {
+                assert!(error.contains(expected), "{}: {error}", path.display());
+            }
+            continue;
+        }
         assert_eq!(v.expect, "fail", "{}", path.display());
         let input = v.input.expect("input");
         let report = validate_json_object(&input);
@@ -202,20 +213,208 @@ fn rust_event_envelope_validates() {
 
 #[test]
 fn schema_files_exist() {
-    for name in [
-        "run.v1.json",
-        "event.v1.json",
-        "security_decision.v1.json",
-        "commitment_run.v1.json",
-        "reconcile_outcome.v1.json",
-        "native_ingest.v1.json",
-        "catalog.json",
-    ] {
+    let catalog: Value = serde_json::from_str(
+        &fs::read_to_string(repo_root().join("spec/schemas/catalog.json")).unwrap(),
+    )
+    .unwrap();
+    for entry in catalog["schemas"].as_array().unwrap() {
+        let name = entry["file"].as_str().expect("catalog file");
         let p = repo_root().join("spec/schemas").join(name);
         assert!(p.is_file(), "missing schema file {}", p.display());
         let v: Value = serde_json::from_str(&fs::read_to_string(&p).unwrap()).unwrap();
-        assert!(v.is_object());
+        let validator = jsonschema::validator_for(&v)
+            .unwrap_or_else(|error| panic!("schema {} does not compile: {error}", p.display()));
+        assert_eq!(
+            v["properties"]["schema"]["const"],
+            entry["id"],
+            "{} protocol id does not match catalog",
+            p.display()
+        );
+        assert!(
+            !validator.is_valid(&json!({"schema": "blackbox.invalid/v1"})),
+            "{} accepts a different protocol id",
+            p.display()
+        );
     }
+}
+
+fn schema_for(protocol_id: &str) -> Value {
+    let catalog: Value = serde_json::from_str(
+        &fs::read_to_string(repo_root().join("spec/schemas/catalog.json")).unwrap(),
+    )
+    .unwrap();
+    let file = catalog["schemas"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["id"] == protocol_id)
+        .and_then(|entry| entry["file"].as_str())
+        .unwrap_or_else(|| panic!("schema not cataloged: {protocol_id}"));
+    serde_json::from_str(&fs::read_to_string(repo_root().join("spec/schemas").join(file)).unwrap())
+        .unwrap()
+}
+
+fn assert_published_schema_accepts(value: &Value) {
+    let protocol_id = value["schema"].as_str().expect("schema string");
+    let schema = schema_for(protocol_id);
+    let validator = jsonschema::validator_for(&schema).unwrap();
+    let errors: Vec<String> = validator
+        .iter_errors(value)
+        .map(|error| error.to_string())
+        .collect();
+    assert!(errors.is_empty(), "{protocol_id}: {errors:?}\n{value:#}");
+}
+
+#[test]
+fn valid_vectors_match_published_schemas() {
+    for (path, vector) in load_vectors("valid") {
+        let input = vector.input.expect("input");
+        assert_published_schema_accepts(&input);
+        assert!(
+            validate_json_object(&input).ok,
+            "runtime validation differs for {}",
+            path.display()
+        );
+    }
+}
+
+#[test]
+fn invalid_vectors_are_rejected_by_published_schemas() {
+    for (path, vector) in load_vectors("invalid") {
+        let Some(input) = vector.input else {
+            continue;
+        };
+        let Some(protocol_id) = input["schema"].as_str() else {
+            continue;
+        };
+        if find_schema(protocol_id).is_none() {
+            continue;
+        }
+        let schema = schema_for(protocol_id);
+        let validator = jsonschema::validator_for(&schema).unwrap();
+        assert!(
+            !validator.is_valid(&input),
+            "published schema accepted invalid vector {}",
+            path.display()
+        );
+    }
+}
+
+#[test]
+fn rust_protocol_objects_match_published_schemas() {
+    use blackbox::commitment::build_run_commitment;
+    use blackbox::conformance::{run_conformance, ConformanceLevel};
+    use blackbox::core::event::{EventSource, TraceEvent};
+    use blackbox::core::run::Run;
+    use blackbox::otlp::LossLedger;
+    use blackbox::security::{ActionFingerprint, DecisionKind, SecurityDecision};
+
+    let run = Run::new(vec!["true".into()], "/tmp".into());
+    let mut run_value = serde_json::to_value(&run).unwrap();
+    run_value["schema"] = json!("blackbox.run/v1");
+    assert_published_schema_accepts(&run_value);
+
+    let mut event = TraceEvent::new(&run.id, EventSource::System, "run.started");
+    event.sequence = 1;
+    let mut event_value = serde_json::to_value(&event).unwrap();
+    event_value["schema"] = json!("blackbox.event/v1");
+    assert_published_schema_accepts(&event_value);
+
+    let fingerprint = ActionFingerprint::tool("read", None);
+    let decision = SecurityDecision::builder("harness", DecisionKind::Allow, fingerprint.hash())
+        .action(fingerprint)
+        .build();
+    assert_published_schema_accepts(&serde_json::to_value(decision).unwrap());
+
+    let commitment = build_run_commitment(&run.id, &[event], &[], None, None, true);
+    assert_published_schema_accepts(&serde_json::to_value(commitment).unwrap());
+
+    let report = run_conformance(
+        ConformanceLevel::Core,
+        Some(&repo_root().join("test-vectors")),
+    );
+    assert_published_schema_accepts(&serde_json::to_value(report).unwrap());
+
+    let loss = LossLedger::new("export");
+    assert_published_schema_accepts(&serde_json::to_value(loss).unwrap());
+}
+
+#[test]
+fn signature_vector_is_reproducible_and_reports_key_states() {
+    use blackbox::commitment::{sign_run_root, verify_run_root_signature, SignatureStatus};
+    use ed25519_dalek::SigningKey;
+
+    let value: Value = serde_json::from_str(
+        &fs::read_to_string(repo_root().join("test-vectors/signature/ed25519-run-root.json"))
+            .unwrap(),
+    )
+    .unwrap();
+    let seed: [u8; 32] = hex::decode(value["seed"].as_str().unwrap())
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let key = SigningKey::from_bytes(&seed);
+    let root = value["root_hash"].as_str().unwrap();
+    let signed = sign_run_root(&key, root);
+    assert_eq!(signed.public_key, value["public_key"]);
+    assert_eq!(signed.signature, value["signature"]);
+    assert_eq!(
+        verify_run_root_signature(
+            &signed,
+            root,
+            Some(std::slice::from_ref(&signed.public_key)),
+            &[]
+        ),
+        SignatureStatus::Valid
+    );
+    assert_eq!(
+        verify_run_root_signature(&signed, root, Some(&["ff".repeat(32)]), &[]),
+        SignatureStatus::UnknownKey
+    );
+    assert_eq!(
+        verify_run_root_signature(
+            &signed,
+            root,
+            None,
+            std::slice::from_ref(&signed.public_key)
+        ),
+        SignatureStatus::RevokedKey
+    );
+    assert_eq!(
+        verify_run_root_signature(&signed, &"cd".repeat(32), None, &[]),
+        SignatureStatus::Invalid
+    );
+}
+
+#[tokio::test]
+async fn portable_migration_vector_round_trips_to_v2() {
+    use std::sync::Arc;
+
+    use blackbox::export::portable::{export_portable, import_portable};
+    use blackbox::storage::store::InMemoryStore;
+    use blackbox::storage::TraceStore;
+
+    let vector: Value = serde_json::from_str(
+        &fs::read_to_string(repo_root().join("test-vectors/migration/portable-v1-to-v2.json"))
+            .unwrap(),
+    )
+    .unwrap();
+    let input = serde_json::to_string(&vector["input"]).unwrap();
+    let store: Arc<dyn TraceStore> = Arc::new(InMemoryStore::new());
+    let imported = import_portable(store.as_ref(), &input, false)
+        .await
+        .unwrap();
+    let run = store.get_run(&imported.run_id).await.unwrap().unwrap();
+    let events = store.get_events(&imported.run_id).await.unwrap();
+    let exported = export_portable(store.as_ref(), &run, &events, true)
+        .await
+        .unwrap();
+    let output: Value = serde_json::from_str(&exported).unwrap();
+    assert_eq!(output["schema"], "blackbox.portable/v2");
+    assert_eq!(output["version"], 2);
+    assert_eq!(output["run"]["id"], vector["expected"]["run_id"]);
+    assert_eq!(output["events"].as_array().unwrap().len(), 0);
+    assert_published_schema_accepts(&output);
 }
 
 #[test]

@@ -1,0 +1,12 @@
+{
+  "id": "ambiguous-timestamp",
+  "description": "A timestamp without an explicit UTC designator is rejected",
+  "expect": "fail",
+  "input": {
+    "schema": "blackbox.run/v1",
+    "id": "run-time",
+    "status": "running",
+    "started_at": "2026-07-23 00:00:00"
+  },
+  "expected_error_path": "/started_at"
+}

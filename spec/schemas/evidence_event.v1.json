@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/wanazhar/blackbox/spec/schemas/evidence_event.v1.json",
+  "title": "Blackbox external evidence event v1",
+  "type": "object",
+  "required": ["schema", "id", "source", "sensor", "source_event_id", "ingested_at", "action", "integrity"],
+  "properties": {
+    "schema": {"const": "blackbox.evidence.event/v1"},
+    "id": {"type": "string", "minLength": 1},
+    "source": {"type": "string", "minLength": 1},
+    "sensor": {"type": "string", "minLength": 1},
+    "source_event_id": {"type": "string", "minLength": 1},
+    "source_sequence": {"type": ["integer", "null"], "minimum": 0},
+    "occurred_at": {"type": ["string", "null"], "pattern": "Z$"},
+    "observed_at": {"type": ["string", "null"], "pattern": "Z$"},
+    "ingested_at": {"type": "string", "pattern": "Z$"},
+    "clock_uncertainty": {"type": ["string", "object"]},
+    "identity": {"type": "object"},
+    "action": {"type": "string", "minLength": 1},
+    "object": {"type": ["string", "null"]},
+    "destination": {"type": ["string", "null"]},
+    "outcome": {"type": "string"},
+    "original_payload_hash": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "payload_blob": {"type": ["string", "null"]},
+    "integrity": {"type": "string", "enum": ["hash_ok", "signed_verified", "signed_invalid", "unverified", "transformed"]},
+    "transformations": {"type": "array", "items": {"type": "string"}},
+    "coverage_notes": {"type": "array", "items": {"type": "string"}},
+    "linked_run_id": {"type": ["string", "null"]},
+    "attributes": {"type": "object"}
+  },
+  "additionalProperties": true
+}

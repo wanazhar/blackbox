@@ -1,0 +1,10 @@
+{
+  "id": "citation-dangling",
+  "description": "A derived claim with a dangling citation fails closed",
+  "expect": "fail",
+  "original_pointers": ["event:e1"],
+  "claims": [
+    {"claim": "unsupported effect", "citations": ["external:missing"]}
+  ],
+  "expected_error_path": "/claims/0/citations/0"
+}

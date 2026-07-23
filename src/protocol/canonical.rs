@@ -24,6 +24,10 @@
 //! Two independently written encoders given the same logical object MUST produce
 //! the same canonical byte sequence and therefore the same SHA-256 hash.
 
+use std::collections::HashSet;
+use std::fmt;
+
+use serde::de::{Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
 use sha2::{Digest, Sha256};
 
 /// Algorithm identifier embedded in commitment docs.
@@ -43,7 +47,9 @@ pub enum CanonicalError {
 impl std::fmt::Display for CanonicalError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NonFiniteNumber => write!(f, "non-finite number is not allowed in canonical JSON"),
+            Self::NonFiniteNumber => {
+                write!(f, "non-finite number is not allowed in canonical JSON")
+            }
             Self::InvalidJson(m) => write!(f, "invalid JSON: {m}"),
             Self::Serialize(m) => write!(f, "serialize error: {m}"),
         }
@@ -88,10 +94,109 @@ pub fn canonical_string_of<T: serde::Serialize>(value: &T) -> Result<String, Can
 
 /// Parse raw JSON text, reject non-finite numbers, return canonical form.
 pub fn canonicalize_raw_json(raw: &str) -> Result<String, CanonicalError> {
-    let value: serde_json::Value =
-        serde_json::from_str(raw).map_err(|e| CanonicalError::InvalidJson(e.to_string()))?;
-    // serde_json rejects NaN/Infinity on parse by default for standard JSON.
+    let value = parse_json_strict(raw)?;
     canonical_string(&value)
+}
+
+/// Parse JSON without silently applying last-key-wins semantics.
+///
+/// Duplicate object keys are ambiguous hash inputs and therefore fail at any
+/// nesting depth. `serde_json` also rejects invalid escapes, non-finite
+/// numbers, trailing data, and invalid UTF-8 before values reach this API.
+pub fn parse_json_strict(raw: &str) -> Result<serde_json::Value, CanonicalError> {
+    serde_json::from_str::<UniqueValue>(raw)
+        .map(|value| value.0)
+        .map_err(|e| CanonicalError::InvalidJson(e.to_string()))
+}
+
+struct UniqueValue(serde_json::Value);
+
+impl<'de> Deserialize<'de> for UniqueValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_any(UniqueValueVisitor)
+    }
+}
+
+struct UniqueValueVisitor;
+
+impl<'de> Visitor<'de> for UniqueValueVisitor {
+    type Value = UniqueValue;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a JSON value without duplicate object keys")
+    }
+
+    fn visit_unit<E>(self) -> Result<Self::Value, E> {
+        Ok(UniqueValue(serde_json::Value::Null))
+    }
+
+    fn visit_none<E>(self) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        self.visit_unit()
+    }
+
+    fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E> {
+        Ok(UniqueValue(serde_json::Value::Bool(value)))
+    }
+
+    fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E> {
+        Ok(UniqueValue(serde_json::Value::Number(value.into())))
+    }
+
+    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
+        Ok(UniqueValue(serde_json::Value::Number(value.into())))
+    }
+
+    fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        serde_json::Number::from_f64(value)
+            .map(|number| UniqueValue(serde_json::Value::Number(number)))
+            .ok_or_else(|| E::custom("non-finite number is not valid JSON"))
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
+        Ok(UniqueValue(serde_json::Value::String(value.to_string())))
+    }
+
+    fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
+        Ok(UniqueValue(serde_json::Value::String(value)))
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        let mut values = Vec::new();
+        while let Some(value) = seq.next_element::<UniqueValue>()? {
+            values.push(value.0);
+        }
+        Ok(UniqueValue(serde_json::Value::Array(values)))
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut keys = HashSet::new();
+        let mut values = serde_json::Map::new();
+        while let Some(key) = map.next_key::<String>()? {
+            if !keys.insert(key.clone()) {
+                return Err(serde::de::Error::custom(format!(
+                    "duplicate object key {key:?}"
+                )));
+            }
+            let value = map.next_value::<UniqueValue>()?;
+            values.insert(key, value.0);
+        }
+        Ok(UniqueValue(serde_json::Value::Object(values)))
+    }
 }
 
 fn write_canonical(value: &serde_json::Value, out: &mut Vec<u8>) -> Result<(), CanonicalError> {
@@ -111,6 +216,14 @@ fn write_canonical(value: &serde_json::Value, out: &mut Vec<u8>) -> Result<(), C
             } else if let Some(u) = n.as_u64() {
                 out.extend_from_slice(u.to_string().as_bytes());
             } else if let Some(f) = n.as_f64() {
+                if f == 0.0 {
+                    out.push(b'0');
+                    return Ok(());
+                }
+                if f.fract() == 0.0 && f >= i64::MIN as f64 && f <= i64::MAX as f64 {
+                    out.extend_from_slice((f as i64).to_string().as_bytes());
+                    return Ok(());
+                }
                 // Use serde_json's shortest round-trip representation.
                 let s = serde_json::Number::from_f64(f)
                     .ok_or(CanonicalError::NonFiniteNumber)?
@@ -225,9 +338,28 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_keys_fail_at_every_depth() {
+        for raw in [
+            r#"{"a":1,"a":2}"#,
+            r#"{"outer":{"a":1,"a":2}}"#,
+            r#"[{"a":1,"a":2}]"#,
+        ] {
+            let error = canonicalize_raw_json(raw).unwrap_err().to_string();
+            assert!(error.contains("duplicate object key"), "{error}");
+        }
+    }
+
+    #[test]
     fn string_escaping() {
         let v = json!({"s": "a\"b\nc"});
         let c = canonical_string(&v).unwrap();
         assert_eq!(c, r#"{"s":"a\"b\nc"}"#);
+    }
+
+    #[test]
+    fn integral_floats_and_negative_zero_normalize() {
+        assert_eq!(canonicalize_raw_json("1.0").unwrap(), "1");
+        assert_eq!(canonicalize_raw_json("1e3").unwrap(), "1000");
+        assert_eq!(canonicalize_raw_json("-0.0").unwrap(), "0");
     }
 }

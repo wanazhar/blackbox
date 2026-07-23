@@ -2790,22 +2790,45 @@ pub struct ConformArgs {
 
 /// Run the public conformance suite and emit a machine-readable report.
 pub async fn cmd_conform(args: &ConformArgs, json: bool) -> anyhow::Result<()> {
-    let level = crate::conformance::ConformanceLevel::parse(&args.profile)
-        .ok_or_else(|| anyhow::anyhow!("unknown profile '{}'; use core|recorder|boundary|forensic", args.profile))?;
+    let level = crate::conformance::ConformanceLevel::parse(&args.profile).ok_or_else(|| {
+        anyhow::anyhow!(
+            "unknown profile '{}'; use core|recorder|boundary|forensic",
+            args.profile
+        )
+    })?;
     let vectors = args
         .vectors
         .clone()
         .unwrap_or_else(|| PathBuf::from("test-vectors"));
     let report = crate::conformance::run_conformance(level, Some(vectors.as_path()));
     if json {
-        return output::emit_ok("conform", &report);
+        let failed = args.strict && !report.passed;
+        let envelope = output::CliEnvelope {
+            ok: report.passed,
+            schema: output::CLI_SCHEMA,
+            command: "conform".into(),
+            data: Some(&report),
+            error: failed.then(|| output::CliErrorBody {
+                code: output::CliErrorCode::Internal,
+                message: format!("conformance profile {} failed", report.level),
+            }),
+        };
+        println!("{}", serde_json::to_string_pretty(&envelope)?);
+        if failed {
+            anyhow::bail!("conformance profile {} failed", report.level);
+        }
+        return Ok(());
     }
     println!(
         "conformance profile={} passed={} mandatory={}/{}",
         report.level, report.passed, report.mandatory_passed, report.mandatory_total
     );
     for c in &report.cases {
-        let flag = if c.mandatory { "M" } else { "O" };
+        let flag = match c.requirement {
+            crate::conformance::CapabilityReq::Mandatory => "M",
+            crate::conformance::CapabilityReq::Optional => "O",
+            crate::conformance::CapabilityReq::UnsupportedOk => "U",
+        };
         println!("  [{flag}] {} {}", c.status, c.id);
         if let Some(ref m) = c.message {
             if c.status != "pass" {

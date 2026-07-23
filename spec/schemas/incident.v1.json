@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/wanazhar/blackbox/spec/schemas/incident.v1.json",
+  "title": "Blackbox incident v1",
+  "type": "object",
+  "required": ["schema", "id", "evidence_layer", "created_at"],
+  "properties": {
+    "schema": {"const": "blackbox.incident/v1"},
+    "evidence_layer": {"const": "incident_interpretation"},
+    "id": {"type": "string", "minLength": 1},
+    "title": {"type": ["string", "null"]},
+    "created_at": {"type": "string", "pattern": "Z$"},
+    "updated_at": {"type": ["string", "null"], "pattern": "Z$"},
+    "attachments": {"type": "array", "items": {"type": "object", "required": ["kind", "ref_id", "attached_at"]}},
+    "tags": {"type": "array", "items": {"type": "string"}},
+    "earliest_signal_id": {"type": ["string", "null"]},
+    "continued_after_signal": {"type": ["boolean", "null"]}
+  },
+  "additionalProperties": true
+}

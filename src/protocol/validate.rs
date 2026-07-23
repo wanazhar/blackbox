@@ -1,8 +1,8 @@
 //! Lightweight structural validation against published protocol rules.
 //!
 //! Full JSON Schema documents live under `/spec/schemas`. This module enforces
-//! the subset of rules needed for CI and the conformance runner without pulling
-//! a heavy schema engine into the library.
+//! the fail-closed wire invariants needed by embedders at runtime; CI also
+//! compiles and executes every published schema.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -59,18 +59,17 @@ pub fn validate_schema_id(schema: &str) -> Result<(), String> {
     if !schema.contains('/') {
         return Err(format!("schema id must include /vN version: {schema}"));
     }
-    // Known catalog always ok; unknown `blackbox.*./vN` allowed as forward-compatible
-    // provisional (consumer must not reject solely for unknown minor schema).
+    // Unknown *fields* are forward compatible. Unknown schema versions are not:
+    // interpreting a v2 object with v1 semantics could upgrade integrity.
     if is_known_schema(schema) {
         return Ok(());
     }
-    // Accept well-formed unknown ids for forward compatibility.
     if schema
         .split('/')
         .next_back()
         .is_some_and(|v| v.starts_with('v') && v[1..].chars().all(|c| c.is_ascii_digit()))
     {
-        return Ok(());
+        return Err(format!("unsupported schema id: {schema}"));
     }
     Err(format!("malformed schema version in id: {schema}"))
 }
@@ -144,52 +143,83 @@ pub fn validate_json_object(value: &Value) -> ValidationReport {
                 ],
                 &mut report,
             );
-            require_string(obj, "started_at", &mut report);
+            require_timestamp(obj, "started_at", &mut report);
         }
         "blackbox.event/v1" => {
             require_string(obj, "id", &mut report);
             require_string(obj, "run_id", &mut report);
             require_u64_field(obj, "sequence", &mut report);
             require_string(obj, "kind", &mut report);
-            require_string(obj, "started_at", &mut report);
+            require_timestamp(obj, "started_at", &mut report);
         }
         "blackbox.evidence.event/v1" => {
             require_string(obj, "id", &mut report);
             require_string(obj, "source", &mut report);
+            require_string(obj, "sensor", &mut report);
+            require_string(obj, "source_event_id", &mut report);
             require_string(obj, "action", &mut report);
-            require_string(obj, "ingested_at", &mut report);
+            require_timestamp(obj, "ingested_at", &mut report);
         }
         "blackbox.security.decision/v1" => {
             require_string(obj, "id", &mut report);
             require_string(obj, "provider", &mut report);
             require_string(obj, "decision", &mut report);
             require_string(obj, "action_hash", &mut report);
-            require_string(obj, "decided_at", &mut report);
+            require_hash(obj, "action_hash", &mut report);
+            require_timestamp(obj, "decided_at", &mut report);
         }
         "blackbox.commitment.run/v1" => {
             require_string(obj, "run_id", &mut report);
             require_string(obj, "root_hash", &mut report);
+            require_hash(obj, "root_hash", &mut report);
             require_u64_field(obj, "event_count", &mut report);
         }
         "blackbox.reconcile.outcome/v1" => {
             require_string(obj, "id", &mut report);
             require_string(obj, "outcome", &mut report);
         }
-        "blackbox.boundary/v1"
-        | "blackbox.boundary.finding/v1"
-        | "blackbox.forensic.pack/v1"
-        | "blackbox.incident/v1"
-        | "blackbox.verification.receipt/v1"
-        | "blackbox.containment.receipt/v1" => {
+        "blackbox.boundary/v1" => {
+            require_string(obj, "run_id", &mut report);
+            require_hash(obj, "policy_hash", &mut report);
+            require_timestamp(obj, "resolved_at", &mut report);
+            require_object(obj, "contract", &mut report);
+        }
+        "blackbox.boundary.finding/v1" => {
             require_string(obj, "id", &mut report);
+            require_string(obj, "run_id", &mut report);
+            require_string(obj, "detector", &mut report);
+            require_timestamp(obj, "created_at", &mut report);
+        }
+        "blackbox.boundary.finding.decision/v1" => {
+            for field in [
+                "observation",
+                "policy_disposition",
+                "evidence_integrity",
+                "identity_confidence",
+                "correlation_confidence",
+                "observed_effect",
+                "violation_state",
+                "severity",
+            ] {
+                require_string(obj, field, &mut report);
+            }
+        }
+        "blackbox.forensic.pack/v1" => {
+            require_string(obj, "run_id", &mut report);
+            require_timestamp(obj, "created_at", &mut report);
+            require_hash(obj, "pack_hash", &mut report);
+        }
+        "blackbox.incident/v1" => {
+            require_string(obj, "id", &mut report);
+            require_timestamp(obj, "created_at", &mut report);
+        }
+        "blackbox.verification.receipt/v1" | "blackbox.containment.receipt/v1" => {
+            require_string(obj, "id", &mut report);
+            require_string(obj, "run_id", &mut report);
+            require_timestamp(obj, "created_at", &mut report);
         }
         _ => {
-            if find_schema(&schema).is_none() {
-                report.warnings.push(ValidationError {
-                    path: "/schema".into(),
-                    message: format!("unknown schema id (forward-compatible): {schema}"),
-                });
-            }
+            debug_assert!(find_schema(&schema).is_some());
         }
     }
 
@@ -276,6 +306,56 @@ fn require_u64_field(
     }
 }
 
+fn require_object(
+    obj: &serde_json::Map<String, Value>,
+    field: &str,
+    report: &mut ValidationReport,
+) {
+    if !obj.get(field).is_some_and(Value::is_object) {
+        report.ok = false;
+        report.errors.push(ValidationError {
+            path: format!("/{field}"),
+            message: format!("required field '{field}' missing or not an object"),
+        });
+    }
+}
+
+fn require_hash(obj: &serde_json::Map<String, Value>, field: &str, report: &mut ValidationReport) {
+    match obj.get(field).and_then(Value::as_str) {
+        Some(value)
+            if value.len() == 64
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()) => {}
+        _ => {
+            report.ok = false;
+            report.errors.push(ValidationError {
+                path: format!("/{field}"),
+                message: format!("field '{field}' must be 64 lowercase hex characters"),
+            });
+        }
+    }
+}
+
+fn require_timestamp(
+    obj: &serde_json::Map<String, Value>,
+    field: &str,
+    report: &mut ValidationReport,
+) {
+    let valid = obj.get(field).and_then(Value::as_str).is_some_and(|value| {
+        value.ends_with('Z')
+            && chrono::DateTime::parse_from_rfc3339(value)
+                .is_ok_and(|parsed| parsed.offset().local_minus_utc() == 0)
+    });
+    if !valid {
+        report.ok = false;
+        report.errors.push(ValidationError {
+            path: format!("/{field}"),
+            message: format!("field '{field}' must be an unambiguous RFC 3339 UTC timestamp"),
+        });
+    }
+}
+
 fn reject_non_finite(value: &Value, path: &str) -> Result<(), String> {
     match value {
         Value::Number(n) => {
@@ -338,5 +418,29 @@ mod tests {
         let r = validate_json_object(&v);
         assert!(!r.ok);
         assert!(r.errors.iter().any(|e| e.path == "/action_hash"));
+    }
+
+    #[test]
+    fn unsupported_versions_and_ambiguous_timestamps_fail() {
+        let unsupported = validate_json_object(&json!({
+            "schema": "blackbox.run/v99",
+            "id": "r",
+            "status": "running",
+            "started_at": "2026-07-23T00:00:00Z"
+        }));
+        assert!(!unsupported.ok);
+        assert_eq!(unsupported.errors[0].path, "/schema");
+
+        let ambiguous = validate_json_object(&json!({
+            "schema": "blackbox.run/v1",
+            "id": "r",
+            "status": "running",
+            "started_at": "2026-07-23 00:00:00"
+        }));
+        assert!(!ambiguous.ok);
+        assert!(ambiguous
+            .errors
+            .iter()
+            .any(|error| error.path == "/started_at"));
     }
 }

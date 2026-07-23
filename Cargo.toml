@@ -109,6 +109,8 @@ ed25519-dalek = { version = "2", features = ["rand_core"] }
 
 [dev-dependencies]
 tempfile = "3"
+jsonschema = { version = "0.33", default-features = false }
+proptest = "1"
 
 [profile.release]
 opt-level = 3

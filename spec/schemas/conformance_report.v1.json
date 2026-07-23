@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/wanazhar/blackbox/spec/schemas/conformance_report.v1.json",
+  "title": "Blackbox conformance report v1",
+  "type": "object",
+  "required": ["schema", "level", "implementation", "ran_at", "passed", "cases", "mandatory_total", "mandatory_passed"],
+  "properties": {
+    "schema": {"const": "blackbox.conformance.report/v1"},
+    "level": {"type": "string", "enum": ["core", "recorder", "boundary", "forensic"]},
+    "implementation": {"type": "string", "minLength": 1},
+    "ran_at": {"type": "string", "pattern": "Z$"},
+    "passed": {"type": "boolean"},
+    "cases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "status", "mandatory", "requirement"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "status": {"type": "string", "enum": ["pass", "fail", "skip"]},
+          "mandatory": {"type": "boolean"},
+          "requirement": {"type": "string", "enum": ["mandatory", "optional", "unsupported_ok"]},
+          "message": {"type": ["string", "null"]}
+        }
+      }
+    },
+    "mandatory_total": {"type": "integer", "minimum": 0},
+    "mandatory_passed": {"type": "integer", "minimum": 0}
+  },
+  "additionalProperties": true
+}

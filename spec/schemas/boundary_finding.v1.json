@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/wanazhar/blackbox/spec/schemas/boundary_finding.v1.json",
+  "title": "Blackbox boundary finding v1",
+  "type": "object",
+  "required": ["schema", "id", "run_id", "kind", "detector", "severity", "summary", "created_at"],
+  "properties": {
+    "schema": {"const": "blackbox.boundary.finding/v1"},
+    "id": {"type": "string", "minLength": 1},
+    "run_id": {"type": "string", "minLength": 1},
+    "kind": {"type": "string"},
+    "detector": {"type": "string", "minLength": 1},
+    "severity": {"type": "string"},
+    "summary": {"type": "string"},
+    "evidence_event_ids": {"type": "array", "items": {"type": "string"}},
+    "external_evidence_ids": {"type": "array", "items": {"type": "string"}},
+    "created_at": {"type": "string", "pattern": "Z$"},
+    "decision": {"type": ["object", "null"]}
+  },
+  "additionalProperties": true
+}

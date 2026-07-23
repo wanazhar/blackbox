@@ -14,7 +14,8 @@ pub mod stability;
 pub mod validate;
 
 pub use canonical::{
-    canonical_bytes, canonical_hash, canonical_string, CanonicalError, CANONICAL_HASH_ALG,
+    canonical_bytes, canonical_hash, canonical_hash_of, canonical_string, canonical_string_of,
+    canonicalize_raw_json, parse_json_strict, CanonicalError, CANONICAL_HASH_ALG,
 };
 pub use schema::{
     find_schema, is_known_schema, ProtocolObjectKind, SchemaId, PROTOCOL_VERSION, SCHEMA_CATALOG,

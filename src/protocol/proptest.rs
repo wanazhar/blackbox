@@ -26,7 +26,10 @@ mod tests {
             let parsed: Value = serde_json::from_str(&c1).unwrap();
             let c2 = canonical_string(&parsed).unwrap();
             assert_eq!(c1, c2);
-            assert_eq!(canonical_hash(&s).unwrap(), canonical_hash(&parsed).unwrap());
+            assert_eq!(
+                canonical_hash(&s).unwrap(),
+                canonical_hash(&parsed).unwrap()
+            );
         }
     }
 
@@ -74,12 +77,12 @@ mod tests {
             "run_id": "r",
             "sequence": 0,
             "kind": "file.write",
-            "started_at": "t",
+            "started_at": "2026-07-23T00:00:00Z",
             "path": "/etc/passwd"
         });
         let r = validate_json_object(&v);
         assert!(r.ok); // structure ok
-        // No authorization field is set by validate.
+                       // No authorization field is set by validate.
         assert!(v.get("authorized").is_none());
     }
 

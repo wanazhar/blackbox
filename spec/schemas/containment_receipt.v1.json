@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/wanazhar/blackbox/spec/schemas/containment_receipt.v1.json",
+  "title": "Blackbox containment receipt v1",
+  "type": "object",
+  "required": ["schema", "id", "run_id", "created_at", "claim_state", "result", "verifier_identity", "method"],
+  "properties": {
+    "schema": {"const": "blackbox.containment.receipt/v1"},
+    "id": {"type": "string", "minLength": 1},
+    "run_id": {"type": "string", "minLength": 1},
+    "created_at": {"type": "string", "pattern": "Z$"},
+    "claim_state": {"type": "string"},
+    "result": {"type": "string"},
+    "verifier_identity": {"type": "string", "minLength": 1},
+    "method": {"type": "string", "minLength": 1},
+    "scope": {"type": "object"},
+    "checked_at": {"type": ["string", "null"], "pattern": "Z$"},
+    "evidence_hashes": {"type": "array", "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}},
+    "control_versions": {"type": "array", "items": {"type": "string"}},
+    "parent_receipt_id": {"type": ["string", "null"]},
+    "policy_hash": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "limitations": {"type": "array", "items": {"type": "string"}}
+  },
+  "additionalProperties": true
+}

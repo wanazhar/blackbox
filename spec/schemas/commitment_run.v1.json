@@ -14,7 +14,7 @@
     "manifest_root": { "type": ["string", "null"] },
     "evidence_root": { "type": ["string", "null"] },
     "signature": { "type": ["object", "null"] },
-    "created_at": { "type": "string" },
+    "created_at": { "type": "string", "pattern": "Z$" },
     "limitations": {
       "type": "array",
       "items": { "type": "string" },

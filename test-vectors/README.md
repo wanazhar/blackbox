@@ -7,7 +7,7 @@ Machine-readable cases for canonical form, validation, and tamper detection.
 | `valid/` | Objects that MUST validate |
 | `invalid/` | Objects that MUST fail validation |
 | `canonical/` | Logical object + expected canonical bytes/hash |
-| `migration/` | Cross-version fixtures (placeholder for later vectors) |
+| `migration/` | Executable cross-version archive fixtures |
 | `tampering/` | Mutation cases for commitment verification |
 | `signature/` | Signed run-root fixtures |
 | `citation/` | Citation completeness fixtures |
@@ -29,4 +29,6 @@ JSON object:
 }
 ```
 
-Reference runner: `blackbox::protocol` unit tests and `tests/protocol_vectors.rs`.
+Reference runner: `blackbox conform` plus `tests/protocol_vectors.rs`. CI
+compiles every cataloged JSON Schema and runs valid, invalid, canonical,
+migration, tampering, signature, citation, and redaction cases.

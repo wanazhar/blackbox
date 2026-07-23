@@ -45,8 +45,8 @@ The following MUST be rejected before hashing:
 - Invalid UTF-8
 - Non-finite numbers (`NaN`, `Infinity`)
 - Duplicate keys at the same object level (JSON parsers that silently keep one
-  value are implementation-defined; reference Rust path uses `serde_json` map
-  semantics where last key wins at parse — producers MUST NOT emit duplicates)
+  value are unsafe for commitments; the reference strict parser rejects them
+  at every nesting depth)
 
 ## Test vectors
 

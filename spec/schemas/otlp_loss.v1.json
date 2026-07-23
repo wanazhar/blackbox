@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/wanazhar/blackbox/spec/schemas/otlp_loss.v1.json",
+  "title": "Blackbox OTLP semantic loss ledger v1",
+  "type": "object",
+  "required": ["schema", "direction", "losses"],
+  "properties": {
+    "schema": {"const": "blackbox.otlp.loss/v1"},
+    "direction": {"type": "string", "enum": ["export", "import"]},
+    "losses": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["concept", "reason"],
+        "properties": {
+          "concept": {"type": "string", "minLength": 1},
+          "reason": {"type": "string", "minLength": 1},
+          "object_id": {"type": ["string", "null"]}
+        }
+      }
+    }
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/wanazhar/blackbox/spec/schemas/boundary_finding_decision.v1.json",
+  "title": "Blackbox calibrated finding decision v1",
+  "type": "object",
+  "required": ["schema", "observation", "policy_disposition", "evidence_integrity", "identity_confidence", "correlation_confidence", "observed_effect", "violation_state", "severity"],
+  "properties": {
+    "schema": {"const": "blackbox.boundary.finding.decision/v1"},
+    "observation": {"type": "string"},
+    "policy_disposition": {"type": "string"},
+    "evidence_integrity": {"type": "string"},
+    "identity_confidence": {"type": "string"},
+    "correlation_confidence": {"type": "string"},
+    "observed_effect": {"type": "string"},
+    "violation_state": {"type": "string"},
+    "severity": {"type": "string"},
+    "reasons": {"type": "array", "items": {"type": "string"}},
+    "detector_repeatability": {"type": "string"}
+  },
+  "additionalProperties": true
+}

@@ -62,6 +62,9 @@ pub struct ConformanceProfile {
     pub mandatory_cases: Vec<String>,
     /// Optional case ids.
     pub optional_cases: Vec<String>,
+    /// Capabilities deliberately outside this profile. These are emitted as
+    /// explicit skips so absence cannot be confused with a passing check.
+    pub unsupported_cases: Vec<String>,
 }
 
 /// Built-in profile catalog.
@@ -78,8 +81,12 @@ pub fn profile_for(level: ConformanceLevel) -> ConformanceProfile {
                 "invalid_bad_schema".into(),
                 "provisional_field_in_hash".into(),
                 "dual_encoder_identity".into(),
+                "duplicate_keys_rejected".into(),
+                "unsupported_schema_version".into(),
+                "migration_vector".into(),
             ],
             optional_cases: vec![],
+            unsupported_cases: vec![],
         },
         ConformanceLevel::Recorder => ConformanceProfile {
             level,
@@ -89,8 +96,10 @@ pub fn profile_for(level: ConformanceLevel) -> ConformanceProfile {
                 "native_idempotent_retry".into(),
                 "native_partial_frame".into(),
                 "native_client_ts_no_reorder".into(),
+                "native_retry_after_restart".into(),
             ],
             optional_cases: vec!["native_unix_socket".into()],
+            unsupported_cases: vec!["pty_capture_not_required".into()],
         },
         ConformanceLevel::Boundary => ConformanceProfile {
             level,
@@ -100,8 +109,10 @@ pub fn profile_for(level: ConformanceLevel) -> ConformanceProfile {
                 "denied_not_executed".into(),
                 "denied_but_bypassed".into(),
                 "integrity_demotion".into(),
+                "citation_completeness".into(),
             ],
             optional_cases: vec![],
+            unsupported_cases: vec!["active_enforcement".into()],
         },
         ConformanceLevel::Forensic => ConformanceProfile {
             level,
@@ -111,8 +122,11 @@ pub fn profile_for(level: ConformanceLevel) -> ConformanceProfile {
                 "commitment_signature".into(),
                 "otlp_loss_ledger".into(),
                 "honesty_limitations".into(),
+                "redaction_transformation".into(),
+                "commitment_mutation_matrix".into(),
             ],
             optional_cases: vec![],
+            unsupported_cases: vec!["observation_completeness_proof".into()],
         },
     }
 }

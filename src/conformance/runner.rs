@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use chrono::Utc;
+use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -24,7 +24,7 @@ use crate::security::{
 use crate::storage::store::InMemoryStore;
 use crate::storage::TraceStore;
 
-use super::profiles::{profile_for, ConformanceLevel};
+use super::profiles::{profile_for, CapabilityReq, ConformanceLevel};
 
 /// Schema for conformance reports.
 pub const CONFORMANCE_REPORT_SCHEMA: &str = "blackbox.conformance.report/v1";
@@ -41,6 +41,8 @@ pub struct ConformanceCaseResult {
     pub message: Option<String>,
     /// Mandatory?
     pub mandatory: bool,
+    /// Mandatory, optional, or explicitly unsupported capability.
+    pub requirement: CapabilityReq,
 }
 
 /// Full conformance report.
@@ -65,10 +67,7 @@ pub struct ConformanceReport {
 }
 
 /// Run conformance for a level. `vectors_root` is optional path to test-vectors/.
-pub fn run_conformance(
-    level: ConformanceLevel,
-    vectors_root: Option<&Path>,
-) -> ConformanceReport {
+pub fn run_conformance(level: ConformanceLevel, vectors_root: Option<&Path>) -> ConformanceReport {
     let profile = profile_for(level);
     let mut cases = Vec::new();
 
@@ -79,19 +78,26 @@ pub fn run_conformance(
             status: if ok { "pass".into() } else { "fail".into() },
             message: msg,
             mandatory: true,
+            requirement: CapabilityReq::Mandatory,
         });
     }
     for id in &profile.optional_cases {
         let (ok, msg) = execute_case(id, vectors_root);
         cases.push(ConformanceCaseResult {
             id: id.clone(),
-            status: if ok {
-                "pass".into()
-            } else {
-                "skip".into()
-            },
+            status: if ok { "pass".into() } else { "skip".into() },
             message: msg,
             mandatory: false,
+            requirement: CapabilityReq::Optional,
+        });
+    }
+    for id in &profile.unsupported_cases {
+        cases.push(ConformanceCaseResult {
+            id: id.clone(),
+            status: "skip".into(),
+            message: Some("capability explicitly unsupported by this profile".into()),
+            mandatory: false,
+            requirement: CapabilityReq::UnsupportedOk,
         });
     }
 
@@ -106,7 +112,7 @@ pub fn run_conformance(
         schema: CONFORMANCE_REPORT_SCHEMA.into(),
         level: level.as_str().into(),
         implementation: format!("blackbox-recorder {}", env!("CARGO_PKG_VERSION")),
-        ran_at: Utc::now().to_rfc3339(),
+        ran_at: Utc::now().to_rfc3339_opts(SecondsFormat::AutoSi, true),
         passed,
         cases,
         mandatory_total,
@@ -122,19 +128,26 @@ fn execute_case(id: &str, vectors_root: Option<&Path>) -> (bool, Option<String>)
         "invalid_bad_schema" => case_invalid_schema(vectors_root),
         "provisional_field_in_hash" => case_provisional_hash(),
         "dual_encoder_identity" => case_dual_encoder(),
+        "duplicate_keys_rejected" => case_duplicate_keys(),
+        "unsupported_schema_version" => case_unsupported_schema_version(),
+        "migration_vector" => case_migration_vector(vectors_root),
         "native_complete_run" => case_native_complete(),
         "native_idempotent_retry" => case_native_idempotent(),
         "native_partial_frame" => case_native_partial(),
         "native_client_ts_no_reorder" => case_native_client_ts(),
+        "native_retry_after_restart" => case_native_retry_after_restart(),
         "native_unix_socket" => (true, Some("optional: covered by unit tests".into())),
         "security_decision_schema" => case_security_schema(),
         "denied_not_executed" => case_denied_not_executed(),
         "denied_but_bypassed" => case_denied_bypassed(),
         "integrity_demotion" => case_integrity_demotion(),
+        "citation_completeness" => case_citation_completeness(vectors_root),
         "commitment_tamper_detect" => case_commitment_tamper(),
         "commitment_signature" => case_commitment_sig(),
         "otlp_loss_ledger" => case_otlp_loss(),
         "honesty_limitations" => case_honesty(),
+        "redaction_transformation" => case_redaction_transformation(vectors_root),
+        "commitment_mutation_matrix" => case_commitment_mutation_matrix(),
         other => (false, Some(format!("unknown case: {other}"))),
     }
 }
@@ -206,7 +219,7 @@ fn case_invalid_schema(_root: Option<&Path>) -> (bool, Option<String>) {
 }
 
 fn case_provisional_hash() -> (bool, Option<String>) {
-    let base = json!({"schema":"blackbox.event/v1","id":"e","run_id":"r","sequence":0,"kind":"k","started_at":"t"});
+    let base = json!({"schema":"blackbox.event/v1","id":"e","run_id":"r","sequence":0,"kind":"k","started_at":"2026-07-23T00:00:00Z"});
     let mut extra = base.clone();
     extra
         .as_object_mut()
@@ -225,6 +238,34 @@ fn case_dual_encoder() -> (bool, Option<String>) {
     b.insert("a".into(), json!(1));
     let ok = canonical_hash(&Value::Object(a)).ok() == canonical_hash(&Value::Object(b)).ok();
     (ok, None)
+}
+
+fn case_duplicate_keys() -> (bool, Option<String>) {
+    let result = crate::protocol::parse_json_strict(r#"{"a":1,"a":2}"#);
+    (result.is_err(), result.err().map(|error| error.to_string()))
+}
+
+fn case_unsupported_schema_version() -> (bool, Option<String>) {
+    let report = validate_json_object(&json!({
+        "schema": "blackbox.run/v99",
+        "id": "r",
+        "status": "running",
+        "started_at": "2026-07-23T00:00:00Z"
+    }));
+    (
+        !report.ok && report.errors.iter().any(|error| error.path == "/schema"),
+        report.errors.first().map(|error| error.message.clone()),
+    )
+}
+
+fn case_migration_vector(root: Option<&Path>) -> (bool, Option<String>) {
+    let Some(vector) = load_vector(root, "migration/portable-v1-to-v2.json") else {
+        return (false, Some("missing migration vector".into()));
+    };
+    let ok = vector["version"] == 1
+        && vector["run"]["id"].as_str() == Some("run-migration")
+        && vector["events"].as_array().is_some();
+    (ok, (!ok).then(|| "migration input is incomplete".into()))
 }
 
 fn case_native_complete() -> (bool, Option<String>) {
@@ -251,7 +292,10 @@ fn case_native_complete() -> (bool, Option<String>) {
         )
         .await
         .map_err(|e| e.to_string())?;
-        let n = store.count_events(&run.id).await.map_err(|e| e.to_string())?;
+        let n = store
+            .count_events(&run.id)
+            .await
+            .map_err(|e| e.to_string())?;
         if n >= 3 {
             Ok(())
         } else {
@@ -282,7 +326,10 @@ fn case_native_idempotent() -> (bool, Option<String>) {
         let rec = NativeRecorder::new(store.clone());
         let env = NativeIngestEnvelope::new(IngestOp::StartRun, "idem-1")
             .with_payload(json!({"cwd":"/tmp"}));
-        let a1 = rec.apply_envelope(env.clone()).await.map_err(|e| e.to_string())?;
+        let a1 = rec
+            .apply_envelope(env.clone())
+            .await
+            .map_err(|e| e.to_string())?;
         let a2 = rec.apply_envelope(env).await.map_err(|e| e.to_string())?;
         if !a1.duplicate && a2.duplicate && a1.run_id == a2.run_id {
             Ok(())
@@ -360,6 +407,29 @@ fn case_native_client_ts() -> (bool, Option<String>) {
     .unwrap_or_else(|e: String| (false, Some(e)))
 }
 
+fn case_native_retry_after_restart() -> (bool, Option<String>) {
+    block_on_async(async {
+        let store: Arc<dyn TraceStore> = Arc::new(InMemoryStore::new());
+        let env = NativeIngestEnvelope::new(IngestOp::StartRun, "restart-conformance")
+            .with_payload(json!({"cwd": "/tmp"}));
+        let first = NativeRecorder::new(store.clone())
+            .apply_envelope(env.clone())
+            .await
+            .map_err(|error| error.to_string())?;
+        let retry = NativeRecorder::new(store)
+            .apply_envelope(env)
+            .await
+            .map_err(|error| error.to_string())?;
+        if !first.duplicate && retry.duplicate && first.run_id == retry.run_id {
+            Ok(())
+        } else {
+            Err("retry after recorder restart was not deduplicated".to_string())
+        }
+    })
+    .map(|_| (true, None))
+    .unwrap_or_else(|error| (false, Some(error)))
+}
+
 fn case_security_schema() -> (bool, Option<String>) {
     let fp = ActionFingerprint::tool("x", None);
     let d = SecurityDecision::builder("opa", DecisionKind::Deny, fp.hash())
@@ -413,6 +483,69 @@ fn case_integrity_demotion() -> (bool, Option<String>) {
     (d.integrity == DecisionIntegrity::Unverified, None)
 }
 
+fn case_citation_completeness(root: Option<&Path>) -> (bool, Option<String>) {
+    let complete_path = root
+        .map(|root| root.join("citation/complete.json"))
+        .unwrap_or_else(|| Path::new("test-vectors/citation/complete.json").to_path_buf());
+    let dangling_path = root
+        .map(|root| root.join("citation/dangling.json"))
+        .unwrap_or_else(|| Path::new("test-vectors/citation/dangling.json").to_path_buf());
+    let value: Value = match std::fs::read_to_string(complete_path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+    {
+        Some(value) => value,
+        None => return (false, Some("missing citation vector".into())),
+    };
+    let pointers: std::collections::HashSet<&str> = value["original_pointers"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    let complete = value["claims"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .all(|claim| {
+            claim["citations"].as_array().is_some_and(|citations| {
+                !citations.is_empty()
+                    && citations
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .all(|citation| pointers.contains(citation))
+            })
+        });
+    let dangling_rejected = std::fs::read_to_string(dangling_path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .is_some_and(|vector| {
+            let pointers: std::collections::HashSet<&str> = vector["original_pointers"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .collect();
+            vector["claims"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|claim| {
+                    claim["citations"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str)
+                        .any(|citation| !pointers.contains(citation))
+                })
+        });
+    let ok = complete && dangling_rejected;
+    (
+        ok,
+        (!ok).then(|| "citation vectors were not enforced".into()),
+    )
+}
+
 fn case_commitment_tamper() -> (bool, Option<String>) {
     let mut e1 = TraceEvent::new("r", EventSource::System, "a");
     e1.sequence = 1;
@@ -454,4 +587,69 @@ fn case_honesty() -> (bool, Option<String>) {
         .iter()
         .any(|l| l.contains("does_not_prove_observation_completeness"));
     (ok, None)
+}
+
+fn case_redaction_transformation(root: Option<&Path>) -> (bool, Option<String>) {
+    let path = root
+        .map(|root| root.join("redaction/secret-transform.json"))
+        .unwrap_or_else(|| Path::new("test-vectors/redaction/secret-transform.json").to_path_buf());
+    let value: Value = match std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+    {
+        Some(value) => value,
+        None => return (false, Some("missing redaction vector".into())),
+    };
+    let input = value["input"].as_str().unwrap_or_default();
+    let expected = value["expected"].as_str().unwrap_or_default();
+    let forbidden = value["ledger"]["must_not_contain"]
+        .as_str()
+        .unwrap_or_default();
+    let scanner =
+        crate::redaction::scanner::SecretScanner::new(crate::redaction::RedactionConfig::default());
+    let output = scanner.redact(input);
+    let ok = output == expected && !output.contains(forbidden);
+    (ok, (!ok).then(|| format!("redacted output was {output:?}")))
+}
+
+fn case_commitment_mutation_matrix() -> (bool, Option<String>) {
+    let mut events = Vec::new();
+    for (sequence, kind) in [(1, "tool.call"), (2, "tool.result"), (3, "run.ended")] {
+        let mut event = TraceEvent::new("matrix", EventSource::System, kind);
+        event.sequence = sequence;
+        event.id = format!("e{sequence}");
+        events.push(event);
+    }
+    let commitment = build_run_commitment("matrix", &events, &[], None, None, true);
+    let mut variants = Vec::new();
+    let mut inserted = events.clone();
+    let mut extra = inserted[0].clone();
+    extra.id = "inserted".into();
+    extra.sequence = 99;
+    inserted.insert(1, extra);
+    variants.push(inserted);
+    let mut deleted = events.clone();
+    deleted.remove(1);
+    variants.push(deleted);
+    let mut replaced = events.clone();
+    replaced[1].kind = "tampered".into();
+    variants.push(replaced);
+    let mut replayed = events.clone();
+    replayed.push(replayed[1].clone());
+    variants.push(replayed);
+    let mut reordered = events.clone();
+    reordered[0].sequence = 2;
+    reordered[1].sequence = 1;
+    variants.push(reordered);
+    let mut mixed_version = events.clone();
+    mixed_version[1]
+        .metadata
+        .insert("protocol.schema".into(), json!("blackbox.event/v2"));
+    variants.push(mixed_version);
+    variants.push(events[..2].to_vec());
+
+    let ok = variants
+        .iter()
+        .all(|variant| !verify_commitment(&commitment, variant, None, &[]).ok);
+    (ok, (!ok).then(|| "a commitment mutation verified".into()))
 }

@@ -136,6 +136,7 @@ pub async fn export_portable(
     let trace_identity = store.get_trace_identity(&run.id).await?;
 
     let output = serde_json::json!({
+        "schema": "blackbox.portable/v2",
         "version": PORTABLE_VERSION,
         "run": run_val,
         "events": events_val,
@@ -386,6 +387,7 @@ pub async fn import_portable_dir(
     }
 
     let root = serde_json::json!({
+        "schema": "blackbox.portable/v2",
         "version": PORTABLE_VERSION,
         "run": run_val,
         "events": events_val,

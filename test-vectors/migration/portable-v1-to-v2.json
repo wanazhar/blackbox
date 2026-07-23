@@ -1,0 +1,31 @@
+{
+  "id": "portable-v1-to-v2",
+  "description": "A v1 archive remains readable and exports with the v2 protocol identity",
+  "expect": "migrate",
+  "input": {
+    "version": 1,
+    "run": {
+      "id": "run-migration",
+      "name": null,
+      "command": ["true"],
+      "cwd": "/tmp",
+      "project_dir": "/tmp",
+      "tags": [],
+      "notes": null,
+      "status": "Succeeded",
+      "started_at": "2026-07-23T00:00:00Z",
+      "ended_at": "2026-07-23T00:00:01Z",
+      "exit_code": 0,
+      "parent_run_id": null,
+      "next_sequence": 2
+    },
+    "events": [],
+    "blobs": {}
+  },
+  "expected": {
+    "schema": "blackbox.portable/v2",
+    "version": 2,
+    "run_id": "run-migration",
+    "events": 0
+  }
+}

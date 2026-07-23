@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/wanazhar/blackbox/spec/schemas/verification_receipt.v1.json",
+  "title": "Blackbox verification receipt v1",
+  "type": "object",
+  "required": ["schema", "id", "run_id", "created_at", "verifier_type", "status", "confidence"],
+  "properties": {
+    "schema": {"const": "blackbox.verification.receipt/v1"},
+    "id": {"type": "string", "minLength": 1},
+    "run_id": {"type": "string", "minLength": 1},
+    "created_at": {"type": "string", "pattern": "Z$"},
+    "verifier_type": {"type": "string"},
+    "command_argv": {"type": "array", "items": {"type": "string"}},
+    "started_at": {"type": ["string", "null"], "pattern": "Z$"},
+    "ended_at": {"type": ["string", "null"], "pattern": "Z$"},
+    "duration_ms": {"type": ["integer", "null"], "minimum": 0},
+    "exit_code": {"type": ["integer", "null"]},
+    "status": {"type": "string"},
+    "confidence": {"type": "string"},
+    "limitations": {"type": "array", "items": {"type": "string"}},
+    "parent_receipt_id": {"type": ["string", "null"]}
+  },
+  "additionalProperties": true
+}

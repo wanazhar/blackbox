@@ -6,7 +6,7 @@
 pub mod profiles;
 pub mod runner;
 
-pub use profiles::{ConformanceLevel, ConformanceProfile, PROFILE_CATALOG};
+pub use profiles::{CapabilityReq, ConformanceLevel, ConformanceProfile, PROFILE_CATALOG};
 pub use runner::{
     run_conformance, ConformanceCaseResult, ConformanceReport, CONFORMANCE_REPORT_SCHEMA,
 };

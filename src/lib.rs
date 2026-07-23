@@ -41,6 +41,7 @@
 //! | [`incident`] | Multi-run incident reconstruction + pagination (1.7) |
 //! | [`forensic`] | Local forensic analysis packs (1.7) |
 //! | [`protocol`] | Evidence protocol canonical form & schemas (1.9) |
+//! | [`native`] | Native run/event ingestion without PTY (1.9) |
 //! | [`experiment`] | Experiments, reports, gates |
 //! | [`export`] | Portable / JSONL / HTML |
 //! | [`integrity`] | `fsck` and repair |
@@ -130,6 +131,8 @@ pub mod mcp;
 pub mod memory;
 /// Nest guard without child-visible control env.
 pub mod nest;
+/// Native run/event ingestion without PTY wrapping (1.9).
+pub mod native;
 /// Human and JSON CLI output helpers.
 pub mod output;
 /// Event writer and batch ingest pipeline.

@@ -87,6 +87,10 @@ jobs:
       - name: Protocol vectors (1.9)
         run: cargo test --test protocol_vectors -- --quiet
 
+      # 1.9 native ingestion (no PTY)
+      - name: Native ingest (1.9)
+        run: cargo test --test native_ingest -- --quiet
+
   # 1.5 Q1: lightweight macOS runtime gate on every PR (not only tag-time build).
   macos:
     name: macOS runtime gate

@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use serde_json::Value;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Semaphore;
 
 use super::envelope::{IngestError, NativeIngestEnvelope};
@@ -66,38 +66,36 @@ impl Default for NdjsonIngestServer {
 
 impl NdjsonIngestServer {
     /// Process a complete buffer of NDJSON text, returning ack/error lines.
-    pub async fn process_buffer(
-        &self,
-        recorder: &NativeRecorder,
-        input: &str,
-    ) -> Vec<Value> {
+    pub async fn process_buffer(&self, recorder: &NativeRecorder, input: &str) -> Vec<Value> {
         let mut outputs = Vec::new();
         let mut partial = String::new();
         for chunk in input.split_inclusive('\n') {
             if !chunk.ends_with('\n') {
-                partial.push_str(chunk);
-                if partial.len() > self.max_line_bytes {
+                if partial.len().saturating_add(chunk.len()) > self.max_line_bytes {
                     outputs.push(error_value(IngestError::new(
                         "line_too_long",
                         format!("partial line exceeded {}", self.max_line_bytes),
                         false,
                     )));
                     partial.clear();
+                } else {
+                    partial.push_str(chunk);
                 }
                 continue;
             }
-            let mut line = partial;
-            partial = String::new();
-            line.push_str(chunk.trim_end_matches(['\n', '\r']));
-            if line.is_empty() {
-                continue;
-            }
-            if line.len() > self.max_line_bytes {
+            let chunk = chunk.trim_end_matches(['\n', '\r']);
+            if partial.len().saturating_add(chunk.len()) > self.max_line_bytes {
                 outputs.push(error_value(IngestError::new(
                     "line_too_long",
                     format!("line exceeded {}", self.max_line_bytes),
                     false,
                 )));
+                partial.clear();
+                continue;
+            }
+            let mut line = std::mem::take(&mut partial);
+            line.push_str(chunk);
+            if line.is_empty() {
                 continue;
             }
             match process_line(recorder, &line).await {
@@ -121,21 +119,25 @@ impl NdjsonIngestServer {
         R: tokio::io::AsyncRead + Unpin,
         W: tokio::io::AsyncWrite + Unpin,
     {
-        let mut lines = BufReader::new(reader).lines();
+        let mut reader = BufReader::new(reader);
         let sem = Arc::new(Semaphore::new(self.max_in_flight.max(1)));
-        while let Some(line) = lines.next_line().await? {
+        while let Some(frame) = read_bounded_line(&mut reader, self.max_line_bytes).await? {
+            let line = match frame {
+                Ok(line) => line,
+                Err(error) => {
+                    let err = match error {
+                        NdjsonIngestError::LineTooLong { max } => {
+                            IngestError::new("line_too_long", format!("line exceeded {max}"), false)
+                        }
+                        other => IngestError::new("malformed_json", other.to_string(), false),
+                    };
+                    let bytes = serde_json::to_vec(&err)?;
+                    writer.write_all(&bytes).await?;
+                    writer.write_all(b"\n").await?;
+                    continue;
+                }
+            };
             if line.is_empty() {
-                continue;
-            }
-            if line.len() > self.max_line_bytes {
-                let err = IngestError::new(
-                    "line_too_long",
-                    format!("line exceeded {}", self.max_line_bytes),
-                    false,
-                );
-                let bytes = serde_json::to_vec(&err)?;
-                writer.write_all(&bytes).await?;
-                writer.write_all(b"\n").await?;
                 continue;
             }
             let _permit = sem.acquire().await?;
@@ -151,10 +153,68 @@ impl NdjsonIngestServer {
     }
 }
 
+async fn read_bounded_line<R>(
+    reader: &mut R,
+    max: usize,
+) -> anyhow::Result<Option<Result<String, NdjsonIngestError>>>
+where
+    R: AsyncBufRead + Unpin,
+{
+    let mut line = Vec::with_capacity(max.min(8 * 1024));
+    let mut discarding = false;
+    loop {
+        let (consumed, newline, eof) = {
+            let available = reader.fill_buf().await?;
+            if available.is_empty() {
+                (0, false, true)
+            } else if let Some(position) = available.iter().position(|byte| *byte == b'\n') {
+                if !discarding {
+                    if line.len().saturating_add(position) > max {
+                        discarding = true;
+                    } else {
+                        line.extend_from_slice(&available[..position]);
+                    }
+                }
+                (position + 1, true, false)
+            } else {
+                if !discarding {
+                    if line.len().saturating_add(available.len()) > max {
+                        discarding = true;
+                        line.clear();
+                    } else {
+                        line.extend_from_slice(available);
+                    }
+                }
+                (available.len(), false, false)
+            }
+        };
+        reader.consume(consumed);
+
+        if eof {
+            // A trailing partial frame is never committed.
+            return Ok(None);
+        }
+        if newline {
+            if discarding {
+                return Ok(Some(Err(NdjsonIngestError::LineTooLong { max })));
+            }
+            if line.last() == Some(&b'\r') {
+                line.pop();
+            }
+            return Ok(Some(String::from_utf8(line).map_err(|error| {
+                NdjsonIngestError::MalformedJson {
+                    message: format!("invalid UTF-8: {error}"),
+                }
+            })));
+        }
+    }
+}
+
 async fn process_line(recorder: &NativeRecorder, line: &str) -> Result<Value, IngestError> {
-    let env: NativeIngestEnvelope = serde_json::from_str(line).map_err(|e| {
-        IngestError::new("malformed_json", e.to_string(), false)
-    })?;
+    let value = crate::protocol::parse_json_strict(line)
+        .map_err(|e| IngestError::new("malformed_json", e.to_string(), false))?;
+    let env: NativeIngestEnvelope = serde_json::from_value(value)
+        .map_err(|e| IngestError::new("bad_envelope", e.to_string(), false))?;
     match recorder.apply_envelope(env).await {
         Ok(ack) => Ok(serde_json::to_value(ack).unwrap_or(Value::Null)),
         Err(e) => Err(e),
@@ -240,6 +300,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn duplicate_keys_are_rejected_without_commit() {
+        let store: Arc<dyn TraceStore> = Arc::new(InMemoryStore::new());
+        let rec = NativeRecorder::new(store.clone());
+        let server = NdjsonIngestServer::default();
+        let input = concat!(
+            r#"{"schema":"blackbox.native.ingest/v1","op":"start_run","op":"finish_run","idempotency_key":"dup","payload":{"cwd":"/tmp"}}"#,
+            "\n"
+        );
+        let outs = server.process_buffer(&rec, input).await;
+        assert_eq!(outs[0]["code"], "malformed_json");
+        assert!(store.list_runs().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn retry_after_ack_is_duplicate() {
         let store: Arc<dyn TraceStore> = Arc::new(InMemoryStore::new());
         let rec = NativeRecorder::new(store.clone());
@@ -252,5 +326,37 @@ mod tests {
         assert_eq!(outs[0]["run_id"], outs[1]["run_id"]);
         assert_eq!(store.list_runs().await.unwrap().len(), 1);
         let _ = json!({});
+    }
+
+    #[tokio::test]
+    async fn stream_discards_oversize_frame_then_recovers() {
+        let store: Arc<dyn TraceStore> = Arc::new(InMemoryStore::new());
+        let recorder = Arc::new(NativeRecorder::new(store.clone()));
+        let server = NdjsonIngestServer {
+            max_line_bytes: 128,
+            max_in_flight: 1,
+        };
+        let good = r#"{"schema":"blackbox.native.ingest/v1","op":"start_run","idempotency_key":"after-large","payload":{}}"#;
+        let input = format!("{}\n{good}\n", "x".repeat(1024));
+        let (reader, mut output) = tokio::io::duplex(4096);
+        let task = tokio::spawn(async move {
+            server
+                .serve_stream(recorder, input.as_bytes(), reader)
+                .await
+        });
+        let mut bytes = Vec::new();
+        tokio::io::AsyncReadExt::read_to_end(&mut output, &mut bytes)
+            .await
+            .unwrap();
+        task.await.unwrap().unwrap();
+        let lines: Vec<Value> = String::from_utf8(bytes)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0]["code"], "line_too_long");
+        assert_eq!(lines[1]["duplicate"], false);
+        assert_eq!(store.list_runs().await.unwrap().len(), 1);
     }
 }

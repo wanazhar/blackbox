@@ -6,6 +6,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::{fs, os::unix::fs::FileTypeExt, os::unix::fs::PermissionsExt};
 
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::Semaphore;
@@ -54,15 +55,27 @@ impl UnixIngestServer {
 
     /// Bind and serve until the returned handle is dropped or accept fails.
     ///
-    /// Removes a pre-existing socket file at the path when present.
+    /// Replaces only a pre-existing Unix socket. A regular file or symlink at
+    /// the configured path is rejected and never removed.
     pub async fn serve(&self) -> anyhow::Result<()> {
-        if self.config.path.exists() {
-            let _ = std::fs::remove_file(&self.config.path);
+        match fs::symlink_metadata(&self.config.path) {
+            Ok(metadata) if metadata.file_type().is_socket() => {
+                fs::remove_file(&self.config.path)?;
+            }
+            Ok(_) => {
+                anyhow::bail!(
+                    "refusing to replace non-socket ingest path: {}",
+                    self.config.path.display()
+                );
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
         }
         if let Some(parent) = self.config.path.parent() {
-            std::fs::create_dir_all(parent)?;
+            fs::create_dir_all(parent)?;
         }
         let listener = UnixListener::bind(&self.config.path)?;
+        fs::set_permissions(&self.config.path, fs::Permissions::from_mode(0o600))?;
         let sem = Arc::new(Semaphore::new(self.config.max_connections.max(1)));
         loop {
             let (stream, _addr) = listener.accept().await?;
@@ -185,5 +198,41 @@ mod tests {
         assert_eq!(store.list_runs().await.unwrap().len(), 1);
 
         server_task.abort();
+    }
+
+    #[tokio::test]
+    async fn refuses_to_replace_regular_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ingest.sock");
+        fs::write(&path, b"keep").unwrap();
+        let store: Arc<dyn TraceStore> = Arc::new(InMemoryStore::new());
+        let recorder = Arc::new(NativeRecorder::new(store));
+        let server = UnixIngestServer::new(recorder, UnixIngestServerConfig::new(&path));
+        let error = server.serve().await.unwrap_err().to_string();
+        assert!(error.contains("non-socket ingest path"));
+        assert_eq!(fs::read(&path).unwrap(), b"keep");
+    }
+
+    #[tokio::test]
+    async fn socket_is_owner_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("private.sock");
+        let store: Arc<dyn TraceStore> = Arc::new(InMemoryStore::new());
+        let recorder = Arc::new(NativeRecorder::new(store));
+        let server = UnixIngestServer::new(recorder, UnixIngestServerConfig::new(&path));
+        let task = tokio::spawn(async move {
+            let _ = server.serve().await;
+        });
+        for _ in 0..50 {
+            if path.exists() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        task.abort();
     }
 }

@@ -28,6 +28,7 @@ mod detect;
 mod evidence;
 mod finding;
 mod identity;
+mod lint;
 mod normalize;
 mod provenance;
 mod resolve;
@@ -66,6 +67,11 @@ pub use finding::{
 };
 pub use identity::{
     PropagationChannel, PropagationRecord, PropagationStatus, TraceIdentity, TRACE_IDENTITY_SCHEMA,
+};
+pub use lint::{
+    explain_boundary_policy, lint_boundary_contract, nearest_token, LintDiagnostic, LintLevel,
+    LintReport, OverriddenValue, PolicyExplanation, PolicySourceLayer, TokenResolution,
+    CORE_CAPABILITY_TOKENS, CORE_EVIDENCE_TOKENS,
 };
 pub use normalize::{
     host_matches_exact, host_matches_suffix, normalize_cidr, normalize_host, normalize_ip,

@@ -366,6 +366,25 @@ pub enum BoundaryAction {
         /// Path to `blackbox.boundary/v1` JSON
         file: PathBuf,
     },
+    /// Lint a boundary contract for unknown tokens, typos, and contradictions (1.8)
+    Lint {
+        /// Path to `blackbox.boundary/v1` JSON
+        file: PathBuf,
+        /// Optional parent boundary JSON (repeatable, root first)
+        #[arg(long = "parent")]
+        parents: Vec<PathBuf>,
+        /// Exit non-zero when lint reports errors
+        #[arg(long)]
+        gate: bool,
+    },
+    /// Explain effective policy tokens and inheritance resolution (1.8)
+    Explain {
+        /// Path to leaf `blackbox.boundary/v1` JSON
+        file: PathBuf,
+        /// Optional parent boundary JSON (repeatable, root first)
+        #[arg(long = "parent")]
+        parents: Vec<PathBuf>,
+    },
     /// Show the resolved boundary attached to a run
     Show {
         /// Run ID, prefix, or "latest"
@@ -1696,6 +1715,117 @@ pub async fn cmd_boundary(
                 contract.required_evidence.len(),
                 contract.fail_closed
             );
+            Ok(())
+        }
+        BoundaryAction::Lint {
+            file,
+            parents,
+            gate,
+        } => {
+            use crate::boundary::lint_boundary_contract;
+            let leaf = load_boundary_file(file)?;
+            let mut parent_contracts = Vec::new();
+            for p in parents {
+                parent_contracts.push(load_boundary_file(p)?);
+            }
+            // Lint leaf and merged resolved form.
+            let mut report = lint_boundary_contract(&leaf);
+            if !parent_contracts.is_empty() {
+                let resolved = resolve_boundary(
+                    &leaf,
+                    ResolveOpts {
+                        parents: parent_contracts,
+                        ..Default::default()
+                    },
+                )?;
+                let merged = lint_boundary_contract(&resolved.contract);
+                report.diagnostics.extend(merged.diagnostics);
+                report.error_count = report
+                    .diagnostics
+                    .iter()
+                    .filter(|d| matches!(d.level, crate::boundary::LintLevel::Error))
+                    .count();
+                report.warning_count = report
+                    .diagnostics
+                    .iter()
+                    .filter(|d| matches!(d.level, crate::boundary::LintLevel::Warning))
+                    .count();
+                report.ok = report.error_count == 0;
+            }
+            if json {
+                output::emit_ok("boundary_lint", &report)?;
+            } else {
+                println!(
+                    "boundary lint ok={} errors={} warnings={}",
+                    report.ok, report.error_count, report.warning_count
+                );
+                for d in &report.diagnostics {
+                    let token = d.token.as_deref().unwrap_or("-");
+                    let sugg = d
+                        .suggestion
+                        .as_ref()
+                        .map(|s| format!(" (did you mean {s}?)"))
+                        .unwrap_or_default();
+                    println!(
+                        "  [{}] {}: {} [{token}]{sugg}",
+                        d.level.as_str(),
+                        d.code,
+                        d.message
+                    );
+                }
+            }
+            if *gate && !report.ok {
+                anyhow::bail!("boundary lint failed with {} error(s)", report.error_count);
+            }
+            Ok(())
+        }
+        BoundaryAction::Explain { file, parents } => {
+            use crate::boundary::explain_boundary_policy;
+            let leaf = load_boundary_file(file)?;
+            let mut parent_contracts = Vec::new();
+            for p in parents {
+                parent_contracts.push(load_boundary_file(p)?);
+            }
+            let resolved = resolve_boundary(
+                &leaf,
+                ResolveOpts {
+                    parents: parent_contracts.clone(),
+                    ..Default::default()
+                },
+            )?;
+            let expl = explain_boundary_policy(
+                &leaf,
+                &parent_contracts,
+                Some(resolved.policy_hash.clone()),
+            );
+            if json {
+                return output::emit_ok("boundary_explain", &expl);
+            }
+            println!(
+                "boundary explain policy_hash={} fail_closed={}",
+                &resolved.policy_hash[..16.min(resolved.policy_hash.len())],
+                expl.fail_closed
+            );
+            println!("  required_evidence={:?}", expl.required_evidence);
+            println!("  network_selectors={:?}", expl.network_selectors);
+            for t in &expl.tokens {
+                println!(
+                    "  token {} effective={} source={}",
+                    t.token,
+                    t.effective.as_str(),
+                    t.source.as_str()
+                );
+                if !t.resolution_order.is_empty() {
+                    println!("    resolution={}", t.resolution_order.join(" → "));
+                }
+                for o in &t.overridden {
+                    println!(
+                        "    overridden {}={}",
+                        o.layer.as_str(),
+                        o.disposition.as_str()
+                    );
+                }
+            }
             Ok(())
         }
         BoundaryAction::Show { run_id } => {

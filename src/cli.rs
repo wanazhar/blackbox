@@ -1151,7 +1151,9 @@ impl Cli {
                     | crate::cli_ext::BoundaryAction::Provenance { run_id, .. } => {
                         *run_id = resolve_run_id(&store, run_id).await?;
                     }
-                    crate::cli_ext::BoundaryAction::Validate { .. } => {}
+                    crate::cli_ext::BoundaryAction::Validate { .. }
+                    | crate::cli_ext::BoundaryAction::Lint { .. }
+                    | crate::cli_ext::BoundaryAction::Explain { .. } => {}
                 }
                 crate::cli_ext::cmd_boundary(std::sync::Arc::new(store), &args, self.json).await
             }

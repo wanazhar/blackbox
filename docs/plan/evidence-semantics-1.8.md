@@ -60,7 +60,7 @@
 | **B** | Calibrated findings + evidence-aware detectors | `FindingDecision`, severity derivation, integrity classes | ✅ |
 | **C** | Typed incident continuation | `ContinuationRelation` + cited conclusions | ✅ |
 | **D** | Forensic packs | Citation-complete selection, scope object, typed redaction, HMAC tokens | ✅ |
-| **E** | Lint / explain / vocab registry | `boundary lint`, `boundary explain`, fail-closed unknown tokens | |
+| **E** | Lint / explain / vocab registry | `boundary lint`, `boundary explain`, fail-closed unknown tokens | ✅ |
 | **F** | Frozen benchmark + layered views | Versioned corpus, API/UI layer labels, qualify | |
 
 ---

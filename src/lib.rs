@@ -44,6 +44,9 @@
 //! | [`native`] | Native run/event ingestion without PTY (1.9) |
 //! | [`security`] | Security decisions and action reconciliation (1.9) |
 //! | [`commitment`] | Run evidence hash chains and signatures (1.9) |
+//! | [`otlp`] | OpenTelemetry export/import foundation (1.9) |
+//! | [`conformance`] | Protocol conformance profiles and runner (1.9) |
+//! | [`integrations`] | Native harness reference integrations (1.9) |
 //! | [`experiment`] | Experiments, reports, gates |
 //! | [`export`] | Portable / JSONL / HTML |
 //! | [`integrity`] | `fsck` and repair |
@@ -103,6 +106,8 @@ pub mod cassette;
 pub mod cli;
 /// Run evidence commitments: hash chains and optional signatures (1.9).
 pub mod commitment;
+/// Protocol conformance profiles and runner (1.9).
+pub mod conformance;
 /// 1.6 CLI handlers (fsck, verify, experiment, …).
 pub mod cli_ext;
 /// Store paths, capture policy, continuity mode.
@@ -125,6 +130,8 @@ pub mod forensic;
 pub mod incident;
 /// Durable ingest spool and crash recovery.
 pub mod ingest;
+/// Native harness integrations (1.9).
+pub mod integrations;
 /// Store integrity checks (`fsck`) and repair.
 pub mod integrity;
 /// Ambient wrap decision table (`maybe-run`).
@@ -137,6 +144,8 @@ pub mod memory;
 pub mod nest;
 /// Native run/event ingestion without PTY wrapping (1.9).
 pub mod native;
+/// OpenTelemetry interoperability foundation (1.9).
+pub mod otlp;
 /// Human and JSON CLI output helpers.
 pub mod output;
 /// Event writer and batch ingest pipeline.

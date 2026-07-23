@@ -4,7 +4,7 @@ What “good” means for blackbox, what each major version promised, and how ea
 release keeps those promises executable.
 
 This is **product direction**, not a how-to. Operators: [guide/README.md](guide/README.md).
-**1.9 (in progress):**
+**1.9 (release candidate):**
 [issue #7](https://github.com/wanazhar/blackbox/issues/7) — evidence protocol,
 embeddability, native harness integration. Plan:
 [plan/evidence-protocol-1.9.md](plan/evidence-protocol-1.9.md).
@@ -253,7 +253,7 @@ Epic: [issue #6](https://github.com/wanazhar/blackbox/issues/6). Plan:
 
 ---
 
-## 1.9 bar (in progress)
+## 1.9 bar (qualified)
 
 Epic: [issue #7](https://github.com/wanazhar/blackbox/issues/7). Plan:
 [plan/evidence-protocol-1.9.md](plan/evidence-protocol-1.9.md). Spec:
@@ -271,4 +271,4 @@ Epic: [issue #7](https://github.com/wanazhar/blackbox/issues/7). Plan:
 | **F1** | Conformance runner | ✅ `blackbox conform` Core/Recorder/Boundary/Forensic |
 | **I1** | Reference integration | ✅ Claude Code hooks adapter |
 | **A1** | Architecture boundaries | ✅ Protocol APIs free of clap/SQLite types |
-| **Q1** | Permanent gates | 1.4–1.8 gates remain green; 1.9 suite in CI |
+| **Q1** | Permanent gates | ✅ 1.4–1.8 gates and the 1.9 suite remain green |

@@ -4,7 +4,7 @@
 |---|---|
 | **Document** | Product + technical plan for 1.9 |
 | **Date** | 2026-07-23 |
-| **Status** | **Implementation under qualification** — phases A–G landed; tag pending green release gates |
+| **Status** | **Implementation complete** — Unix qualification green; tag pending |
 | **Baseline** | 1.8.0 (evidence semantics & forensic rigor) |
 | **Target tag** | **1.9.0** |
 | **Epic** | [Issue #7](https://github.com/wanazhar/blackbox/issues/7) |

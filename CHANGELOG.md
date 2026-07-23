@@ -4,7 +4,9 @@ All notable changes to **blackbox** are documented here.
 
 ## [Unreleased]
 
-### 1.9 — Evidence protocol & embeddability (in progress)
+## [1.9.0] — 2026-07-23
+
+### 1.9 — Evidence protocol & embeddability
 
 Epic: [issue #7](https://github.com/wanazhar/blackbox/issues/7). Plan:
 [docs/plan/evidence-protocol-1.9.md](docs/plan/evidence-protocol-1.9.md).

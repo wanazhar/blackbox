@@ -8,7 +8,8 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tokio::sync::Mutex;
+use sha2::{Digest, Sha256};
+use tokio::sync::{Mutex, Semaphore};
 use uuid::Uuid;
 
 use crate::core::event::{EventSource, EventStatus, SideEffect, TraceEvent};
@@ -120,6 +121,7 @@ struct IdempotentResult {
     run_id: Option<String>,
     event_id: Option<String>,
     sequence: Option<u64>,
+    request_hash: String,
 }
 
 /// Native in-process recorder backed by a [`TraceStore`].
@@ -130,8 +132,13 @@ pub struct NativeRecorder {
     writers: Mutex<HashMap<String, EventWriter>>,
     /// idempotency_key → prior result (LRU via VecDeque)
     idempotency: Mutex<IdempotencyCache>,
-    /// Current pending count for backpressure accounting.
-    pending: Mutex<usize>,
+    /// Bound concurrent applies without a cancellation-sensitive counter.
+    pending: Arc<Semaphore>,
+    /// Serialize the check → commit → remember critical section.
+    ///
+    /// EventWriter is single-writer by design. This also makes two concurrent
+    /// deliveries of the same idempotency key observe one committed result.
+    operation_lock: Mutex<()>,
 }
 
 struct IdempotencyCache {
@@ -177,12 +184,14 @@ impl NativeRecorder {
     /// Create with config.
     pub fn with_config(store: Arc<dyn TraceStore>, config: NativeRecorderConfig) -> Self {
         let max = config.max_idempotency_keys;
+        let max_pending = config.max_pending;
         Self {
             store,
             config,
             writers: Mutex::new(HashMap::new()),
             idempotency: Mutex::new(IdempotencyCache::new(max)),
-            pending: Mutex::new(0),
+            pending: Arc::new(Semaphore::new(max_pending)),
+            operation_lock: Mutex::new(()),
         }
     }
 
@@ -211,10 +220,32 @@ impl NativeRecorder {
             ));
         }
 
+        let request_hash = envelope_request_hash(&env)?;
+
+        // Refuse excess concurrent work. The owned permit is cancellation-safe:
+        // dropping this future always restores capacity.
+        let _pending_permit = self.pending.clone().try_acquire_owned().map_err(|_| {
+            IngestError::new(
+                "backpressure",
+                format!("pending operations at limit {}", self.config.max_pending),
+                true,
+            )
+        })?;
+
+        // The cache check and durable operation must be one critical section.
+        let _operation = self.operation_lock.lock().await;
+
         // Duplicate short-circuit.
         {
             let cache = self.idempotency.lock().await;
             if let Some(prev) = cache.get(&env.idempotency_key) {
+                if prev.request_hash != request_hash {
+                    return Err(IngestError::new(
+                        "idempotency_conflict",
+                        "idempotency_key was already used for a different request",
+                        false,
+                    ));
+                }
                 let mut ack = IngestAck::new(&env.idempotency_key, true);
                 ack.run_id = prev.run_id.clone().or(env.run_id.clone());
                 ack.event_id = prev.event_id.clone();
@@ -223,46 +254,47 @@ impl NativeRecorder {
             }
         }
 
-        // Backpressure: refuse when too many concurrent applies.
-        {
-            let mut p = self.pending.lock().await;
-            if *p >= self.config.max_pending {
-                return Err(IngestError::new(
-                    "backpressure",
-                    format!("pending operations at limit {}", self.config.max_pending),
-                    true,
-                ));
-            }
-            *p += 1;
+        // Recover a committed result after process restart / lost ack. Wire
+        // operations use deterministic record IDs derived from the key.
+        if let Some(mut ack) = self.recover_durable_result(&env, &request_hash).await? {
+            ack.duplicate = true;
+            return Ok(ack);
         }
 
-        let result = self.apply_envelope_inner(env).await;
-
-        {
-            let mut p = self.pending.lock().await;
-            *p = p.saturating_sub(1);
-        }
-
-        result
+        self.apply_envelope_inner(env, request_hash).await
     }
 
     async fn apply_envelope_inner(
         &self,
         env: NativeIngestEnvelope,
+        request_hash: String,
     ) -> Result<IngestAck, IngestError> {
         let payload = env.payload.clone().unwrap_or_else(|| json!({}));
         match env.op {
             IngestOp::StartRun => {
-                let opts: StartRunOpts = serde_json::from_value(payload).map_err(|e| {
-                    IngestError::new("bad_payload", e.to_string(), false)
-                })?;
-                let run = self.start_run(opts).await.map_err(store_err)?;
+                let mut opts: StartRunOpts = serde_json::from_value(payload)
+                    .map_err(|e| IngestError::new("bad_payload", e.to_string(), false))?;
+                if opts.run_id.is_none() {
+                    opts.run_id = Some(deterministic_record_id("native-run", &env.idempotency_key));
+                }
+                let run = self
+                    .start_run_inner(
+                        opts,
+                        Some(deterministic_record_id(
+                            "native-start",
+                            &env.idempotency_key,
+                        )),
+                        Some((&env.idempotency_key, &request_hash)),
+                    )
+                    .await
+                    .map_err(store_err)?;
                 self.remember(
                     &env.idempotency_key,
                     IdempotentResult {
                         run_id: Some(run.id.clone()),
                         event_id: None,
                         sequence: None,
+                        request_hash,
                     },
                 )
                 .await;
@@ -272,16 +304,26 @@ impl NativeRecorder {
             }
             IngestOp::FinishRun => {
                 let run_id = require_run_id(&env)?;
-                let opts: FinishRunOpts = serde_json::from_value(payload).map_err(|e| {
-                    IngestError::new("bad_payload", e.to_string(), false)
-                })?;
-                self.finish_run(&run_id, opts).await.map_err(store_err)?;
+                let opts: FinishRunOpts = serde_json::from_value(payload)
+                    .map_err(|e| IngestError::new("bad_payload", e.to_string(), false))?;
+                self.finish_run_inner(
+                    &run_id,
+                    opts,
+                    Some(deterministic_record_id(
+                        "native-finish",
+                        &env.idempotency_key,
+                    )),
+                    Some((&env.idempotency_key, &request_hash)),
+                )
+                .await
+                .map_err(store_err)?;
                 self.remember(
                     &env.idempotency_key,
                     IdempotentResult {
                         run_id: Some(run_id.clone()),
                         event_id: None,
                         sequence: None,
+                        request_hash,
                     },
                 )
                 .await;
@@ -298,31 +340,44 @@ impl NativeRecorder {
             | IngestOp::AttachEvidence => {
                 let run_id = require_run_id(&env)?;
                 let mut opts = event_opts_from_op(env.op, payload)?;
-                if let Some(ref producer) = env.producer.or_else(|| self.config.default_producer.clone())
+                if let Some(ref producer) = env
+                    .producer
+                    .or_else(|| self.config.default_producer.clone())
                 {
                     opts.metadata
                         .entry("native.producer".into())
                         .or_insert_with(|| Value::String(producer.clone()));
                 }
                 if let Some(cs) = env.client_seq {
-                    opts.metadata
-                        .insert("native.client_seq".into(), json!(cs));
+                    opts.metadata.insert("native.client_seq".into(), json!(cs));
+                }
+                opts.metadata.insert(
+                    "native.idempotency_key".into(),
+                    Value::String(env.idempotency_key.clone()),
+                );
+                opts.metadata.insert(
+                    "native.request_hash".into(),
+                    Value::String(request_hash.clone()),
+                );
+                if opts.event_id.is_none() {
+                    opts.event_id = Some(deterministic_record_id(
+                        "native-event",
+                        &env.idempotency_key,
+                    ));
                 }
                 // Harness timestamps are hints only — never drive sequence.
                 if let Some(ts) = opts.metadata.remove("client_timestamp") {
-                    opts.metadata
-                        .insert("native.client_timestamp".into(), ts);
+                    opts.metadata.insert("native.client_timestamp".into(), ts);
                 }
-                let (event_id, sequence) = self
-                    .record_event(&run_id, opts)
-                    .await
-                    .map_err(store_err)?;
+                let (event_id, sequence) =
+                    self.record_event(&run_id, opts).await.map_err(store_err)?;
                 self.remember(
                     &env.idempotency_key,
                     IdempotentResult {
                         run_id: Some(run_id.clone()),
                         event_id: Some(event_id.clone()),
                         sequence: Some(sequence),
+                        request_hash,
                     },
                 )
                 .await;
@@ -336,6 +391,120 @@ impl NativeRecorder {
         }
     }
 
+    async fn recover_durable_result(
+        &self,
+        env: &NativeIngestEnvelope,
+        request_hash: &str,
+    ) -> Result<Option<IngestAck>, IngestError> {
+        match env.op {
+            IngestOp::StartRun => {
+                let opts: StartRunOpts =
+                    serde_json::from_value(env.payload.clone().unwrap_or_else(|| json!({})))
+                        .map_err(|e| IngestError::new("bad_payload", e.to_string(), false))?;
+                let caller_supplied_run_id = opts.run_id.is_some();
+                let run_id = opts
+                    .run_id
+                    .unwrap_or_else(|| deterministic_record_id("native-run", &env.idempotency_key));
+                if self
+                    .store
+                    .get_run(&run_id)
+                    .await
+                    .map_err(store_err)?
+                    .is_some()
+                {
+                    let start_event_id =
+                        deterministic_record_id("native-start", &env.idempotency_key);
+                    if let Some(event) = self
+                        .store
+                        .get_event(&start_event_id)
+                        .await
+                        .map_err(store_err)?
+                    {
+                        verify_recovered_request(&event, request_hash)?;
+                    } else if caller_supplied_run_id {
+                        return Err(IngestError::new(
+                            "idempotency_conflict",
+                            "requested run_id already exists without a matching ingest receipt",
+                            false,
+                        ));
+                    } else {
+                        // The run row committed but the process stopped before
+                        // its start marker. Complete the deterministic marker.
+                        let mut started =
+                            TraceEvent::new(&run_id, EventSource::System, "run.started");
+                        started.id = start_event_id;
+                        started.status = EventStatus::Success;
+                        started.side_effect = SideEffect::None;
+                        started.metadata.insert("native".into(), json!(true));
+                        started
+                            .metadata
+                            .insert("native.idempotency_key".into(), json!(env.idempotency_key));
+                        started
+                            .metadata
+                            .insert("native.request_hash".into(), json!(request_hash));
+                        self.write_event(&run_id, started)
+                            .await
+                            .map_err(store_err)?;
+                    }
+                    let result = IdempotentResult {
+                        run_id: Some(run_id.clone()),
+                        event_id: None,
+                        sequence: None,
+                        request_hash: request_hash.to_string(),
+                    };
+                    self.remember(&env.idempotency_key, result).await;
+                    let mut ack = IngestAck::new(&env.idempotency_key, true);
+                    ack.run_id = Some(run_id);
+                    return Ok(Some(ack));
+                }
+            }
+            IngestOp::FinishRun => {
+                let event_id = deterministic_record_id("native-finish", &env.idempotency_key);
+                if let Some(event) = self.store.get_event(&event_id).await.map_err(store_err)? {
+                    verify_recovered_request(&event, request_hash)?;
+                    let result = IdempotentResult {
+                        run_id: Some(event.run_id.clone()),
+                        event_id: Some(event.id.clone()),
+                        sequence: Some(event.sequence),
+                        request_hash: request_hash.to_string(),
+                    };
+                    self.remember(&env.idempotency_key, result).await;
+                    let mut ack = IngestAck::new(&env.idempotency_key, true);
+                    ack.run_id = Some(event.run_id);
+                    ack.event_id = Some(event.id);
+                    ack.sequence = Some(event.sequence);
+                    return Ok(Some(ack));
+                }
+            }
+            IngestOp::RecordEvent
+            | IngestOp::RecordTool
+            | IngestOp::RecordModel
+            | IngestOp::RecordHandoff
+            | IngestOp::RecordApproval
+            | IngestOp::RecordSecurityDecision
+            | IngestOp::AttachEvidence => {
+                let event_id = deterministic_record_id("native-event", &env.idempotency_key);
+                if let Some(event) = self.store.get_event(&event_id).await.map_err(store_err)? {
+                    verify_recovered_request(&event, request_hash)?;
+                    let result = IdempotentResult {
+                        run_id: Some(event.run_id.clone()),
+                        event_id: Some(event.id.clone()),
+                        sequence: Some(event.sequence),
+                        request_hash: request_hash.to_string(),
+                    };
+                    self.remember(&env.idempotency_key, result).await;
+                    let mut ack = IngestAck::new(&env.idempotency_key, true);
+                    ack.run_id = Some(event.run_id);
+                    ack.event_id = Some(event.id);
+                    ack.sequence = Some(event.sequence);
+                    return Ok(Some(ack));
+                }
+            }
+            IngestOp::Ack => {}
+        }
+        Ok(None)
+    }
+
     async fn remember(&self, key: &str, result: IdempotentResult) {
         let mut cache = self.idempotency.lock().await;
         cache.insert(key.to_string(), result);
@@ -343,9 +512,20 @@ impl NativeRecorder {
 
     /// Start a new run and mark it Running.
     pub async fn start_run(&self, opts: StartRunOpts) -> anyhow::Result<Run> {
-        let cwd = opts
-            .cwd
-            .unwrap_or_else(|| std::env::current_dir().map(|p| p.display().to_string()).unwrap_or_else(|_| "/".into()));
+        self.start_run_inner(opts, None, None).await
+    }
+
+    async fn start_run_inner(
+        &self,
+        opts: StartRunOpts,
+        start_event_id: Option<String>,
+        idempotency: Option<(&str, &str)>,
+    ) -> anyhow::Result<Run> {
+        let cwd = opts.cwd.unwrap_or_else(|| {
+            std::env::current_dir()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|_| "/".into())
+        });
         let mut run = Run::new(
             if opts.command.is_empty() {
                 vec!["<native>".into()]
@@ -376,11 +556,20 @@ impl NativeRecorder {
 
         // Bookkeeping event.
         let mut started = TraceEvent::new(&run.id, EventSource::System, "run.started");
+        if let Some(id) = start_event_id {
+            started.id = id;
+        }
         started.status = EventStatus::Success;
         started.side_effect = SideEffect::None;
-        started
-            .metadata
-            .insert("native".into(), json!(true));
+        started.metadata.insert("native".into(), json!(true));
+        if let Some((key, request_hash)) = idempotency {
+            started
+                .metadata
+                .insert("native.idempotency_key".into(), json!(key));
+            started
+                .metadata
+                .insert("native.request_hash".into(), json!(request_hash));
+        }
         self.write_event(&run.id, started).await?;
 
         Ok(run)
@@ -583,6 +772,16 @@ impl NativeRecorder {
 
     /// Finish a run.
     pub async fn finish_run(&self, run_id: &str, opts: FinishRunOpts) -> anyhow::Result<Run> {
+        self.finish_run_inner(run_id, opts, None, None).await
+    }
+
+    async fn finish_run_inner(
+        &self,
+        run_id: &str,
+        opts: FinishRunOpts,
+        finish_event_id: Option<String>,
+        idempotency: Option<(&str, &str)>,
+    ) -> anyhow::Result<Run> {
         let mut run = self
             .store
             .get_run(run_id)
@@ -591,6 +790,9 @@ impl NativeRecorder {
 
         // Emit run.ended before status update so sequence includes it.
         let mut ended = TraceEvent::new(run_id, EventSource::System, "run.ended");
+        if let Some(id) = finish_event_id {
+            ended.id = id;
+        }
         ended.status = if opts.exit_code == 0 {
             EventStatus::Success
         } else {
@@ -600,6 +802,14 @@ impl NativeRecorder {
         ended
             .metadata
             .insert("exit_code".into(), json!(opts.exit_code));
+        if let Some((key, request_hash)) = idempotency {
+            ended
+                .metadata
+                .insert("native.idempotency_key".into(), json!(key));
+            ended
+                .metadata
+                .insert("native.request_hash".into(), json!(request_hash));
+        }
         self.write_event(run_id, ended).await?;
 
         run.finish(opts.exit_code);
@@ -610,30 +820,90 @@ impl NativeRecorder {
             run.notes = Some(notes);
         }
         // Refresh next_sequence from writer if present.
-        if let Some(w) = self.writers.lock().await.get(run_id) {
-            // next sequence is events_written when using simple writer; best-effort
-            let health = w.health_snapshot();
-            run.next_sequence = health.events_written;
-        }
+        run.next_sequence = self
+            .store
+            .get_events(run_id)
+            .await?
+            .iter()
+            .map(|event| event.sequence)
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1);
         self.store.update_run(&run).await?;
         self.writers.lock().await.remove(run_id);
         Ok(run)
     }
 
     async fn write_event(&self, run_id: &str, event: TraceEvent) -> anyhow::Result<u64> {
+        if let Some(existing) = self.store.get_event(&event.id).await? {
+            anyhow::ensure!(
+                existing.run_id == run_id,
+                "event id {} already belongs to run {}",
+                event.id,
+                existing.run_id
+            );
+            return Ok(existing.sequence);
+        }
         // Ensure writer exists (run may have been started earlier in process).
         let written = {
             let mut writers = self.writers.lock().await;
             if !writers.contains_key(run_id) {
+                let next = self
+                    .store
+                    .get_events(run_id)
+                    .await?
+                    .iter()
+                    .map(|event| event.sequence)
+                    .max()
+                    .unwrap_or(0)
+                    .saturating_add(1)
+                    .max(1);
                 writers.insert(
                     run_id.to_string(),
-                    EventWriter::new(self.store.clone(), run_id.to_string()),
+                    EventWriter::with_start(self.store.clone(), run_id.to_string(), next),
                 );
             }
             let writer = writers.get_mut(run_id).expect("writer just inserted");
             writer.write(event).await?
         };
         Ok(written.sequence)
+    }
+}
+
+fn deterministic_record_id(prefix: &str, idempotency_key: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"blackbox.native.ingest/v1\0");
+    hasher.update(prefix.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(idempotency_key.as_bytes());
+    let digest = hex::encode(hasher.finalize());
+    format!("{prefix}-{}", &digest[..32])
+}
+
+fn envelope_request_hash(env: &NativeIngestEnvelope) -> Result<String, IngestError> {
+    let value = serde_json::to_value(env)
+        .map_err(|e| IngestError::new("bad_envelope", e.to_string(), false))?;
+    crate::protocol::canonical_hash(&value)
+        .map_err(|e| IngestError::new("bad_envelope", e.to_string(), false))
+}
+
+fn verify_recovered_request(event: &TraceEvent, request_hash: &str) -> Result<(), IngestError> {
+    match event
+        .metadata
+        .get("native.request_hash")
+        .and_then(Value::as_str)
+    {
+        Some(stored) if stored == request_hash => Ok(()),
+        Some(_) => Err(IngestError::new(
+            "idempotency_conflict",
+            "idempotency_key was already used for a different request",
+            false,
+        )),
+        None => Err(IngestError::new(
+            "idempotency_conflict",
+            "durable record is missing its request fingerprint",
+            false,
+        )),
     }
 }
 
@@ -851,9 +1121,15 @@ mod tests {
             })
             .await
             .unwrap();
-        rec.record_tool(&run.id, "bash", Some(json!({"cmd": "ls"})), None, EventStatus::Success)
-            .await
-            .unwrap();
+        rec.record_tool(
+            &run.id,
+            "bash",
+            Some(json!({"cmd": "ls"})),
+            None,
+            EventStatus::Success,
+        )
+        .await
+        .unwrap();
         rec.record_model(&run.id, Some("test-model"), Some(10), Some(20))
             .await
             .unwrap();
@@ -907,10 +1183,7 @@ mod tests {
         assert_eq!(e1.event_id, e2.event_id);
         // Only one tool event (+ run.started).
         let events = store.get_events(&run_id).await.unwrap();
-        assert_eq!(
-            events.iter().filter(|e| e.kind == "tool.call").count(),
-            1
-        );
+        assert_eq!(events.iter().filter(|e| e.kind == "tool.call").count(), 1);
     }
 
     #[tokio::test]

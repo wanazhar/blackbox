@@ -8,9 +8,9 @@ use std::sync::Arc;
 use blackbox::core::event::EventStatus;
 use blackbox::core::run::RunStatus;
 use blackbox::native::{
-    FinishRunOpts, IngestOp, NativeIngestEnvelope, NativeRecorder, NdjsonIngestServer,
-    StartRunOpts,
+    FinishRunOpts, IngestOp, NativeIngestEnvelope, NativeRecorder, NdjsonIngestServer, StartRunOpts,
 };
+use blackbox::storage::sqlite::SqliteStore;
 use blackbox::storage::store::InMemoryStore;
 use blackbox::storage::TraceStore;
 use serde_json::json;
@@ -164,16 +164,8 @@ async fn envelope_api_covers_lifecycle() {
             IngestOp::RecordModel,
             json!({"model": "m", "input_tokens": 1}),
         ),
-        (
-            "e-tool",
-            IngestOp::RecordTool,
-            json!({"tool_name": "read"}),
-        ),
-        (
-            "e-hand",
-            IngestOp::RecordHandoff,
-            json!({"summary": "s"}),
-        ),
+        ("e-tool", IngestOp::RecordTool, json!({"tool_name": "read"})),
+        ("e-hand", IngestOp::RecordHandoff, json!({"summary": "s"})),
         (
             "e-appr",
             IngestOp::RecordApproval,
@@ -223,9 +215,134 @@ async fn backpressure_when_pending_saturated() {
             ..Default::default()
         },
     );
-    let env = NativeIngestEnvelope::new(IngestOp::StartRun, "bp")
-        .with_payload(json!({"cwd": "/tmp"}));
+    let env =
+        NativeIngestEnvelope::new(IngestOp::StartRun, "bp").with_payload(json!({"cwd": "/tmp"}));
     let err = rec.apply_envelope(env).await.unwrap_err();
     assert_eq!(err.code, "backpressure");
     assert!(err.retryable);
+}
+
+#[tokio::test]
+async fn retry_survives_recorder_restart_and_sequence_continues() {
+    let store: Arc<dyn TraceStore> = Arc::new(SqliteStore::open_memory().unwrap());
+    let start = NativeIngestEnvelope::new(IngestOp::StartRun, "restart-start")
+        .with_payload(json!({"cwd": "/tmp"}));
+
+    let first = NativeRecorder::new(store.clone())
+        .apply_envelope(start.clone())
+        .await
+        .unwrap();
+    let run_id = first.run_id.clone().unwrap();
+
+    // A new recorder has no in-memory idempotency or EventWriter state.
+    let restarted = NativeRecorder::new(store.clone());
+    let retry = restarted.apply_envelope(start).await.unwrap();
+    assert!(retry.duplicate);
+    assert_eq!(retry.run_id.as_deref(), Some(run_id.as_str()));
+
+    let event = NativeIngestEnvelope::new(IngestOp::RecordTool, "restart-tool")
+        .with_run_id(&run_id)
+        .with_payload(json!({"tool_name": "read"}));
+    let recorded = restarted.apply_envelope(event.clone()).await.unwrap();
+    assert!(!recorded.duplicate);
+    assert!(recorded.sequence.unwrap() > 1);
+
+    let restarted_again = NativeRecorder::new(store.clone());
+    let retry = restarted_again.apply_envelope(event).await.unwrap();
+    assert!(retry.duplicate);
+    assert_eq!(retry.event_id, recorded.event_id);
+    assert_eq!(retry.sequence, recorded.sequence);
+
+    let next = restarted_again
+        .apply_envelope(
+            NativeIngestEnvelope::new(IngestOp::RecordModel, "restart-model")
+                .with_run_id(&run_id)
+                .with_payload(json!({"model": "m"})),
+        )
+        .await
+        .unwrap();
+    assert!(next.sequence.unwrap() > recorded.sequence.unwrap());
+}
+
+#[tokio::test]
+async fn concurrent_retry_commits_once() {
+    let store: Arc<dyn TraceStore> = Arc::new(InMemoryStore::new());
+    let recorder = Arc::new(NativeRecorder::new(store.clone()));
+    let env = NativeIngestEnvelope::new(IngestOp::StartRun, "concurrent-start")
+        .with_payload(json!({"cwd": "/tmp"}));
+
+    let (a, b) = tokio::join!(
+        recorder.apply_envelope(env.clone()),
+        recorder.apply_envelope(env)
+    );
+    let a = a.unwrap();
+    let b = b.unwrap();
+    assert_ne!(a.duplicate, b.duplicate);
+    assert_eq!(a.run_id, b.run_id);
+    assert_eq!(store.list_runs().await.unwrap().len(), 1);
+    let run_id = a.run_id.unwrap();
+    assert_eq!(
+        store
+            .get_events(&run_id)
+            .await
+            .unwrap()
+            .iter()
+            .filter(|event| event.kind == "run.started")
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn reused_idempotency_key_with_different_payload_fails_closed() {
+    let store: Arc<dyn TraceStore> = Arc::new(InMemoryStore::new());
+    let recorder = NativeRecorder::new(store);
+    recorder
+        .apply_envelope(
+            NativeIngestEnvelope::new(IngestOp::StartRun, "conflict")
+                .with_payload(json!({"cwd": "/tmp/a"})),
+        )
+        .await
+        .unwrap();
+    let err = recorder
+        .apply_envelope(
+            NativeIngestEnvelope::new(IngestOp::StartRun, "conflict")
+                .with_payload(json!({"cwd": "/tmp/b"})),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, "idempotency_conflict");
+    assert!(!err.retryable);
+}
+
+#[tokio::test]
+async fn finish_retry_survives_recorder_restart() {
+    let store: Arc<dyn TraceStore> = Arc::new(SqliteStore::open_memory().unwrap());
+    let first = NativeRecorder::new(store.clone());
+    let start = first
+        .apply_envelope(
+            NativeIngestEnvelope::new(IngestOp::StartRun, "finish-start")
+                .with_payload(json!({"cwd": "/tmp"})),
+        )
+        .await
+        .unwrap();
+    let run_id = start.run_id.unwrap();
+    let finish = NativeIngestEnvelope::new(IngestOp::FinishRun, "finish-once")
+        .with_run_id(&run_id)
+        .with_payload(json!({"exit_code": 0}));
+    first.apply_envelope(finish.clone()).await.unwrap();
+
+    let restarted = NativeRecorder::new(store.clone());
+    let retry = restarted.apply_envelope(finish).await.unwrap();
+    assert!(retry.duplicate);
+    assert_eq!(
+        store
+            .get_events(&run_id)
+            .await
+            .unwrap()
+            .iter()
+            .filter(|event| event.kind == "run.ended")
+            .count(),
+        1
+    );
 }

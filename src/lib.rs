@@ -43,6 +43,7 @@
 //! | [`protocol`] | Evidence protocol canonical form & schemas (1.9) |
 //! | [`native`] | Native run/event ingestion without PTY (1.9) |
 //! | [`security`] | Security decisions and action reconciliation (1.9) |
+//! | [`commitment`] | Run evidence hash chains and signatures (1.9) |
 //! | [`experiment`] | Experiments, reports, gates |
 //! | [`export`] | Portable / JSONL / HTML |
 //! | [`integrity`] | `fsck` and repair |
@@ -100,6 +101,8 @@ pub mod capture;
 pub mod cassette;
 /// Clap CLI definition and command dispatch.
 pub mod cli;
+/// Run evidence commitments: hash chains and optional signatures (1.9).
+pub mod commitment;
 /// 1.6 CLI handlers (fsck, verify, experiment, …).
 pub mod cli_ext;
 /// Store paths, capture policy, continuity mode.

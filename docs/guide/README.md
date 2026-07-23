@@ -37,6 +37,7 @@ For the full map (agents, reference, internals), see the [docs index](../README.
 | [Verification receipts](verification.md) | Execution vs verification vs capture |
 | [Experiments & gates](experiments.md) | Typed metadata, reports, CI gates |
 | [Boundaries & incidents](boundaries-and-incidents.md) | Authorization, evidence import, IR packs (1.7) |
+| [Native integrations](native-integrations.md) | Native ingest, Claude hooks, OTLP, conform (1.9) |
 | [Capsules & MCP cassettes](capsules-and-cassettes.md) | Reproduction packages; experimental protocol replay |
 | [Budgets & adapters](budgets-and-adapters.md) | Enforcement honesty; NDJSON adapters; project index |
 | [Overhead](overhead.md) | Soft benches, stats, cost knobs |

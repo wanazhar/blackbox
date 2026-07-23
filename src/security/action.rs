@@ -186,10 +186,7 @@ mod tests {
             &["/usr/bin/curl".into(), "https://x".into()],
             Some("/tmp"),
         );
-        let b = ActionFingerprint::process_exec(
-            &["curl".into(), "https://x".into()],
-            Some("/tmp"),
-        );
+        let b = ActionFingerprint::process_exec(&["curl".into(), "https://x".into()], Some("/tmp"));
         assert_eq!(a.hash(), b.hash());
         assert_eq!(a.hash().len(), 64);
     }

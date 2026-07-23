@@ -2,6 +2,4 @@
 
 pub mod claude_hooks;
 
-pub use claude_hooks::{
-    ClaudeHooksAdapter, ClaudeHooksCoverage, CLAUDE_HOOKS_CONFORMANCE_LEVEL,
-};
+pub use claude_hooks::{ClaudeHooksAdapter, ClaudeHooksCoverage, CLAUDE_HOOKS_CONFORMANCE_LEVEL};

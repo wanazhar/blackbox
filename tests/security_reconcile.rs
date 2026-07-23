@@ -194,10 +194,8 @@ fn duplicate_decisions_both_reported() {
 
 #[test]
 fn unrelated_actions_do_not_count_as_bypass() {
-    let denied = ActionFingerprint::process_exec(
-        &["curl".into(), "https://evil.example".into()],
-        None,
-    );
+    let denied =
+        ActionFingerprint::process_exec(&["curl".into(), "https://evil.example".into()], None);
     let d = SecurityDecision::builder("opa", DecisionKind::Deny, denied.hash())
         .action(denied)
         .build();

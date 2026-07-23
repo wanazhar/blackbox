@@ -36,10 +36,14 @@ fn detects_insertion_deletion_replacement_reordering() {
     let deleted: Vec<_> = events.iter().take(2).cloned().collect();
     let r = verify_commitment(&commitment, &deleted, None, &[]);
     assert!(!r.ok);
-    assert!(r.chain.faults.iter().any(|f| matches!(
-        f,
-        ChainFault::Deletion { .. } | ChainFault::Truncation { .. } | ChainFault::Insertion { .. }
-    )) || !r.root_ok);
+    assert!(
+        r.chain.faults.iter().any(|f| matches!(
+            f,
+            ChainFault::Deletion { .. }
+                | ChainFault::Truncation { .. }
+                | ChainFault::Insertion { .. }
+        )) || !r.root_ok
+    );
 
     // Replacement
     let mut replaced = events.clone();

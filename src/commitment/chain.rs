@@ -35,7 +35,12 @@ pub struct ChainLink {
 
 impl ChainLink {
     /// Compute link hash from parts.
-    pub fn compute_link_hash(prev_hash: &str, event_hash: &str, sequence: u64, event_id: &str) -> String {
+    pub fn compute_link_hash(
+        prev_hash: &str,
+        event_hash: &str,
+        sequence: u64,
+        event_id: &str,
+    ) -> String {
         let mut hasher = Sha256::new();
         hasher.update(prev_hash.as_bytes());
         hasher.update(b"|");
@@ -50,8 +55,7 @@ impl ChainLink {
     /// Build a link given previous hash and event.
     pub fn from_event(prev_hash: &str, event: &TraceEvent) -> Self {
         let event_hash = event_content_hash(event);
-        let link_hash =
-            Self::compute_link_hash(prev_hash, &event_hash, event.sequence, &event.id);
+        let link_hash = Self::compute_link_hash(prev_hash, &event_hash, event.sequence, &event.id);
         Self {
             sequence: event.sequence,
             event_id: event.id.clone(),

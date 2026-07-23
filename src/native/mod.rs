@@ -14,9 +14,7 @@ pub mod ndjson;
 pub mod recorder;
 pub mod unix_socket;
 
-pub use envelope::{
-    IngestAck, IngestError, IngestOp, NativeIngestEnvelope, NATIVE_INGEST_SCHEMA,
-};
+pub use envelope::{IngestAck, IngestError, IngestOp, NativeIngestEnvelope, NATIVE_INGEST_SCHEMA};
 pub use ndjson::{NdjsonIngestError, NdjsonIngestServer};
 pub use recorder::{
     FinishRunOpts, NativeRecorder, NativeRecorderConfig, RecordEventOpts, StartRunOpts,

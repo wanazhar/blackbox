@@ -232,10 +232,12 @@ pub fn reconcile_run(input: &ReconcileInput) -> Vec<ReconcileOutcome> {
                 {
                     // Exact + diverging related effects.
                     ReconcileOutcomeKind::AllowedEffectsDiverged
-                } else if has_exact && related_effects.iter().any(|i| {
-                    // Effect with same family but different hash = divergence.
-                    !exact_effects.contains(i)
-                }) {
+                } else if has_exact
+                    && related_effects.iter().any(|i| {
+                        // Effect with same family but different hash = divergence.
+                        !exact_effects.contains(i)
+                    })
+                {
                     ReconcileOutcomeKind::AllowedEffectsDiverged
                 } else if has_exact {
                     ReconcileOutcomeKind::AllowedAsDeclared
@@ -251,8 +253,7 @@ pub fn reconcile_run(input: &ReconcileInput) -> Vec<ReconcileOutcome> {
                 } else if has_exact || has_related {
                     // Bypass: denied action later achieved (exact or alternate path).
                     o.notes = Some(
-                        "denied decision followed by matching or related execution/effect"
-                            .into(),
+                        "denied decision followed by matching or related execution/effect".into(),
                     );
                     ReconcileOutcomeKind::DeniedButBypassed
                 } else {
@@ -347,7 +348,10 @@ pub fn reconcile_run(input: &ReconcileInput) -> Vec<ReconcileOutcome> {
     outcomes
 }
 
-fn decision_action_loosely_related(decision: &SecurityDecision, action: &ActionFingerprint) -> bool {
+fn decision_action_loosely_related(
+    decision: &SecurityDecision,
+    action: &ActionFingerprint,
+) -> bool {
     // Without embedded fingerprint, only exact hash matches count as related
     // at the action_hash level — already handled. No loose match.
     let _ = (decision, action);
@@ -364,10 +368,8 @@ mod tests {
     use chrono::Utc;
 
     fn deny_curl() -> (SecurityDecision, ActionFingerprint) {
-        let fp = ActionFingerprint::process_exec(
-            &["curl".into(), "https://evil.example".into()],
-            None,
-        );
+        let fp =
+            ActionFingerprint::process_exec(&["curl".into(), "https://evil.example".into()], None);
         let d = SecurityDecision::builder("opa", DecisionKind::Deny, fp.hash())
             .action(fp.clone())
             .id("dec-deny-curl")
@@ -386,7 +388,10 @@ mod tests {
         });
         assert_eq!(outs.len(), 1);
         assert_eq!(outs[0].outcome, ReconcileOutcomeKind::DeniedNotExecuted);
-        assert!(outs[0].citations.iter().any(|c| c.kind == "security.decision"));
+        assert!(outs[0]
+            .citations
+            .iter()
+            .any(|c| c.kind == "security.decision"));
     }
 
     #[test]
@@ -511,7 +516,10 @@ mod tests {
             ],
             run_id: None,
         });
-        assert_eq!(outs[0].outcome, ReconcileOutcomeKind::AllowedEffectsDiverged);
+        assert_eq!(
+            outs[0].outcome,
+            ReconcileOutcomeKind::AllowedEffectsDiverged
+        );
         let _ = side;
     }
 

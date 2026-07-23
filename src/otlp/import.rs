@@ -3,9 +3,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::evidence::{
-    EvidenceAction, EvidenceIntegrity, EvidenceOutcome, ExternalEvidenceEvent,
-};
+use crate::evidence::{EvidenceAction, EvidenceIntegrity, EvidenceOutcome, ExternalEvidenceEvent};
 
 use super::loss::LossLedger;
 
@@ -119,8 +117,7 @@ fn span_to_evidence(
     let mut ev = ExternalEvidenceEvent::new(source, "otlp", &span_id, classify_action(name));
     ev.outcome = EvidenceOutcome::Unknown;
     ev.integrity = EvidenceIntegrity::Unverified;
-    ev.transformations
-        .push("otlp_span_to_evidence_v1".into());
+    ev.transformations.push("otlp_span_to_evidence_v1".into());
     if let Some(run_id) = attr_string(span, "blackbox.run_id") {
         ev.identity.run_id = Some(run_id.clone());
         ev.linked_run_id = Some(run_id);

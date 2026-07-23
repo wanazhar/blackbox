@@ -17,8 +17,8 @@ pub use chain::{
 };
 pub use event_hash::{event_content_hash, hash_hex, EventHashInput};
 pub use sign::{
-    generate_signing_key, public_key_hex, sign_run_root, verify_run_root_signature, SignatureStatus,
-    SignedRunRoot,
+    generate_signing_key, public_key_hex, sign_run_root, verify_run_root_signature,
+    SignatureStatus, SignedRunRoot,
 };
 pub use verify::{
     verify_chain, verify_commitment, ChainFault, ChainVerifyReport, CommitmentVerifyReport,

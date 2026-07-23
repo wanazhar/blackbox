@@ -2,10 +2,10 @@
 
 use blackbox::core::event::{EventSource, TraceEvent};
 use blackbox::core::run::Run;
+use blackbox::evidence::EvidenceIntegrity;
 use blackbox::otlp::{
     export_run_to_otlp, import_otlp_as_evidence, OtlpExportOptions, OTLP_LOSS_SCHEMA,
 };
-use blackbox::evidence::EvidenceIntegrity;
 use serde_json::json;
 
 #[test]
@@ -39,14 +39,20 @@ fn export_round_trip_reports_losses_deterministically() {
     let spans = exported.resource_spans[0]["scopeSpans"][0]["spans"]
         .as_array()
         .unwrap();
-    let child = spans.iter().find(|s| s["name"] == "security.decision").unwrap();
+    let child = spans
+        .iter()
+        .find(|s| s["name"] == "security.decision")
+        .unwrap();
     assert!(child.get("parentSpanId").is_some());
 
     // Import path demotes integrity.
     let as_value = serde_json::to_value(&exported).unwrap();
     let report = import_otlp_as_evidence(&as_value, "otlp-export");
     assert!(report.spans_seen >= 2);
-    assert!(report.events.iter().all(|e| e.integrity == EvidenceIntegrity::Unverified));
+    assert!(report
+        .events
+        .iter()
+        .all(|e| e.integrity == EvidenceIntegrity::Unverified));
     assert_eq!(report.loss.direction, "import");
 }
 

@@ -104,14 +104,14 @@ pub mod capture;
 pub mod cassette;
 /// Clap CLI definition and command dispatch.
 pub mod cli;
-/// Run evidence commitments: hash chains and optional signatures (1.9).
-pub mod commitment;
-/// Protocol conformance profiles and runner (1.9).
-pub mod conformance;
 /// 1.6 CLI handlers (fsck, verify, experiment, …).
 pub mod cli_ext;
+/// Run evidence commitments: hash chains and optional signatures (1.9).
+pub mod commitment;
 /// Store paths, capture policy, continuity mode.
 pub mod config;
+/// Protocol conformance profiles and runner (1.9).
+pub mod conformance;
 /// Resume / context packing helpers.
 pub mod context;
 /// Core data model: runs, events, blobs, checkpoints.
@@ -140,10 +140,10 @@ pub mod maybe_run;
 pub mod mcp;
 /// Project memory pack build and shrink.
 pub mod memory;
-/// Nest guard without child-visible control env.
-pub mod nest;
 /// Native run/event ingestion without PTY wrapping (1.9).
 pub mod native;
+/// Nest guard without child-visible control env.
+pub mod nest;
 /// OpenTelemetry interoperability foundation (1.9).
 pub mod otlp;
 /// Human and JSON CLI output helpers.
@@ -154,10 +154,10 @@ pub mod pipeline;
 pub mod pricing;
 /// File permission hardening helpers.
 pub mod privacy;
-/// Evidence protocol: canonical form, schemas, stability (1.9).
-pub mod protocol;
 /// Multi-project metadata index.
 pub mod projects;
+/// Evidence protocol: canonical form, schemas, stability (1.9).
+pub mod protocol;
 /// Secret scanning and redaction.
 pub mod redaction;
 /// Replay engines: timeline, mock, sandbox, fork.
@@ -172,12 +172,12 @@ pub mod retention;
 pub mod run;
 /// Eval score.json builder.
 pub mod score;
-/// Security decision receipts and action↔effect reconciliation (1.9).
-pub mod security;
 /// Historical re-redaction and blob GC.
 pub mod scrub;
 /// FTS search runner.
 pub mod search;
+/// Security decision receipts and action↔effect reconciliation (1.9).
+pub mod security;
 /// Local web dashboard (Axum).
 pub mod serve;
 /// Shell ambient-wrapper install.

@@ -7,6 +7,8 @@
 #![allow(missing_docs)]
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 
 use super::corpus::{
     detector_corpus, evaluate_detector_quality, CaseExpectation, CaseResult, CorpusCase,
@@ -16,6 +18,8 @@ use super::detect::{detect_boundary_findings, DetectInputs};
 use super::finding::{EvidenceIntegrityClass, FindingSeverity, ViolationState};
 /// Frozen benchmark schema / version. Bump only with a reviewed baseline change.
 pub const BENCHMARK_VERSION: &str = "blackbox.boundary.benchmark/v1";
+const FROZEN_BASELINE_JSON: &str =
+    include_str!("../../tests/fixtures/boundary_1_8/frozen_benchmark_v1.json");
 
 /// Frozen scenario ids included in the release-qualification benchmark.
 ///
@@ -66,6 +70,38 @@ pub struct IntegrityClassStats {
     pub false_negatives: usize,
 }
 
+/// Per-detector precision/recall slice.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DetectorStats {
+    pub detector: String,
+    pub true_positives: usize,
+    pub false_positives: usize,
+    pub false_negatives: usize,
+    pub precision: f64,
+    pub recall: f64,
+}
+
+/// Results when one evidence sensor family is removed from each scenario.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SensorLossStats {
+    pub variants: usize,
+    pub detections_retained: usize,
+    pub downgraded_or_suppressed: usize,
+    pub unverified_critical_findings: usize,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct FrozenBaseline {
+    schema: String,
+    scenarios: Vec<FrozenScenarioBaseline>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct FrozenScenarioBaseline {
+    id: String,
+    sha256: String,
+}
+
 /// Severity calibration row: expected vs observed for violation cases.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SeverityCalibrationRow {
@@ -89,9 +125,13 @@ pub struct BenchmarkReport {
     pub benign_false_positive_rate: f64,
     pub benign_false_positives: usize,
     pub benign_cases: usize,
+    pub detector_stats: Vec<DetectorStats>,
     pub integrity_classes: Vec<IntegrityClassStats>,
     pub severity_calibration: Vec<SeverityCalibrationRow>,
-    pub missing_sensor_handling: Vec<String>,
+    pub sensor_loss: SensorLossStats,
+    pub cross_platform_consistent: bool,
+    pub frozen_baseline_verified: bool,
+    pub frozen_corpus_sha256: String,
     pub passed: bool,
     pub failures: Vec<String>,
     pub case_results: Vec<CaseResult>,
@@ -102,6 +142,13 @@ pub struct BenchmarkReport {
 /// Run the frozen benchmark against current detectors.
 pub fn evaluate_frozen_benchmark() -> BenchmarkReport {
     let all = detector_corpus();
+    let baseline: FrozenBaseline =
+        serde_json::from_str(FROZEN_BASELINE_JSON).expect("committed benchmark baseline is valid");
+    let mut baseline_by_id: BTreeMap<&str, &str> = baseline
+        .scenarios
+        .iter()
+        .map(|scenario| (scenario.id.as_str(), scenario.sha256.as_str()))
+        .collect();
     let mut selected: Vec<&CorpusCase> = Vec::new();
     let mut missing_ids = Vec::new();
     for id in FROZEN_SCENARIO_IDS {
@@ -126,10 +173,29 @@ pub fn evaluate_frozen_benchmark() -> BenchmarkReport {
     let mut severity_calibration = Vec::new();
     let mut integrity_map: std::collections::BTreeMap<String, IntegrityClassStats> =
         std::collections::BTreeMap::new();
-    let mut missing_sensor_handling = Vec::new();
+    let mut detector_map: BTreeMap<String, DetectorStats> = BTreeMap::new();
+    let mut sensor_loss = SensorLossStats::default();
+    let mut observed_fingerprints = Vec::new();
+
+    if baseline.schema != BENCHMARK_VERSION {
+        failures.push(format!(
+            "frozen_baseline_schema_mismatch:{}",
+            baseline.schema
+        ));
+    }
 
     let selected_count = selected.len();
     for case in &selected {
+        let fingerprint = scenario_fingerprint(case);
+        observed_fingerprints.push(format!("{}:{fingerprint}", case.id));
+        match baseline_by_id.remove(case.id) {
+            Some(expected) if expected == fingerprint => {}
+            Some(expected) => failures.push(format!(
+                "frozen_scenario_changed:{} expected={} actual={}",
+                case.id, expected, fingerprint
+            )),
+            None => failures.push(format!("frozen_scenario_missing_from_baseline:{}", case.id)),
+        }
         // Benign / control families used for false-positive rate.
         if case.family.starts_with("benign")
             || case.family == "control"
@@ -233,6 +299,36 @@ pub fn evaluate_frozen_benchmark() -> BenchmarkReport {
             tn += 1;
         }
 
+        match case.expectation {
+            CaseExpectation::ExpectViolation { detector }
+            | CaseExpectation::ExpectTransition { detector } => {
+                let stats = detector_map
+                    .entry(detector.into())
+                    .or_insert_with(|| DetectorStats {
+                        detector: detector.into(),
+                        ..Default::default()
+                    });
+                if is_tp {
+                    stats.true_positives += 1;
+                }
+                if is_fn {
+                    stats.false_negatives += 1;
+                }
+            }
+            CaseExpectation::ExpectClean | CaseExpectation::ExpectStrictClean => {
+                for detector in &detectors {
+                    let stats =
+                        detector_map
+                            .entry(detector.clone())
+                            .or_insert_with(|| DetectorStats {
+                                detector: detector.clone(),
+                                ..Default::default()
+                            });
+                    stats.false_positives += 1;
+                }
+            }
+        }
+
         // Severity calibration for violation expectations.
         if let CaseExpectation::ExpectViolation { detector } = case.expectation {
             if let Some(f) = findings.iter().find(|f| f.detector == detector) {
@@ -266,9 +362,45 @@ pub fn evaluate_frozen_benchmark() -> BenchmarkReport {
             }
         }
 
-        // Sensor-loss honesty: empty external + empty events with required contract.
-        if case.external.is_empty() && case.events.is_empty() {
-            missing_sensor_handling.push(format!("{}: empty_inputs", case.id));
+        // Sensor-loss honesty: independently remove captured and imported
+        // evidence. Missing evidence may suppress or downgrade a finding, but
+        // must never manufacture a confirmed critical result.
+        for (events, external) in [
+            (case.events.as_slice(), &[][..]),
+            (&[][..], case.external.as_slice()),
+        ] {
+            if events.len() == case.events.len() && external.len() == case.external.len() {
+                continue;
+            }
+            sensor_loss.variants += 1;
+            let degraded = detect_boundary_findings(DetectInputs {
+                run_id: case.id,
+                contract: case.contract.as_ref(),
+                events,
+                external,
+            });
+            if degraded.iter().any(|finding| {
+                matches!(
+                    case.expectation,
+                    CaseExpectation::ExpectViolation { detector }
+                        | CaseExpectation::ExpectTransition { detector }
+                        if finding.detector == detector
+                )
+            }) {
+                sensor_loss.detections_retained += 1;
+            } else {
+                sensor_loss.downgraded_or_suppressed += 1;
+            }
+            sensor_loss.unverified_critical_findings += degraded
+                .iter()
+                .filter(|finding| {
+                    matches!(finding.severity, FindingSeverity::Critical)
+                        && finding.decision.as_ref().is_none_or(|decision| {
+                            decision.evidence_integrity.strength()
+                                < EvidenceIntegrityClass::HashVerified.strength()
+                        })
+                })
+                .count();
         }
 
         case_results.push(CaseResult {
@@ -301,9 +433,7 @@ pub fn evaluate_frozen_benchmark() -> BenchmarkReport {
     };
 
     if precision < MIN_PRECISION {
-        failures.push(format!(
-            "precision {precision:.3} < min {MIN_PRECISION:.3}"
-        ));
+        failures.push(format!("precision {precision:.3} < min {MIN_PRECISION:.3}"));
     }
     if recall < MIN_RECALL {
         failures.push(format!("recall {recall:.3} < min {MIN_RECALL:.3}"));
@@ -320,6 +450,15 @@ pub fn evaluate_frozen_benchmark() -> BenchmarkReport {
             FROZEN_SCENARIO_IDS.len()
         ));
     }
+    for id in baseline_by_id.keys() {
+        failures.push(format!("unexpected_frozen_baseline_scenario:{id}"));
+    }
+    if sensor_loss.unverified_critical_findings > 0 {
+        failures.push(format!(
+            "sensor_loss_unverified_critical_findings:{}",
+            sensor_loss.unverified_critical_findings
+        ));
+    }
 
     // Cross-check: tuning corpus gate should still pass (permanent 1.7).
     let tuning = evaluate_detector_quality();
@@ -328,6 +467,28 @@ pub fn evaluate_frozen_benchmark() -> BenchmarkReport {
     }
 
     let passed = failures.is_empty();
+    let mut detector_stats: Vec<DetectorStats> = detector_map.into_values().collect();
+    for stats in &mut detector_stats {
+        stats.precision = if stats.true_positives + stats.false_positives == 0 {
+            1.0
+        } else {
+            stats.true_positives as f64 / (stats.true_positives + stats.false_positives) as f64
+        };
+        stats.recall = if stats.true_positives + stats.false_negatives == 0 {
+            1.0
+        } else {
+            stats.true_positives as f64 / (stats.true_positives + stats.false_negatives) as f64
+        };
+    }
+    observed_fingerprints.sort();
+    let frozen_corpus_sha256 = format!(
+        "{:x}",
+        Sha256::digest(observed_fingerprints.join("\n").as_bytes())
+    );
+    let frozen_baseline_verified = !failures
+        .iter()
+        .any(|failure| failure.starts_with("frozen_") || failure.starts_with("unexpected_frozen_"));
+    let cross_platform_consistent = case_results.iter().all(|result| result.tp || result.tn);
     BenchmarkReport {
         schema: BENCHMARK_VERSION.into(),
         version: BENCHMARK_VERSION.into(),
@@ -337,13 +498,74 @@ pub fn evaluate_frozen_benchmark() -> BenchmarkReport {
         benign_false_positive_rate: benign_fp_rate,
         benign_false_positives: benign_fp,
         benign_cases,
+        detector_stats,
         integrity_classes: integrity_map.into_values().collect(),
         severity_calibration,
-        missing_sensor_handling,
+        sensor_loss,
+        cross_platform_consistent,
+        frozen_baseline_verified,
+        frozen_corpus_sha256,
         passed,
         failures,
         case_results,
         evidence_layer: EvidenceLayer::Findings.as_str().into(),
+    }
+}
+
+fn scenario_fingerprint(case: &CorpusCase) -> String {
+    let expectation = match case.expectation {
+        CaseExpectation::ExpectViolation { detector } => {
+            serde_json::json!({"kind":"violation","detector":detector})
+        }
+        CaseExpectation::ExpectTransition { detector } => {
+            serde_json::json!({"kind":"transition","detector":detector})
+        }
+        CaseExpectation::ExpectClean => serde_json::json!({"kind":"clean"}),
+        CaseExpectation::ExpectStrictClean => serde_json::json!({"kind":"strict_clean"}),
+    };
+    let mut events = serde_json::to_value(&case.events).unwrap_or_default();
+    let mut external = serde_json::to_value(&case.external).unwrap_or_default();
+    strip_volatile_fixture_fields(&mut events);
+    strip_volatile_fixture_fields(&mut external);
+    let value = serde_json::json!({
+        "id": case.id,
+        "family": case.family,
+        "expectation": expectation,
+        "contract": case.contract,
+        "events": events,
+        "external": external,
+    });
+    let bytes = serde_json::to_vec(&value).expect("benchmark scenario serialization");
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+fn strip_volatile_fixture_fields(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Array(values) => {
+            for value in values {
+                strip_volatile_fixture_fields(value);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for key in [
+                "id",
+                "run_id",
+                "sequence",
+                "source_sequence",
+                "timing",
+                "started_at",
+                "ended_at",
+                "occurred_at",
+                "observed_at",
+                "ingested_at",
+            ] {
+                map.remove(key);
+            }
+            for value in map.values_mut() {
+                strip_volatile_fixture_fields(value);
+            }
+        }
+        _ => {}
     }
 }
 

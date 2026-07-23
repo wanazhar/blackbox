@@ -1009,10 +1009,14 @@ Metadata-only index at `~/.blackbox/projects-index.json`.
 
 ## 46. `boundary`
 
-Agent boundary contracts, containment receipts, and required-evidence gates (1.7).
+Agent boundary contracts, containment receipts, required-evidence gates, and
+evidence-semantics qualification (1.7–1.8).
 
 ```bash
 blackbox boundary validate <file.json>
+blackbox boundary lint <file.json> [--parent <parent.json>…] [--gate]
+blackbox boundary explain <file.json> [--parent <parent.json>…]
+blackbox boundary benchmark
 blackbox boundary show <run-id|latest>
 blackbox boundary set <run-id|latest> -f <file.json> [--parent <parent.json>…] [--fail-closed]
 blackbox boundary evaluate <run-id|latest> [--present CLASS]… [--unavailable CLASS]… \
@@ -1025,6 +1029,9 @@ blackbox boundary receipt <run-id|latest> [--claim STATE] [--result RESULT] \
 | Subcommand | Role |
 |---|---|
 | `validate` | Parse + structural validate; print policy hash |
+| `lint` | Report unknown/near-miss tokens, inert selectors, contradictions, and unsupported extensions; `--gate` fails on errors |
+| `explain` | Show each effective token, source layer, overridden values, and stable resolution order |
+| `benchmark` | Run the frozen 1.8 detector corpus; non-zero exit on fingerprint or quality regression |
 | `show` | Print resolved boundary stored on the run |
 | `set` | Resolve (with optional parents) and store on the run |
 | `evaluate` | Required-evidence / containment gate (`--gate` → exit 2 on fail-closed failure) |
@@ -1032,7 +1039,9 @@ blackbox boundary receipt <run-id|latest> [--claim STATE] [--result RESULT] \
 | `detect` | Deterministic boundary/behavior findings |
 | `provenance` | Artifact/answer provenance record + gate |
 
-Reference: [boundary.md](boundary.md). Plan: [agent-boundary-1.7.md](../plan/agent-boundary-1.7.md).
+Reference: [boundary.md](boundary.md). Plans:
+[agent-boundary-1.7.md](../plan/agent-boundary-1.7.md) and
+[evidence-semantics-1.8.md](../plan/evidence-semantics-1.8.md).
 
 ---
 

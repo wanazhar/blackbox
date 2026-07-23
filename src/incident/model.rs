@@ -50,6 +50,9 @@ pub struct IncidentAttachment {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Incident {
     pub schema: String,
+    /// Semantic output layer (1.8 layered-output contract).
+    #[serde(default = "default_incident_evidence_layer")]
+    pub evidence_layer: String,
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
@@ -75,6 +78,7 @@ impl Incident {
     pub fn new(title: impl Into<Option<String>>) -> Self {
         Self {
             schema: INCIDENT_SCHEMA.into(),
+            evidence_layer: default_incident_evidence_layer(),
             id: format!("inc-{}", Uuid::new_v4()),
             title: title.into(),
             created_at: Utc::now(),
@@ -95,6 +99,10 @@ impl Incident {
             .map(|a| a.ref_id.as_str())
             .collect()
     }
+}
+
+fn default_incident_evidence_layer() -> String {
+    "incident_interpretation".into()
 }
 
 /// Attach a reference to an incident (mutates).

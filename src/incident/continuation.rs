@@ -83,9 +83,10 @@ pub fn evaluate_continuation(inputs: ContinuationInputs<'_>) -> Option<Continuat
     let mut candidates: Vec<ContinuationConclusion> = Vec::new();
 
     // Technique / token reuse via later findings (token or detector, not kind alone).
-    let seed_finding = inputs.findings_by_run.iter().find_map(|(_, fs)| {
-        fs.iter().find(|f| f.id == sig.ref_id)
-    });
+    let seed_finding = inputs
+        .findings_by_run
+        .iter()
+        .find_map(|(_, fs)| fs.iter().find(|f| f.id == sig.ref_id));
     for (run_id, findings) in inputs.findings_by_run {
         for f in findings {
             if f.created_at <= sig.at || f.id == sig.ref_id {
@@ -93,14 +94,12 @@ pub fn evaluate_continuation(inputs: ContinuationInputs<'_>) -> Option<Continuat
             }
             let same_technique = match seed_finding {
                 Some(seed) => {
-                    (seed.token.is_some() && seed.token == f.token)
-                        || seed.detector == f.detector
+                    (seed.token.is_some() && seed.token == f.token) || seed.detector == f.detector
                 }
-                None => f
-                    .token
-                    .as_ref()
-                    .is_some_and(|t| sig.summary.contains(t.as_str()))
-                    || sig.summary.contains(&f.detector),
+                // A free-form signal summary is not a typed technique
+                // identifier. Without the cited seed finding, technique reuse
+                // cannot be established from substring text.
+                None => false,
             };
             if same_technique {
                 candidates.push(ContinuationConclusion {
@@ -148,23 +147,16 @@ pub fn evaluate_continuation(inputs: ContinuationInputs<'_>) -> Option<Continuat
         let cites_signal = edge.from_id == sig.ref_id
             || edge.to_id == sig.ref_id
             || edge.reasons.iter().any(|r| r.contains(&sig.ref_id));
-        let confidence = if cites_signal {
-            edge.confidence
-        } else if matches!(
-            edge.confidence,
-            Confidence::Confirmed | Confidence::StronglyCorrelated
-        ) {
-            Confidence::WeaklyCorrelated
-        } else {
+        if !cites_signal {
             continue;
-        };
+        }
         candidates.push(ContinuationConclusion {
             relation: rel,
             initial_signal_id: sig.ref_id.clone(),
             continuation_evidence_id: edge.id.clone(),
             related_entity_kind: Some(edge.to_kind.clone()),
             related_entity_id: Some(edge.to_id.clone()),
-            confidence,
+            confidence: edge.confidence,
             reasons: {
                 let mut r = vec![format!("edge_relation={}", edge.relation.as_str())];
                 r.extend(edge.reasons.iter().cloned());
@@ -184,7 +176,11 @@ pub fn evaluate_continuation(inputs: ContinuationInputs<'_>) -> Option<Continuat
             if at <= sig.at || ev.id == sig.ref_id {
                 continue;
             }
-            if ev.destination.as_deref() == Some(signal_dest.as_str()) {
+            if ev
+                .destination
+                .as_deref()
+                .is_some_and(|destination| same_destination(&signal_dest, destination))
+            {
                 candidates.push(ContinuationConclusion {
                     relation: ContinuationRelation::SameDestination,
                     initial_signal_id: sig.ref_id.clone(),
@@ -270,6 +266,30 @@ pub fn evaluate_continuation(inputs: ContinuationInputs<'_>) -> Option<Continuat
     }
 }
 
+fn same_destination(left: &str, right: &str) -> bool {
+    use crate::boundary::{normalize_port, normalize_url, observation_host, NormalizeOutcome};
+
+    if let (NormalizeOutcome::Ok(left), NormalizeOutcome::Ok(right)) =
+        (normalize_url(left), normalize_url(right))
+    {
+        return left.scheme == right.scheme && left.host == right.host && left.port == right.port;
+    }
+
+    let (left_host, right_host) = match (observation_host(left), observation_host(right)) {
+        (NormalizeOutcome::Ok(left), NormalizeOutcome::Ok(right)) => (left, right),
+        _ => return false,
+    };
+    if left_host != right_host {
+        return false;
+    }
+    match (normalize_port(left), normalize_port(right)) {
+        (NormalizeOutcome::Ok(left), NormalizeOutcome::Ok(right)) => left == right,
+        // Bare hosts and URLs without an explicit non-default port already
+        // canonicalize to the same destination entity by host.
+        _ => true,
+    }
+}
+
 fn pick_best_continuation(
     mut candidates: Vec<ContinuationConclusion>,
 ) -> Option<ContinuationConclusion> {
@@ -306,10 +326,7 @@ fn confidence_rank(c: Confidence) -> u8 {
     }
 }
 
-fn signal_destination(
-    sig: &IncidentSignal,
-    inputs: &ContinuationInputs<'_>,
-) -> Option<String> {
+fn signal_destination(sig: &IncidentSignal, inputs: &ContinuationInputs<'_>) -> Option<String> {
     // From external evidence with matching id.
     if let Some(ev) = inputs.external.iter().find(|e| e.id == sig.ref_id) {
         return ev.destination.clone();
@@ -337,16 +354,21 @@ fn identities_overlap(
     inputs: &ContinuationInputs<'_>,
     later: &ExternalEvidenceEvent,
 ) -> bool {
-    let Some(seed) = inputs.external.iter().find(|e| e.id == sig.ref_id).or_else(|| {
-        // Via finding citations.
-        inputs.findings_by_run.iter().find_map(|(_, fs)| {
-            fs.iter().find(|f| f.id == sig.ref_id).and_then(|f| {
-                f.external_evidence_ids.iter().find_map(|id| {
-                    inputs.external.iter().find(|e| e.id == *id)
+    let Some(seed) = inputs
+        .external
+        .iter()
+        .find(|e| e.id == sig.ref_id)
+        .or_else(|| {
+            // Via finding citations.
+            inputs.findings_by_run.iter().find_map(|(_, fs)| {
+                fs.iter().find(|f| f.id == sig.ref_id).and_then(|f| {
+                    f.external_evidence_ids
+                        .iter()
+                        .find_map(|id| inputs.external.iter().find(|e| e.id == *id))
                 })
             })
         })
-    }) else {
+    else {
         // Fall back to run_id match on the signal.
         return sig
             .run_id
@@ -438,11 +460,21 @@ mod tests {
             at: t0,
             run_id: Some("r1".into()),
         };
-        let mut e1 = ExternalEvidenceEvent::new("proxy", "proxy", "1", crate::evidence::EvidenceAction::HttpRequest);
+        let mut e1 = ExternalEvidenceEvent::new(
+            "proxy",
+            "proxy",
+            "1",
+            crate::evidence::EvidenceAction::HttpRequest,
+        );
         e1.id = "ext-1".into();
         e1.destination = Some("https://evil.example".into());
         e1.occurred_at = Some(t0);
-        let mut e2 = ExternalEvidenceEvent::new("proxy", "proxy", "2", crate::evidence::EvidenceAction::HttpRequest);
+        let mut e2 = ExternalEvidenceEvent::new(
+            "proxy",
+            "proxy",
+            "2",
+            crate::evidence::EvidenceAction::HttpRequest,
+        );
         e2.id = "ext-2".into();
         e2.destination = Some("https://evil.example".into());
         e2.occurred_at = Some(t0 + Duration::seconds(10));
@@ -456,5 +488,21 @@ mod tests {
         assert_eq!(c.relation, ContinuationRelation::SameDestination);
         assert!(c.relation.is_continuation());
         assert_eq!(c.continuation_evidence_id, "ext-2");
+    }
+
+    #[test]
+    fn destination_relation_is_canonical_and_port_aware() {
+        assert!(same_destination(
+            "HTTPS://API.Example.COM.:443/v1",
+            "https://api.example.com/v2"
+        ));
+        assert!(!same_destination(
+            "https://api.example.com:8443/v1",
+            "https://api.example.com:9443/v1"
+        ));
+        assert!(!same_destination(
+            "https://api.example.com/v1",
+            "https://attacker-api.example.com/v1"
+        ));
     }
 }

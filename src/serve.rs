@@ -768,7 +768,7 @@ async fn run_page(
 
     let body = format!(
         r#"<p><a href="/">← Runs</a> · <a href="/runs/{id}/live">Live view</a> · <a href="/runs/{id}/export.html">Full HTML export</a> · <a class="muted" href="/api/runs/{id}/boundary">boundary JSON</a> · <a class="muted" href="/api/runs/{id}/anomalies">anomalies JSON</a></p>
-<h1>{title}</h1>
+<h1>{title} <span class="muted">(layer: incident interpretation)</span></h1>
 <p class="mono muted">{full_id}</p>
 <div class="meta">
   <div><b>Status</b> {:?}</div>
@@ -848,7 +848,7 @@ fn boundary_trust_html(
   <div><b>Findings</b> {} (critical {})</div>
   <div><b>External evidence</b> {}</div>
 </div>
-<h2>Boundary findings</h2>
+<h2>Boundary findings <span class="muted">(layer: findings)</span></h2>
 <table>
   <thead><tr><th>Sev</th><th>Detector</th><th>Summary</th></tr></thead>
   <tbody>{rows}</tbody>
@@ -896,7 +896,7 @@ async fn incidents_page(State(state): State<AppState>) -> Result<Html<String>, A
         "Incidents",
         &format!(
             r#"<p><a href="/">← Runs</a> · <a class="muted" href="/api/incidents">JSON</a></p>
-<h1>Incidents</h1>
+<h1>Incidents <span class="muted">(layer: incident interpretation)</span></h1>
 <p class="muted">{n} shown{more}</p>
 <table>
   <thead><tr><th>ID</th><th>Title</th><th>Runs</th><th>Created</th></tr></thead>
@@ -1002,7 +1002,7 @@ async fn incident_page(
 
     let body = format!(
         r#"<p><a href="/incidents">← Incidents</a> · <a class="muted" href="/api/incidents/{id}">JSON</a></p>
-<h1>{title}</h1>
+<h1>{title} <span class="muted">(layer: incident interpretation)</span></h1>
 <p class="mono muted">{full}</p>
 {signal_banner}
 <div class="meta">
@@ -1896,6 +1896,12 @@ async fn api_run_boundary(
     );
     Ok(Json(serde_json::json!({
         "run_id": run_id,
+        "evidence_layers": {
+            "boundary": "normalized_fact",
+            "trust": "incident_interpretation",
+            "containment_receipts": "observation",
+            "provenance_records": "observation"
+        },
         "boundary": boundary,
         "trust": trust,
         "containment_receipts": containment,
@@ -1915,6 +1921,7 @@ async fn api_run_findings(
     let findings = state.store.list_boundary_findings(&run_id).await?;
     Ok(Json(serde_json::json!({
         "run_id": run_id,
+        "evidence_layer": "findings",
         "count": findings.len(),
         "findings": findings,
     }))
@@ -1932,6 +1939,7 @@ async fn api_run_evidence(
     let events = state.store.list_external_evidence_for_run(&run_id).await?;
     Ok(Json(serde_json::json!({
         "run_id": run_id,
+        "evidence_layer": "observation",
         "count": events.len(),
         "events": events,
     }))

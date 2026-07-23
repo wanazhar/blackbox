@@ -9,8 +9,9 @@
 mod pack;
 
 pub use pack::{
-    apply_model_analysis, build_forensic_pack, build_forensic_pack_result, validate_claim_citations,
-    validate_forensic_pack, ForensicClaim, ForensicPack, ForensicPackOpts, ForensicPackScope,
-    ModelAnalysisInput, SecretTokenMode, UnavailableCitation, FORENSIC_PACK_SCHEMA,
-    SELECTION_STRATEGY_HEAD_TAIL_CITED_GRAPH,
+    apply_model_analysis, build_forensic_pack, build_forensic_pack_result,
+    build_forensic_pack_with_trust, build_forensic_pack_with_trust_result,
+    validate_claim_citations, validate_forensic_pack, ForensicClaim, ForensicPack,
+    ForensicPackOpts, ForensicPackScope, ModelAnalysisInput, SecretTokenMode, UnavailableCitation,
+    FORENSIC_PACK_SCHEMA, SELECTION_STRATEGY_HEAD_TAIL_CITED_GRAPH,
 };

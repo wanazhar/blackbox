@@ -113,7 +113,7 @@ Links point at the GitHub tree so they resolve from crates.io as well as GitHub.
 | Every subcommand | [CLI reference](https://github.com/wanazhar/blackbox/blob/master/docs/reference/cli.md) |
 | `--json` views | [JSON API](https://github.com/wanazhar/blackbox/blob/master/docs/reference/json-api.md) |
 | MCP tools | [MCP](https://github.com/wanazhar/blackbox/blob/master/docs/reference/mcp.md) |
-| Boundary contracts (1.7) | [Boundary reference](https://github.com/wanazhar/blackbox/blob/master/docs/reference/boundary.md) |
+| Boundary contracts and evidence semantics (1.7–1.8) | [Boundary reference](https://github.com/wanazhar/blackbox/blob/master/docs/reference/boundary.md) |
 | Eval score.json | [Score](https://github.com/wanazhar/blackbox/blob/master/docs/reference/score.md) |
 | Memory pack schema | [Memory pack](https://github.com/wanazhar/blackbox/blob/master/docs/reference/memory-pack.md) |
 | Agent session playbook | [skills/blackbox.md](https://github.com/wanazhar/blackbox/blob/master/docs/skills/blackbox.md) |

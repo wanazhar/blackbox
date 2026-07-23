@@ -157,6 +157,18 @@ pub struct PolicyExplanation {
     pub required_evidence: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub network_selectors: Vec<String>,
+    /// Source trace for effective non-disposition values such as selectors and
+    /// required-evidence tokens.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub value_resolutions: Vec<PolicyValueResolution>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PolicyValueResolution {
+    pub category: String,
+    pub value: String,
+    pub source_layers: Vec<PolicySourceLayer>,
+    pub resolution_order: Vec<String>,
 }
 
 /// Lint a boundary contract (and optional parents already merged into `contract`
@@ -277,10 +289,8 @@ pub fn lint_boundary_contract(contract: &BoundaryContract) -> LintReport {
             ResourceEntry::Legacy(s) => {
                 // Class-looking tokens get capability check; hostnames are fine.
                 let sel = entry.as_selector();
-                if matches!(
-                    sel,
-                    super::selector::ResourceSelector::ClassToken { .. }
-                ) && !is_known_capability(s)
+                if matches!(sel, super::selector::ResourceSelector::ClassToken { .. })
+                    && !is_known_capability(s)
                 {
                     diagnostics.push(LintDiagnostic {
                         level: LintLevel::Warning,
@@ -293,8 +303,10 @@ pub fn lint_boundary_contract(contract: &BoundaryContract) -> LintReport {
                 }
             }
             ResourceEntry::Typed(sel) => {
+                use super::normalize::{
+                    normalize_cidr, normalize_host, normalize_ip, normalize_path, NormalizeOutcome,
+                };
                 use super::selector::ResourceSelector;
-                use super::normalize::{normalize_cidr, normalize_host, NormalizeOutcome};
                 match sel {
                     ResourceSelector::Cidr { value } => {
                         if matches!(normalize_cidr(value), NormalizeOutcome::Unknown { .. }) {
@@ -310,8 +322,10 @@ pub fn lint_boundary_contract(contract: &BoundaryContract) -> LintReport {
                     }
                     ResourceSelector::DomainExact { value }
                     | ResourceSelector::DomainSuffix { value } => {
-                        if matches!(normalize_host(value.trim_start_matches('.')), NormalizeOutcome::Unknown { .. })
-                        {
+                        if matches!(
+                            normalize_host(value.trim_start_matches('.')),
+                            NormalizeOutcome::Unknown { .. }
+                        ) {
                             diagnostics.push(LintDiagnostic {
                                 level: LintLevel::Error,
                                 code: "malformed_domain_selector".into(),
@@ -322,13 +336,83 @@ pub fn lint_boundary_contract(contract: &BoundaryContract) -> LintReport {
                             });
                         }
                     }
+                    ResourceSelector::IpExact { value } => {
+                        if matches!(normalize_ip(value), NormalizeOutcome::Unknown { .. }) {
+                            diagnostics.push(LintDiagnostic {
+                                level: LintLevel::Error,
+                                code: "malformed_ip_selector".into(),
+                                message: format!("malformed IP selector {value:?}"),
+                                token: Some(value.clone()),
+                                suggestion: None,
+                                path: Some(format!("allowed.network[{i}]")),
+                            });
+                        }
+                    }
+                    ResourceSelector::UrlPrefix {
+                        scheme,
+                        host,
+                        port,
+                        path,
+                    } => {
+                        let malformed_scheme = scheme
+                            .as_deref()
+                            .is_some_and(|scheme| scheme.is_empty() || !scheme.is_ascii());
+                        let malformed_host =
+                            matches!(normalize_host(host), NormalizeOutcome::Unknown { .. })
+                                && matches!(normalize_ip(host), NormalizeOutcome::Unknown { .. });
+                        let malformed_path = path.as_deref().is_some_and(|path| {
+                            matches!(normalize_path(path), NormalizeOutcome::Unknown { .. })
+                        });
+                        if malformed_scheme || malformed_host || malformed_path || *port == Some(0)
+                        {
+                            diagnostics.push(LintDiagnostic {
+                                level: LintLevel::Error,
+                                code: "malformed_url_selector".into(),
+                                message: "URL selector has malformed scheme, host, port, or path"
+                                    .into(),
+                                token: Some(host.clone()),
+                                suggestion: None,
+                                path: Some(format!("allowed.network[{i}]")),
+                            });
+                        }
+                    }
+                    ResourceSelector::Port { value } if *value == 0 => {
+                        diagnostics.push(LintDiagnostic {
+                            level: LintLevel::Error,
+                            code: "malformed_port_selector".into(),
+                            message: "port selector cannot be zero".into(),
+                            token: Some(value.to_string()),
+                            suggestion: None,
+                            path: Some(format!("allowed.network[{i}]")),
+                        });
+                    }
                     ResourceSelector::ClassToken { value } if !is_known_capability(value) => {
                         diagnostics.push(LintDiagnostic {
                             level: LintLevel::Warning,
                             code: "unknown_network_class_token".into(),
-                            message: format!("network class token {value:?} is not a known core token"),
+                            message: format!(
+                                "network class token {value:?} is not a known core token"
+                            ),
                             token: Some(value.clone()),
                             suggestion: nearest_token(value, CORE_CAPABILITY_TOKENS),
+                            path: Some(format!("allowed.network[{i}]")),
+                        });
+                    }
+                    ResourceSelector::PathExact { .. }
+                    | ResourceSelector::PathPrefix { .. }
+                    | ResourceSelector::Identity { .. }
+                    | ResourceSelector::Tool { .. }
+                    | ResourceSelector::Effect { .. }
+                    | ResourceSelector::ProvenanceClass { .. } => {
+                        diagnostics.push(LintDiagnostic {
+                            level: LintLevel::Warning,
+                            code: "inert_network_selector_kind".into(),
+                            message: format!(
+                                "{} selector is inert in allowed.network",
+                                sel.kind_name()
+                            ),
+                            token: None,
+                            suggestion: None,
                             path: Some(format!("allowed.network[{i}]")),
                         });
                     }
@@ -338,10 +422,57 @@ pub fn lint_boundary_contract(contract: &BoundaryContract) -> LintReport {
         }
     }
 
+    for (i, entry) in contract.allowed.paths.iter().enumerate() {
+        use super::normalize::{normalize_path, NormalizeOutcome};
+        use super::selector::ResourceSelector;
+        match entry {
+            ResourceEntry::Legacy(value) => diagnostics.push(LintDiagnostic {
+                level: LintLevel::Warning,
+                code: "legacy_path_selector_is_inert".into(),
+                message: format!(
+                    "legacy path {value:?} has no typed path semantics; use path_exact or path_prefix"
+                ),
+                token: Some(value.clone()),
+                suggestion: None,
+                path: Some(format!("allowed.paths[{i}]")),
+            }),
+            ResourceEntry::Typed(
+                ResourceSelector::PathExact { value }
+                | ResourceSelector::PathPrefix { value }
+                | ResourceSelector::UnixSocket { value },
+            ) if matches!(normalize_path(value), NormalizeOutcome::Unknown { .. }) => {
+                diagnostics.push(LintDiagnostic {
+                    level: LintLevel::Error,
+                    code: "malformed_path_selector".into(),
+                    message: format!("malformed path selector {value:?}"),
+                    token: Some(value.clone()),
+                    suggestion: None,
+                    path: Some(format!("allowed.paths[{i}]")),
+                });
+            }
+            ResourceEntry::Typed(
+                ResourceSelector::PathExact { .. }
+                | ResourceSelector::PathPrefix { .. }
+                | ResourceSelector::UnixSocket { .. },
+            ) => {}
+            ResourceEntry::Typed(selector) => diagnostics.push(LintDiagnostic {
+                level: LintLevel::Warning,
+                code: "inert_path_selector_kind".into(),
+                message: format!(
+                    "{} selector is inert in allowed.paths",
+                    selector.kind_name()
+                ),
+                token: None,
+                suggestion: None,
+                path: Some(format!("allowed.paths[{i}]")),
+            }),
+        }
+    }
+
     // Unregistered extensions.
     for key in contract.extensions.keys() {
         diagnostics.push(LintDiagnostic {
-            level: LintLevel::Info,
+            level: LintLevel::Warning,
             code: "unregistered_extension".into(),
             message: format!("extension key {key:?} is not a registered core extension"),
             token: Some(key.clone()),
@@ -530,6 +661,58 @@ pub fn explain_boundary_policy(
         });
     }
 
+    let mut value_resolutions = Vec::new();
+    for required in &merged.required_evidence {
+        let sources: Vec<PolicySourceLayer> = layers
+            .iter()
+            .filter(|(contract, _)| contract.required_evidence.contains(required))
+            .map(|(_, layer)| layer.clone())
+            .collect();
+        value_resolutions.push(PolicyValueResolution {
+            category: "required_evidence".into(),
+            value: required.clone(),
+            resolution_order: sources
+                .iter()
+                .map(|layer| format!("{}:required", layer.as_str()))
+                .collect(),
+            source_layers: sources,
+        });
+    }
+    for (category, entries) in [
+        ("allowed.network", &merged.allowed.network),
+        ("allowed.paths", &merged.allowed.paths),
+    ] {
+        for entry in entries {
+            let key = entry.key();
+            let sources: Vec<PolicySourceLayer> = layers
+                .iter()
+                .filter(|(contract, _)| {
+                    let candidates = if category == "allowed.network" {
+                        &contract.allowed.network
+                    } else {
+                        &contract.allowed.paths
+                    };
+                    candidates.iter().any(|candidate| candidate.key() == key)
+                })
+                .map(|(_, layer)| layer.clone())
+                .collect();
+            value_resolutions.push(PolicyValueResolution {
+                category: category.into(),
+                value: key,
+                resolution_order: sources
+                    .iter()
+                    .map(|layer| format!("{}:included", layer.as_str()))
+                    .collect(),
+                source_layers: sources,
+            });
+        }
+    }
+    value_resolutions.sort_by(|left, right| {
+        left.category
+            .cmp(&right.category)
+            .then(left.value.cmp(&right.value))
+    });
+
     PolicyExplanation {
         schema: "blackbox.boundary.explain/v1".into(),
         policy_hash,
@@ -537,6 +720,7 @@ pub fn explain_boundary_policy(
         tokens,
         required_evidence: merged.required_evidence.clone(),
         network_selectors: merged.allowed.network_as_strings(),
+        value_resolutions,
     }
 }
 
@@ -576,9 +760,12 @@ mod tests {
     #[test]
     fn explain_shows_override_trace() {
         let mut parent = BoundaryContract::new();
-        parent.allowed.network.push(crate::boundary::ResourceEntry::Legacy(
-            "public_network".into(),
-        ));
+        parent
+            .allowed
+            .network
+            .push(crate::boundary::ResourceEntry::Legacy(
+                "public_network".into(),
+            ));
         let mut child = BoundaryContract::new();
         child.prohibited.push("public_network".into());
         let expl = explain_boundary_policy(&child, &[parent], None);
@@ -598,5 +785,26 @@ mod tests {
             nearest_token("publc_network", CORE_CAPABILITY_TOKENS).as_deref(),
             Some("public_network")
         );
+    }
+
+    #[test]
+    fn explain_traces_selectors_and_required_evidence() {
+        let mut parent = BoundaryContract::new();
+        parent.required_evidence.push("network".into());
+        parent
+            .allowed
+            .network
+            .push(ResourceEntry::Legacy("example.com".into()));
+        let explanation = explain_boundary_policy(&BoundaryContract::new(), &[parent], None);
+        assert!(explanation.value_resolutions.iter().any(|resolution| {
+            resolution.category == "required_evidence"
+                && resolution.value == "network"
+                && !resolution.source_layers.is_empty()
+        }));
+        assert!(explanation.value_resolutions.iter().any(|resolution| {
+            resolution.category == "allowed.network"
+                && resolution.value == "example.com"
+                && !resolution.resolution_order.is_empty()
+        }));
     }
 }

@@ -276,7 +276,7 @@
       "blackbox.boundary/v1",
       "blackbox.evidence.event/v1"
     ],
-    "last_verified_version": "1.7.0-dev",
+    "last_verified_version": "1.8.0",
     "status": "keep"
   },
   {
@@ -880,7 +880,7 @@
     "schemas_referenced": [
       "blackbox.boundary/v1"
     ],
-    "last_verified_version": "1.7.0-dev",
+    "last_verified_version": "1.8.0",
     "status": "keep"
   },
   {
@@ -1002,7 +1002,7 @@
       "blackbox.evidence.event/v1",
       "blackbox.provenance/v1"
     ],
-    "last_verified_version": "1.7.0-dev",
+    "last_verified_version": "1.8.0",
     "status": "keep"
   },
   {

@@ -1,7 +1,7 @@
 //! Bounded, redacted forensic packs for on-premise analysis.
 
 #![allow(missing_docs)]
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::OnceLock;
 
 use chrono::{DateTime, Utc};
@@ -9,7 +9,9 @@ use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::boundary::{BoundaryFinding, EvidenceEdge, ResolvedBoundary};
+use crate::boundary::{
+    BoundaryFinding, ContainmentReceipt, EvidenceEdge, ProvenanceRecord, ResolvedBoundary,
+};
 use crate::core::event::TraceEvent;
 use crate::evidence::ExternalEvidenceEvent;
 use crate::incident::IncidentGraph;
@@ -83,6 +85,14 @@ pub struct ForensicPackScope {
     pub external_included: usize,
     pub edges_total: usize,
     pub edges_included: usize,
+    #[serde(default)]
+    pub containment_total: usize,
+    #[serde(default)]
+    pub containment_included: usize,
+    #[serde(default)]
+    pub provenance_total: usize,
+    #[serde(default)]
+    pub provenance_included: usize,
     pub strategy: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub limitations: Vec<String>,
@@ -129,6 +139,9 @@ pub struct ForensicClaim {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ForensicPack {
     pub schema: String,
+    /// Explicit semantic layer for each heterogeneous pack collection.
+    #[serde(default = "forensic_evidence_layers")]
+    pub evidence_layers: BTreeMap<String, String>,
     pub run_id: String,
     pub created_at: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -153,6 +166,15 @@ pub struct ForensicPack {
     /// Derived claims (optional; validated citations).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub derived_claims: Vec<ForensicClaim>,
+    /// Selected containment receipts needed to interpret boundary claims.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub containment_receipts: Vec<ContainmentReceipt>,
+    /// Selected provenance records needed to interpret answer lineage.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provenance_records: Vec<ProvenanceRecord>,
+    /// Effective required-evidence tokens from the resolved policy.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_evidence: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub incident_graph: Option<IncidentGraph>,
     /// Content hash of the pack body for integrity.
@@ -175,11 +197,19 @@ pub fn build_forensic_pack(
         Ok(pack) => pack,
         Err(errs) => {
             // Fall back to an honest empty pack rather than panicking.
+            let safe_run_id = if pack_scanner().find_spans(run_id).is_empty() {
+                run_id.to_string()
+            } else {
+                "invalid-structural-run-id".into()
+            };
             let mut pack = ForensicPack {
                 schema: FORENSIC_PACK_SCHEMA.into(),
-                run_id: run_id.into(),
+                evidence_layers: forensic_evidence_layers(),
+                run_id: safe_run_id,
                 created_at: Utc::now(),
-                policy_hash: boundary.map(|b| b.policy_hash.clone()),
+                policy_hash: boundary
+                    .map(|resolved| resolved.policy_hash.clone())
+                    .filter(|hash| pack_scanner().find_spans(hash).is_empty()),
                 scope: Some(ForensicPackScope {
                     events_total: events.len(),
                     events_included: 0,
@@ -189,6 +219,10 @@ pub fn build_forensic_pack(
                     external_included: 0,
                     edges_total: edges.len(),
                     edges_included: 0,
+                    containment_total: 0,
+                    containment_included: 0,
+                    provenance_total: 0,
+                    provenance_included: 0,
                     strategy: SELECTION_STRATEGY_HEAD_TAIL_CITED_GRAPH.into(),
                     limitations: errs,
                     unavailable_citations: vec![],
@@ -201,6 +235,9 @@ pub fn build_forensic_pack(
                 coverage_gaps: vec!["pack_build_error".into()],
                 original_pointers: vec![],
                 derived_claims: vec![],
+                containment_receipts: vec![],
+                provenance_records: vec![],
+                required_evidence: vec![],
                 incident_graph: None,
                 pack_hash: String::new(),
             };
@@ -222,6 +259,81 @@ pub fn build_forensic_pack_result(
     opts: &ForensicPackOpts,
     incident_graph: Option<&IncidentGraph>,
 ) -> Result<ForensicPack, Vec<String>> {
+    build_forensic_pack_with_trust_result(
+        run_id,
+        boundary,
+        events,
+        external,
+        findings,
+        edges,
+        &[],
+        &[],
+        opts,
+        incident_graph,
+    )
+}
+
+/// Build a pack including containment and provenance records selected from the
+/// store. The legacy builder remains available for callers without trust data.
+#[allow(clippy::too_many_arguments)]
+pub fn build_forensic_pack_with_trust(
+    run_id: &str,
+    boundary: Option<&ResolvedBoundary>,
+    events: &[TraceEvent],
+    external: &[ExternalEvidenceEvent],
+    findings: &[BoundaryFinding],
+    edges: &[EvidenceEdge],
+    containment: &[ContainmentReceipt],
+    provenance: &[ProvenanceRecord],
+    opts: &ForensicPackOpts,
+) -> ForensicPack {
+    build_forensic_pack_with_trust_result(
+        run_id,
+        boundary,
+        events,
+        external,
+        findings,
+        edges,
+        containment,
+        provenance,
+        opts,
+        None,
+    )
+    .unwrap_or_else(|errors| {
+        let mut pack =
+            build_forensic_pack(run_id, boundary, events, external, findings, edges, opts);
+        if let Some(scope) = pack.scope.as_mut() {
+            scope.containment_total = containment.len();
+            scope.provenance_total = provenance.len();
+            scope.limitations.extend(errors);
+        }
+        pack.pack_hash = hash_pack(&pack);
+        pack
+    })
+}
+
+/// Fallible full-trust pack builder.
+#[allow(clippy::too_many_arguments)]
+pub fn build_forensic_pack_with_trust_result(
+    run_id: &str,
+    boundary: Option<&ResolvedBoundary>,
+    events: &[TraceEvent],
+    external: &[ExternalEvidenceEvent],
+    findings: &[BoundaryFinding],
+    edges: &[EvidenceEdge],
+    containment: &[ContainmentReceipt],
+    provenance: &[ProvenanceRecord],
+    opts: &ForensicPackOpts,
+    incident_graph: Option<&IncidentGraph>,
+) -> Result<ForensicPack, Vec<String>> {
+    if matches!(
+        &opts.secret_token_mode,
+        SecretTokenMode::ProjectCorrelatable { key } if key.is_empty()
+    ) {
+        return Err(vec![
+            "project_correlatable_secret_tokens_require_nonempty_hmac_key".into(),
+        ]);
+    }
     let mut coverage_gaps = Vec::new();
     if events.is_empty() {
         coverage_gaps.push("no_trace_events".into());
@@ -244,10 +356,10 @@ pub fn build_forensic_pack_result(
         findings.iter().map(|f| (f.id.as_str(), f)).collect();
 
     let mut event_window = Vec::new();
-    for id in &selection.event_ids {
-        let Some(e) = event_by_id.get(id.as_str()) else {
-            continue;
-        };
+    for e in events
+        .iter()
+        .filter(|event| selection.event_ids.contains(&event.id))
+    {
         event_window.push(serde_json::json!({
             "id": e.id,
             "sequence": e.sequence,
@@ -262,10 +374,10 @@ pub fn build_forensic_pack_result(
     }
 
     let mut external_summaries = Vec::new();
-    for id in &selection.external_ids {
-        let Some(e) = external_by_id.get(id.as_str()) else {
-            continue;
-        };
+    for e in external
+        .iter()
+        .filter(|event| selection.external_ids.contains(&event.id))
+    {
         external_summaries.push(serde_json::json!({
             "id": e.id,
             "source": e.source,
@@ -295,6 +407,18 @@ pub fn build_forensic_pack_result(
         .filter(|e| selection.edge_ids.contains(&e.id))
         .cloned()
         .collect();
+    let selected_containment = select_head_tail(
+        containment,
+        opts.max_external,
+        opts.head_count,
+        opts.tail_count,
+    );
+    let selected_provenance = select_head_tail(
+        provenance,
+        opts.max_external,
+        opts.head_count,
+        opts.tail_count,
+    );
 
     let mut fingerprints = Vec::new();
     for id in &selection.event_ids {
@@ -337,6 +461,16 @@ pub fn build_forensic_pack_result(
     for id in &selection.finding_ids {
         original_pointers.push(format!("finding:{id}"));
     }
+    original_pointers.extend(
+        selected_containment
+            .iter()
+            .map(|receipt| format!("receipt:{}", receipt.id)),
+    );
+    original_pointers.extend(
+        selected_provenance
+            .iter()
+            .map(|record| format!("provenance:{}", record.id)),
+    );
     original_pointers.sort();
     original_pointers.dedup();
 
@@ -438,6 +572,12 @@ pub fn build_forensic_pack_result(
     if selection.finding_ids.len() < findings.len() {
         limitations.push("findings_truncated".into());
     }
+    if selected_containment.len() < containment.len() {
+        limitations.push("containment_receipts_truncated".into());
+    }
+    if selected_provenance.len() < provenance.len() {
+        limitations.push("provenance_records_truncated".into());
+    }
 
     let scope = ForensicPackScope {
         events_total: events.len(),
@@ -448,6 +588,10 @@ pub fn build_forensic_pack_result(
         external_included: selection.external_ids.len(),
         edges_total: edges.len(),
         edges_included: selected_edges.len(),
+        containment_total: containment.len(),
+        containment_included: selected_containment.len(),
+        provenance_total: provenance.len(),
+        provenance_included: selected_provenance.len(),
         strategy: SELECTION_STRATEGY_HEAD_TAIL_CITED_GRAPH.into(),
         limitations,
         unavailable_citations,
@@ -455,6 +599,7 @@ pub fn build_forensic_pack_result(
 
     let mut pack = ForensicPack {
         schema: FORENSIC_PACK_SCHEMA.into(),
+        evidence_layers: forensic_evidence_layers(),
         run_id: run_id.into(),
         created_at: Utc::now(),
         policy_hash: boundary.map(|b| b.policy_hash.clone()),
@@ -467,12 +612,61 @@ pub fn build_forensic_pack_result(
         coverage_gaps,
         original_pointers,
         derived_claims,
+        containment_receipts: selected_containment,
+        provenance_records: selected_provenance,
+        required_evidence: boundary
+            .map(|resolved| resolved.contract.required_evidence.clone())
+            .unwrap_or_default(),
         incident_graph: incident_graph.cloned(),
         pack_hash: String::new(),
     };
     sanitize_pack_content(&mut pack, opts)?;
     pack.pack_hash = hash_pack(&pack);
     Ok(pack)
+}
+
+fn forensic_evidence_layers() -> BTreeMap<String, String> {
+    [
+        ("event_window", "observation"),
+        ("external_summaries", "observation"),
+        ("fingerprints", "normalized_fact"),
+        ("edges", "correlation"),
+        ("findings", "findings"),
+        ("incident_graph", "incident_interpretation"),
+        ("derived_claims", "claim"),
+        ("containment_receipts", "observation"),
+        ("provenance_records", "observation"),
+        ("required_evidence", "normalized_fact"),
+    ]
+    .into_iter()
+    .map(|(field, layer)| (field.into(), layer.into()))
+    .collect()
+}
+
+fn select_head_tail<T: Clone>(
+    values: &[T],
+    max: usize,
+    head_count: usize,
+    tail_count: usize,
+) -> Vec<T> {
+    if values.len() <= max {
+        return values.to_vec();
+    }
+    let (head, tail) = bounded_head_tail_counts(max, head_count, tail_count);
+    values
+        .iter()
+        .take(head)
+        .chain(
+            values
+                .iter()
+                .rev()
+                .take(tail)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev(),
+        )
+        .cloned()
+        .collect()
 }
 
 struct PackSelection {
@@ -498,8 +692,8 @@ fn select_pack_material(
     let mut limitations = Vec::new();
 
     // Head + tail events by sequence/order in input.
-    let head_n = opts.head_count.min(opts.max_events);
-    let tail_n = opts.tail_count.min(opts.max_events);
+    let (head_n, tail_n) =
+        bounded_head_tail_counts(opts.max_events, opts.head_count, opts.tail_count);
     for e in events.iter().take(head_n) {
         event_ids.insert(e.id.clone());
     }
@@ -509,15 +703,13 @@ fn select_pack_material(
         }
     }
 
-    for e in external.iter().take(opts.head_count.min(opts.max_external)) {
+    let (external_head_n, external_tail_n) =
+        bounded_head_tail_counts(opts.max_external, opts.head_count, opts.tail_count);
+    for e in external.iter().take(external_head_n) {
         external_ids.insert(e.id.clone());
     }
-    if external.len() > opts.head_count {
-        for e in external
-            .iter()
-            .rev()
-            .take(opts.tail_count.min(opts.max_external))
-        {
+    if external.len() > external_head_n {
+        for e in external.iter().rev().take(external_tail_n) {
             external_ids.insert(e.id.clone());
         }
     }
@@ -543,7 +735,12 @@ fn select_pack_material(
     // Earliest signal + continuation evidence from graph.
     if let Some(graph) = incident_graph {
         if let Some(ref sig) = graph.earliest_signal {
-            absorb_ref(&mut event_ids, &mut external_ids, &mut finding_ids, &sig.ref_id);
+            absorb_ref(
+                &mut event_ids,
+                &mut external_ids,
+                &mut finding_ids,
+                &sig.ref_id,
+            );
         }
         if let Some(ref cont) = graph.continuation {
             absorb_ref(
@@ -558,6 +755,12 @@ fn select_pack_material(
                 &mut finding_ids,
                 &cont.continuation_evidence_id,
             );
+            if edges
+                .iter()
+                .any(|edge| edge.id == cont.continuation_evidence_id)
+            {
+                edge_ids.insert(cont.continuation_evidence_id.clone());
+            }
         }
     }
 
@@ -568,8 +771,8 @@ fn select_pack_material(
     selected_entities.extend(finding_ids.iter().cloned());
 
     for edge in edges {
-        let touches = selected_entities.contains(&edge.from_id)
-            || selected_entities.contains(&edge.to_id);
+        let touches =
+            selected_entities.contains(&edge.from_id) || selected_entities.contains(&edge.to_id);
         if touches {
             edge_ids.insert(edge.id.clone());
             // Nearest neighbors
@@ -590,6 +793,17 @@ fn select_pack_material(
         }
     }
 
+    // `absorb_ref` accepts bare typed references and tentatively places them
+    // in each collection. Resolve those candidates against the actual inputs
+    // before budgets and exact scope accounting.
+    let valid_events: HashSet<&str> = events.iter().map(|event| event.id.as_str()).collect();
+    let valid_external: HashSet<&str> = external.iter().map(|event| event.id.as_str()).collect();
+    let valid_findings: HashSet<&str> =
+        findings.iter().map(|finding| finding.id.as_str()).collect();
+    event_ids.retain(|id| valid_events.contains(id.as_str()));
+    external_ids.retain(|id| valid_external.contains(id.as_str()));
+    finding_ids.retain(|id| valid_findings.contains(id.as_str()));
+
     // Enforce budgets while preserving cited material when possible.
     if event_ids.len() > opts.max_events {
         limitations.push(format!(
@@ -609,10 +823,13 @@ fn select_pack_material(
                 kept.insert(id.clone());
             }
         }
-        for e in events {
-            if kept.len() >= opts.max_events {
-                break;
-            }
+        let remaining = opts.max_events.saturating_sub(kept.len());
+        let (head, tail) = bounded_head_tail_counts(remaining, opts.head_count, opts.tail_count);
+        for e in events
+            .iter()
+            .take(head)
+            .chain(events.iter().rev().take(tail))
+        {
             if event_ids.contains(&e.id) {
                 kept.insert(e.id.clone());
             }
@@ -636,10 +853,13 @@ fn select_pack_material(
                 kept.insert(id.clone());
             }
         }
-        for e in external {
-            if kept.len() >= opts.max_external {
-                break;
-            }
+        let remaining = opts.max_external.saturating_sub(kept.len());
+        let (head, tail) = bounded_head_tail_counts(remaining, opts.head_count, opts.tail_count);
+        for e in external
+            .iter()
+            .take(head)
+            .chain(external.iter().rev().take(tail))
+        {
             if external_ids.contains(&e.id) {
                 kept.insert(e.id.clone());
             }
@@ -683,6 +903,24 @@ fn severity_rank(s: crate::boundary::FindingSeverity) -> u8 {
         crate::boundary::FindingSeverity::Warn => 2,
         crate::boundary::FindingSeverity::Info => 1,
     }
+}
+
+fn bounded_head_tail_counts(max: usize, head: usize, tail: usize) -> (usize, usize) {
+    let requested = head.saturating_add(tail);
+    if requested <= max {
+        return (head, tail);
+    }
+    if max == 0 || requested == 0 {
+        return (0, 0);
+    }
+    let mut bounded_head = max.saturating_mul(head) / requested;
+    if head > 0 && bounded_head == 0 {
+        bounded_head = 1;
+    }
+    if tail > 0 && bounded_head == max && max > 1 {
+        bounded_head -= 1;
+    }
+    (bounded_head, max - bounded_head)
 }
 
 fn hash_pack(pack: &ForensicPack) -> String {
@@ -822,8 +1060,9 @@ impl<'a> StablePackRedactor<'a> {
                 format!("[REDACTED:{}:{:04}]", self.namespace, self.next_replacement)
             }
             SecretTokenMode::ProjectCorrelatable { key } => {
-                let mut mac = HmacSha256::new_from_slice(key)
-                    .unwrap_or_else(|_| HmacSha256::new_from_slice(b"blackbox-forensic").expect("hmac"));
+                let Ok(mut mac) = HmacSha256::new_from_slice(key) else {
+                    return "[REDACTED:hmac-error]".into();
+                };
                 mac.update(secret.as_bytes());
                 let digest = mac.finalize().into_bytes();
                 format!("[REDACTED:hmac:{}]", hex::encode(&digest[..8]))
@@ -836,11 +1075,6 @@ impl<'a> StablePackRedactor<'a> {
     /// Redact secrets + user patterns in free-form text.
     fn redact_freeform(&mut self, value: &str) -> String {
         self.redact_with_user_patterns(value, true)
-    }
-
-    /// SecretScanner only (structural / non-freeform values).
-    fn redact_secrets_only(&mut self, value: &str) -> String {
-        self.redact_with_user_patterns(value, false)
     }
 
     fn redact_with_user_patterns(&mut self, value: &str, apply_user_patterns: bool) -> String {
@@ -903,43 +1137,37 @@ impl<'a> StablePackRedactor<'a> {
     }
 }
 
-/// Map containers whose keys are operator-controlled free-form (not schema fields).
-fn is_freeform_map_parent(key: Option<&str>) -> bool {
-    matches!(key, Some("metadata" | "attributes" | "labels" | "extensions"))
-}
-
 fn sanitize_json_value(
     value: &mut serde_json::Value,
     redactor: &mut StablePackRedactor<'_>,
     parent_key: Option<&str>,
+    freeform_container: bool,
 ) {
     match value {
         serde_json::Value::String(text) => {
-            let freeform = parent_key.is_some_and(is_freeform_key);
+            let freeform = freeform_container || parent_key.is_some_and(is_freeform_key);
             *text = if freeform {
                 redactor.redact_freeform(text)
             } else {
-                redactor.redact_secrets_only(text)
+                text.clone()
             };
         }
         serde_json::Value::Array(items) => {
             for item in items {
-                sanitize_json_value(item, redactor, parent_key);
+                sanitize_json_value(item, redactor, parent_key, freeform_container);
             }
         }
         serde_json::Value::Object(map) => {
             let entries = std::mem::take(map);
-            let rewrite_keys = is_freeform_map_parent(parent_key);
+            let child_freeform_container = freeform_container
+                || parent_key.is_some_and(|key| {
+                    matches!(key, "metadata" | "attributes" | "labels" | "extensions")
+                });
             for (key, mut child) in entries {
-                // Schema field names stay intact. Free-form map keys (metadata/
-                // attributes) may carry secrets and are secret-scanned only.
-                let out_key = if rewrite_keys {
-                    redactor.redact_secrets_only(&key)
-                } else {
-                    key.clone()
-                };
-                sanitize_json_value(&mut child, redactor, Some(&key));
-                map.insert(out_key, child);
+                // Object keys are structural at every depth. They are never
+                // rewritten, including operator-controlled metadata maps.
+                sanitize_json_value(&mut child, redactor, Some(&key), child_freeform_container);
+                map.insert(key, child);
             }
         }
         _ => {}
@@ -950,10 +1178,16 @@ fn sanitize_pack_content(
     pack: &mut ForensicPack,
     opts: &ForensicPackOpts,
 ) -> Result<(), Vec<String>> {
-    let existing_hash = std::mem::take(&mut pack.pack_hash);
-    let mut value = serde_json::to_value(&*pack).map_err(|e| vec![format!("serialize_pack:{e}")])?;
+    let existing_hash = pack.pack_hash.clone();
+    let mut value =
+        serde_json::to_value(&*pack).map_err(|e| vec![format!("serialize_pack:{e}")])?;
+    let mut structural_errors = Vec::new();
+    reject_secret_structure(&value, "$", None, false, &mut structural_errors);
+    if !structural_errors.is_empty() {
+        return Err(structural_errors);
+    }
     let mut redactor = StablePackRedactor::new(opts);
-    sanitize_json_value(&mut value, &mut redactor, None);
+    sanitize_json_value(&mut value, &mut redactor, None, false);
     let mut restored: ForensicPack = serde_json::from_value(value).map_err(|e| {
         vec![format!(
             "typed_redaction_corrupted_pack_schema:{e}; user patterns must not mutate structure"
@@ -962,6 +1196,62 @@ fn sanitize_pack_content(
     restored.pack_hash = existing_hash;
     *pack = restored;
     Ok(())
+}
+
+fn reject_secret_structure(
+    value: &serde_json::Value,
+    path: &str,
+    parent_key: Option<&str>,
+    freeform_container: bool,
+    errors: &mut Vec<String>,
+) {
+    match value {
+        serde_json::Value::String(text) => {
+            let freeform = freeform_container || parent_key.is_some_and(is_freeform_key);
+            if !freeform && !pack_scanner().find_spans(text).is_empty() {
+                errors.push(format!("secret_detected_in_structural_value:{path}"));
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for (index, value) in values.iter().enumerate() {
+                reject_secret_structure(
+                    value,
+                    &format!("{path}[{index}]"),
+                    parent_key,
+                    freeform_container,
+                    errors,
+                );
+            }
+        }
+        serde_json::Value::Object(map) => {
+            let child_freeform_container = freeform_container
+                || parent_key.is_some_and(|key| {
+                    matches!(key, "metadata" | "attributes" | "labels" | "extensions")
+                });
+            for (key, value) in map {
+                if !pack_scanner().find_spans(key).is_empty() {
+                    errors.push(format!(
+                        "secret_detected_in_structural_field_name:{path}.<?>"
+                    ));
+                }
+                reject_secret_structure(
+                    value,
+                    &format!(
+                        "{path}.{}",
+                        if pack_scanner().find_spans(key).is_empty() {
+                            key.as_str()
+                        } else {
+                            "<?>"
+                        }
+                    ),
+                    Some(key),
+                    child_freeform_container,
+                    errors,
+                );
+            }
+        }
+        _ => {}
+    }
 }
 
 fn redact_value(v: &serde_json::Value, opts: &ForensicPackOpts) -> serde_json::Value {
@@ -1127,7 +1417,10 @@ pub fn validate_claim_citations(pack: &ForensicPack) -> Result<(), Vec<String>> 
             continue;
         }
         if claim.citation_unavailable.unwrap_or(false)
-            && claim.citation_unavailable_reason.as_ref().is_none_or(|r| r.is_empty())
+            && claim
+                .citation_unavailable_reason
+                .as_ref()
+                .is_none_or(|r| r.is_empty())
         {
             errs.push(format!(
                 "claim marks citation_unavailable without reason: {}",
@@ -1544,47 +1837,13 @@ mod tests {
             reused_by_runs: vec![secret.into()],
         });
         pack.incident_graph = Some(graph);
-        sanitize_pack_content(&mut pack, &ForensicPackOpts::default()).unwrap();
-        pack.pack_hash = hash_pack(&pack);
-        validate_forensic_pack(&pack).unwrap();
-
-        let pointer = pack.original_pointers[0].clone();
-        apply_model_analysis(
-            &mut pack,
-            &ModelAnalysisInput {
-                model: secret.into(),
-                prompt: b"prompt".to_vec(),
-                configuration: b"configuration".to_vec(),
-                claims: vec![(secret.into(), vec![pointer])],
-                refused: false,
-                failure: None,
-            },
-        )
-        .unwrap();
-        let serialized = serde_json::to_string(&pack).unwrap();
-        assert!(
-            !serialized.contains(secret),
-            "hostile pack leaked: {serialized}"
-        );
-        validate_forensic_pack(&pack).unwrap();
-
-        let mut failure_pack = pack.clone();
-        apply_model_analysis(
-            &mut failure_pack,
-            &ModelAnalysisInput {
-                model: secret.into(),
-                prompt: b"prompt".to_vec(),
-                configuration: b"configuration".to_vec(),
-                claims: vec![],
-                refused: false,
-                failure: Some(secret.into()),
-            },
-        )
-        .unwrap();
-
-        // Remaining assertions from prior suite (failure path still secret-free).
-        let fail_ser = serde_json::to_string(&failure_pack).unwrap();
-        assert!(!fail_ser.contains(secret));
+        let before = pack.clone();
+        let errors = sanitize_pack_content(&mut pack, &ForensicPackOpts::default())
+            .expect_err("structural secret values must fail closed, not be rewritten");
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("secret_detected_in_structural_value")));
+        assert_eq!(pack, before, "failed typed redaction must not mutate input");
     }
 
     #[test]
@@ -1633,6 +1892,8 @@ mod tests {
         assert_eq!(scope.events_total, 50);
         assert!(scope.events_included <= 20);
         assert_eq!(scope.strategy, SELECTION_STRATEGY_HEAD_TAIL_CITED_GRAPH);
+        assert_eq!(pack.event_window.first().unwrap()["id"], "ev-000");
+        assert_eq!(pack.event_window.last().unwrap()["id"], "ev-049");
         assert!(
             pack.original_pointers
                 .iter()
@@ -1681,8 +1942,10 @@ mod tests {
         let secret = "password=super-secret-value";
         let key = b"project-hmac-key-32-bytes-long!!".to_vec();
         let mut ev1 = TraceEvent::new("r1", EventSource::Tool, "tool.call");
-        ev1.metadata
-            .insert("command".into(), serde_json::json!(format!("echo {secret}")));
+        ev1.metadata.insert(
+            "command".into(),
+            serde_json::json!(format!("echo {secret}")),
+        );
         let mut ev2 = TraceEvent::new("r2", EventSource::Tool, "tool.call");
         ev2.metadata
             .insert("command".into(), serde_json::json!(format!("run {secret}")));

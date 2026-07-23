@@ -35,6 +35,10 @@ pub enum ResourceSelector {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         scheme: Option<String>,
         host: String,
+        /// Optional explicit port. When omitted, any port is accepted for
+        /// compatibility with the original v1 selector form.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        port: Option<u16>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         path: Option<String>,
     },
@@ -115,6 +119,7 @@ impl ResourceSelector {
                 return Self::UrlPrefix {
                     scheme: Some(u.scheme),
                     host: u.host.0,
+                    port: u.port,
                     path: Some(u.path),
                 };
             }
@@ -131,7 +136,10 @@ impl ResourceSelector {
             };
         }
         // Pure ASCII identifier without dots — treat as class token when it has no DNS shape.
-        if !t.contains('.') && !t.contains(':') && t.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        if !t.contains('.')
+            && !t.contains(':')
+            && t.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
         {
             // Heuristic: multi-word snake or known style → class; single label host → domain.
             if t.contains('_') {
@@ -250,11 +258,7 @@ impl MatchExplanation {
         }
     }
 
-    fn no_match(
-        kind: &str,
-        observation: impl Into<String>,
-        reason: impl Into<String>,
-    ) -> Self {
+    fn no_match(kind: &str, observation: impl Into<String>, reason: impl Into<String>) -> Self {
         Self {
             decision: MatchDecision::NoMatch,
             selector_kind: kind.into(),
@@ -292,8 +296,9 @@ pub fn match_network_selector(selector: &ResourceSelector, observation: &str) ->
         ResourceSelector::UrlPrefix {
             scheme,
             host,
+            port,
             path,
-        } => match_url_prefix(scheme.as_deref(), host, path.as_deref(), observation),
+        } => match_url_prefix(scheme.as_deref(), host, *port, path.as_deref(), observation),
         ResourceSelector::Port { value } => match_port(*value, observation),
         ResourceSelector::UnixSocket { value } => match_unix_socket(value, observation),
         ResourceSelector::ClassToken { value } => {
@@ -486,13 +491,7 @@ fn match_cidr(value: &str, observation: &str) -> MatchExplanation {
         }
     };
     if ip_in_cidr(ip, net) {
-        MatchExplanation::allow(
-            "cidr",
-            observation,
-            ip.to_string(),
-            value,
-            "ip_in_cidr",
-        )
+        MatchExplanation::allow("cidr", observation, ip.to_string(), value, "ip_in_cidr")
     } else {
         MatchExplanation {
             decision: MatchDecision::NoMatch,
@@ -509,7 +508,11 @@ fn match_ip_exact(value: &str, observation: &str) -> MatchExplanation {
     let want = match normalize_ip(value) {
         NormalizeOutcome::Ok(ip) => ip,
         NormalizeOutcome::Unknown { reason } => {
-            return MatchExplanation::unknown("ip_exact", observation, format!("selector_{reason}"));
+            return MatchExplanation::unknown(
+                "ip_exact",
+                observation,
+                format!("selector_{reason}"),
+            );
         }
     };
     let got = match observation_ip(observation) {
@@ -544,6 +547,7 @@ fn match_ip_exact(value: &str, observation: &str) -> MatchExplanation {
 fn match_url_prefix(
     scheme: Option<&str>,
     host: &str,
+    port: Option<u16>,
     path: Option<&str>,
     observation: &str,
 ) -> MatchExplanation {
@@ -559,7 +563,12 @@ fn match_url_prefix(
                 decision: MatchDecision::NoMatch,
                 selector_kind: "url_prefix".into(),
                 observation: Some(observation.into()),
-                canonical_observation: Some(format!("{}://{}{}", obs.scheme, obs.host.as_str(), obs.path)),
+                canonical_observation: Some(format!(
+                    "{}://{}{}",
+                    obs.scheme,
+                    obs.host.as_str(),
+                    obs.path
+                )),
                 selector_value: Some(format!("{want_scheme}://{host}")),
                 reasons: vec!["scheme_mismatch".into()],
             };
@@ -587,6 +596,26 @@ fn match_url_prefix(
             reasons: vec!["host_mismatch".into()],
         };
     }
+    if let Some(want_port) = port {
+        if obs.port != Some(want_port) {
+            return MatchExplanation {
+                decision: MatchDecision::NoMatch,
+                selector_kind: "url_prefix".into(),
+                observation: Some(observation.into()),
+                canonical_observation: Some(format!(
+                    "{}://{}:{}{}",
+                    obs.scheme,
+                    obs.host.as_str(),
+                    obs.port
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "?".into()),
+                    obs.path
+                )),
+                selector_value: Some(format!("{host}:{want_port}")),
+                reasons: vec!["port_mismatch".into()],
+            };
+        }
+    }
     if let Some(prefix) = path {
         let want_path = match normalize_path(prefix) {
             NormalizeOutcome::Ok(p) => p,
@@ -605,10 +634,7 @@ fn match_url_prefix(
         };
         let obs_path = &obs.path;
         let path_ok = obs_path == &want_path
-            || obs_path.starts_with(&format!(
-                "{}/",
-                want_path.trim_end_matches('/')
-            ))
+            || obs_path.starts_with(&format!("{}/", want_path.trim_end_matches('/')))
             || (want_path.ends_with('/') && obs_path.starts_with(&want_path));
         if !path_ok {
             return MatchExplanation {
@@ -626,9 +652,10 @@ fn match_url_prefix(
         observation,
         format!("{}://{}{}", obs.scheme, obs.host.as_str(), obs.path),
         format!(
-            "{}://{}{}",
+            "{}://{}{}{}",
             scheme.unwrap_or("*"),
             host,
+            port.map(|value| format!(":{value}")).unwrap_or_default(),
             path.unwrap_or("")
         ),
         "url_prefix_match",
@@ -637,9 +664,13 @@ fn match_url_prefix(
 
 fn match_port(want: u16, observation: &str) -> MatchExplanation {
     match normalize_port(observation) {
-        NormalizeOutcome::Ok(p) if p == want => {
-            MatchExplanation::allow("port", observation, p.to_string(), want.to_string(), "port_equal")
-        }
+        NormalizeOutcome::Ok(p) if p == want => MatchExplanation::allow(
+            "port",
+            observation,
+            p.to_string(),
+            want.to_string(),
+            "port_equal",
+        ),
         NormalizeOutcome::Ok(p) => MatchExplanation {
             decision: MatchDecision::NoMatch,
             selector_kind: "port".into(),
@@ -658,7 +689,11 @@ fn match_unix_socket(value: &str, observation: &str) -> MatchExplanation {
     let want = match normalize_path(value) {
         NormalizeOutcome::Ok(p) => p,
         NormalizeOutcome::Unknown { reason } => {
-            return MatchExplanation::unknown("unix_socket", observation, format!("selector_{reason}"));
+            return MatchExplanation::unknown(
+                "unix_socket",
+                observation,
+                format!("selector_{reason}"),
+            );
         }
     };
     let got = match normalize_path(observation) {
@@ -691,7 +726,11 @@ fn match_path_exact(value: &str, observation: &str) -> MatchExplanation {
     let want = match normalize_path(value) {
         NormalizeOutcome::Ok(p) => p,
         NormalizeOutcome::Unknown { reason } => {
-            return MatchExplanation::unknown("path_exact", observation, format!("selector_{reason}"));
+            return MatchExplanation::unknown(
+                "path_exact",
+                observation,
+                format!("selector_{reason}"),
+            );
         }
     };
     let got = match normalize_path(observation) {
@@ -732,9 +771,7 @@ fn match_path_prefix(value: &str, observation: &str) -> MatchExplanation {
         }
     };
     let want_trim = want.trim_end_matches('/');
-    let ok = got == want
-        || got == want_trim
-        || got.starts_with(&format!("{want_trim}/"));
+    let ok = got == want || got == want_trim || got.starts_with(&format!("{want_trim}/"));
     if ok {
         MatchExplanation::allow("path_prefix", observation, got, want, "path_prefix_match")
     } else {
@@ -796,9 +833,12 @@ fn ip_is_private_or_local(ip: IpAddr) -> bool {
                 || v4.is_private()
                 || v4.is_link_local()
                 || v4.is_unspecified()
-                || v4.octets()[0] == 100 && (v4.octets()[1] & 0b1100_0000) == 64 // 100.64/10
+                || v4.octets()[0] == 100 && (v4.octets()[1] & 0b1100_0000) == 64
+            // 100.64/10
         }
-        IpAddr::V6(v6) => v6.is_loopback() || v6.is_unspecified() || (v6.segments()[0] & 0xfe00) == 0xfc00,
+        IpAddr::V6(v6) => {
+            v6.is_loopback() || v6.is_unspecified() || (v6.segments()[0] & 0xfe00) == 0xfc00
+        }
     }
 }
 
@@ -885,6 +925,7 @@ mod tests {
         let sel = ResourceSelector::UrlPrefix {
             scheme: Some("https".into()),
             host: "api.example.com".into(),
+            port: None,
             path: Some("/v1/".into()),
         };
         let entry = ResourceEntry::Typed(sel.clone());
@@ -894,6 +935,21 @@ mod tests {
         assert!(match_network_selector(&sel, "https://api.example.com/v1/x").is_allow());
         assert_eq!(
             match_network_selector(&sel, "https://api.example.com/v2/x").decision,
+            MatchDecision::NoMatch
+        );
+    }
+
+    #[test]
+    fn url_prefix_honors_explicit_port_and_default_equivalence() {
+        let sel = ResourceSelector::UrlPrefix {
+            scheme: Some("https".into()),
+            host: "api.example.com".into(),
+            port: Some(443),
+            path: Some("/v1".into()),
+        };
+        assert!(match_network_selector(&sel, "https://api.example.com/v1/x").is_allow());
+        assert_eq!(
+            match_network_selector(&sel, "https://api.example.com:8443/v1/x").decision,
             MatchDecision::NoMatch
         );
     }

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Blackbox Unix release qualification gate (1.4 trust through 1.7 boundaries/incidents).
+# Blackbox Unix release qualification gate (1.4 trust through 1.8 evidence semantics).
 #
 # One reproducible command for maintainers before tagging.
 # Outputs a checksummed report under release-artifacts/.
@@ -99,6 +99,7 @@ echo "report: ${REPORT}" | tee -a "$LOG"
 run_gate "rustfmt" cargo fmt --check || true
 run_gate "clippy -D warnings" cargo clippy --all-targets -- -D warnings || true
 run_gate "doc links" python3 scripts/check_doc_links.py || true
+run_gate "1.8: frozen detector benchmark" cargo run --quiet -- boundary benchmark || true
 
 if [ "$QUICK" -eq 1 ]; then
   run_gate "trust: neutrality" cargo test --test neutrality_contract -- --quiet || true
@@ -142,7 +143,8 @@ if [ "$QUICK" -eq 1 ]; then
     --test evidence_adversarial --test evidence_orchestration \
     --test incident_graph_flow --test incident_scale \
     --test incident_memory_bound \
-    --test boundary_1_7_completion -- --quiet || true
+    --test boundary_1_7_completion \
+    --test boundary_1_8_release_contract -- --quiet || true
 else
   run_gate "cargo test --all-targets" cargo test --all-targets -- --quiet || true
   run_gate "docs first-run + envelope + commands" \
@@ -156,7 +158,8 @@ else
     --test evidence_adversarial --test evidence_orchestration \
     --test incident_graph_flow --test incident_scale \
     --test incident_memory_bound \
-    --test boundary_1_7_completion -- --quiet || true
+    --test boundary_1_7_completion \
+    --test boundary_1_8_release_contract -- --quiet || true
   # Real 100k-event endurance (ignored by default unit filter; force with --ignored)
   run_gate "1.6: endurance_100k" cargo test --test endurance_100k -- --quiet || true
 fi
@@ -250,6 +253,16 @@ fi
   echo "| E | Evidence-time findings + detector quality gate |"
   echo "| F | Observation-backed provenance |"
   echo "| G/H | Chronological incidents + strict portable trust-artifact restore |"
+  echo
+  echo "## 1.8 Evidence semantics bars"
+  echo
+  echo "| Id | Bar |"
+  echo "|---|---|"
+  echo "| S/F | Canonical typed selectors + calibrated findings |"
+  echo "| I | Typed, cited incident continuation |"
+  echo "| P/R | Citation-complete packs + typed redaction/HMAC tokens |"
+  echo "| L | Vocabulary lint + policy resolution explanations |"
+  echo "| B/O | Frozen benchmark + layered output labels |"
   echo
   echo "## Host"
   echo

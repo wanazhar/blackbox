@@ -254,10 +254,7 @@ impl Default for DecisionInput<'_> {
 }
 
 fn confidence_is_strong(c: Confidence) -> bool {
-    matches!(
-        c,
-        Confidence::Confirmed | Confidence::StronglyCorrelated
-    )
+    matches!(c, Confidence::Confirmed | Confidence::StronglyCorrelated)
 }
 
 fn confidence_is_weak(c: Confidence) -> bool {
@@ -302,8 +299,7 @@ fn derive_violation_state(
             }
             // Unverified evidence cannot alone confirm a critical hard prohibition
             // without at least plausible correlation.
-            if integrity == EvidenceIntegrityClass::Unverified && confidence_is_weak(correlation)
-            {
+            if integrity == EvidenceIntegrityClass::Unverified && confidence_is_weak(correlation) {
                 reasons.push("unverified_weak_correlation".into());
                 ViolationState::Ambiguous
             } else {
@@ -358,9 +354,7 @@ fn derive_severity(
             if hard && strong_integrity && id_ok && corr_ok && high_impact {
                 reasons.push("severity_critical_hard_verified".into());
                 FindingSeverity::Critical
-            } else if hard
-                && (strong_integrity || matches!(correlation, Confidence::Confirmed))
-            {
+            } else if hard && (strong_integrity || matches!(correlation, Confidence::Confirmed)) {
                 reasons.push("severity_high_hard_prohibition".into());
                 FindingSeverity::High
             } else if matches!(disposition, Disposition::ApprovalRequired) {

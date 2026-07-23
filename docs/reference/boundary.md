@@ -1,8 +1,12 @@
 # Boundary contract reference (`blackbox.boundary/v1`)
 
-Machine-readable authorization and required-evidence contract for a governed run (Blackbox **1.7**).
+Machine-readable authorization, evidence-semantics, and required-evidence
+contract for a governed run (Blackbox **1.7–1.8**).
 
-Related: [plan](../plan/agent-boundary-1.7.md) · [claims](../claims.md) · [verification](../guide/verification.md) · epic [issue #5](https://github.com/wanazhar/blackbox/issues/5).
+Related: [1.7 plan](../plan/agent-boundary-1.7.md) ·
+[1.8 plan](../plan/evidence-semantics-1.8.md) · [claims](../claims.md) ·
+[verification](../guide/verification.md) · 1.8 epic
+[issue #6](https://github.com/wanazhar/blackbox/issues/6).
 
 ---
 
@@ -27,7 +31,15 @@ Blackbox remains a local-first evidence system. Missing sensors produce `insuffi
   "purpose": "capability evaluation",
   "allowed": {
     "targets": ["local-range"],
-    "network": ["package-proxy.internal"],
+    "network": [
+      {"kind": "domain_exact", "value": "package-proxy.internal"},
+      {"kind": "domain_suffix", "value": ".corp.example"},
+      {"kind": "cidr", "value": "10.0.0.0/8"},
+      {"kind": "url_prefix", "scheme": "https", "host": "api.example.com", "port": 443, "path": "/v1/"}
+    ],
+    "paths": [
+      {"kind": "path_prefix", "value": "/workspace"}
+    ],
     "identities": ["eval-workload"],
     "data_classes": ["synthetic"],
     "tools": ["shell", "read_file"],
@@ -63,7 +75,7 @@ Blackbox remains a local-first evidence system. Missing sensors produce `insuffi
 |---|---|
 | `schema` | Always `blackbox.boundary/v1` |
 | `purpose` | Free-text purpose of the run under this contract |
-| `allowed.*` | Explicit allow-lists (targets, network, identities, data_classes, tools, effects, provenance) |
+| `allowed.*` | Explicit allow-lists; network and paths accept legacy strings or typed selectors |
 | `prohibited` | Tokens default to disposition `hard_prohibition` |
 | `dispositions` | Per-token override: `hard_prohibition` · `approval_required` · `allowed` · `observed_only` · `unknown` |
 | `required_evidence` | Classes that must be present for a conclusive evaluation |
@@ -72,6 +84,13 @@ Blackbox remains a local-first evidence system. Missing sensors produce `insuffi
 | `labels` / `extensions` | Free-form metadata; extensions ignored unless registered |
 
 Rust: `blackbox::boundary::BoundaryContract`. Resolved form: `ResolvedBoundary` (adds `policy_hash`, `resolved_at`, `run_id`, `inheritance_chain`).
+
+Typed selectors use exact canonical matching for domains, suffix domains, URLs,
+IPv4/IPv6 CIDRs and IPs, ports, paths, Unix sockets, identities, tools, effects,
+and provenance classes. Host matching applies IDNA, lowercase, and trailing-dot
+normalization. URL selectors compare scheme, canonical host, optional explicit
+port, and path components. Malformed observations return `unknown`; they are
+never authorized.
 
 ### Policy hash
 
@@ -149,6 +168,13 @@ blackbox boundary provenance <run> --declared local-dataset --task-passed true -
 
 Task correctness and provenance validity are independent: a correct answer with undeclared network still fails the provenance gate.
 
+Every 1.8 finding includes a decision object that keeps observation, policy
+disposition, evidence integrity, identity confidence, correlation confidence,
+observed effect, violation state, severity, and reasons separate. The
+`deterministic_detector` marker describes repeatability only. Unverified
+evidence cannot produce a confirmed critical result without an explicit trusted
+override.
+
 ## Incidents & forensic packs
 
 ```bash
@@ -160,9 +186,29 @@ blackbox forensic analyze pack.json --model local/model@sha256:... \
   --claim "derived claim" --cite event:<event-id>
 ```
 
-Incident graph schema `blackbox.incident.graph/v2` carries typed delegation, credential-use, and artifact-derivation flows. `edge_count`, `flow_count`, `flow_counts`, `technique_count`, and `reuse_count` are exact source totals when `counts_exact=true`. `detail_limits` and `truncation` distinguish totals from serialized details. Deserialized v1 graphs have `counts_exact=false`; their list lengths are lower bounds and truncation is unknown.
+Incident graph schema `blackbox.incident.graph/v2` carries typed delegation,
+credential-use, and artifact-derivation flows. Positive continuation requires a
+cited `same_process_lineage`, `same_agent_identity`, `same_credential`,
+`same_destination`, `same_artifact`, or `same_technique` relationship.
+`unrelated_later_activity` is explicit and does not satisfy continuation.
+`edge_count`, `flow_count`, `flow_counts`, `technique_count`, and `reuse_count`
+are exact source totals when `counts_exact=true`. `detail_limits` and
+`truncation` distinguish totals from serialized details. Deserialized v1 graphs
+have `counts_exact=false`; their list lengths are lower bounds and truncation is
+unknown.
 
-Forensic packs recursively scan every serialized string and object key, including edges, pointers, optional incident graphs, external identity, findings, and model output. Citations must exactly equal a typed pointer already in `original_pointers`; suffix-only and ambiguous IDs reject. Before mutation, `analyze` validates schema, `pack_hash`, and citations. It computes SHA-256 fingerprints from exact `--prompt-file` and `--configuration-file` bytes; refusal and failure records carry the same provenance. A hash mismatch leaves the input file unchanged.
+Forensic packs use `head_tail_cited_graph_neighborhood` selection and expose
+exact total/included counts, truncation limitations, and unavailable-citation
+reasons. Typed redaction changes classified free-form content only; schemas,
+field names, IDs, enums, hashes, and citation prefixes remain structural.
+Default secret tokens are unlinkable between packs. Project-correlatable mode
+uses keyed HMAC identifiers. Packs label each collection as observation,
+normalized fact, correlation, finding, incident interpretation, or claim.
+Citations must exactly equal a typed pointer already in `original_pointers`;
+suffix-only and ambiguous IDs reject. Before mutation, `analyze` validates
+schema, `pack_hash`, and citations. It computes SHA-256 fingerprints from exact
+`--prompt-file` and `--configuration-file` bytes; refusal and failure records
+carry the same provenance. A hash mismatch leaves the input file unchanged.
 
 `blackbox.incident.export/v1` recursively scans every serialized incident/graph/reference string. Within one export, equal secret matches receive the same opaque token so structural links survive; tokens are namespaced per export and are not secret digests. The transformation ledger records scanned and actually redacted counts by field family. The document also records supplied attachment payload hashes, unresolved references, and `export_hash`. Validate the hash before trusting a received exchange. Attachment bodies are not embedded, so hashes remain citations to separately retained originals.
 
@@ -170,6 +216,9 @@ Forensic packs recursively scan every serialized string and object key, includin
 
 ```bash
 blackbox boundary validate path/to/boundary.json
+blackbox boundary lint path/to/boundary.json --gate
+blackbox boundary explain path/to/boundary.json --parent parent.json
+blackbox boundary benchmark
 blackbox boundary set <run|latest> -f boundary.json
 blackbox boundary show <run|latest>
 blackbox boundary evaluate <run> --gate

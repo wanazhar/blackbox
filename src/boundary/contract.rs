@@ -129,11 +129,13 @@ fn selector_display(sel: &ResourceSelector) -> String {
         ResourceSelector::UrlPrefix {
             scheme,
             host,
+            port,
             path,
         } => format!(
-            "{}://{}{}",
+            "{}://{}{}{}",
             scheme.as_deref().unwrap_or("*"),
             host,
+            port.map(|value| format!(":{value}")).unwrap_or_default(),
             path.as_deref().unwrap_or("")
         ),
         ResourceSelector::Port { value } => value.to_string(),
@@ -385,16 +387,21 @@ mod tests {
     #[test]
     fn typed_network_selector_serde() {
         let mut c = BoundaryContract::new();
-        c.allowed.network.push(ResourceEntry::Typed(
-            ResourceSelector::DomainExact {
+        c.allowed
+            .network
+            .push(ResourceEntry::Typed(ResourceSelector::DomainExact {
                 value: "packages.internal".into(),
-            },
-        ));
-        c.allowed.network.push(ResourceEntry::Legacy("10.0.0.0/8".into()));
+            }));
+        c.allowed
+            .network
+            .push(ResourceEntry::Legacy("10.0.0.0/8".into()));
         let json = serde_json::to_string(&c).unwrap();
         let back: BoundaryContract = serde_json::from_str(&json).unwrap();
         assert_eq!(c, back);
-        assert!(back.allowed.network_allows("https://packages.internal/x").is_allow());
+        assert!(back
+            .allowed
+            .network_allows("https://packages.internal/x")
+            .is_allow());
         assert!(back.allowed.network_allows("10.1.2.3").is_allow());
         assert!(!back
             .allowed

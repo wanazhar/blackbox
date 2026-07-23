@@ -436,8 +436,6 @@ pub fn normalize_port(raw: &str) -> NormalizeOutcome<u16> {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -452,16 +450,17 @@ mod tests {
 
     #[test]
     fn suffix_respects_label_boundary() {
-        let host = normalize_host("attacker-example.com").as_ok().unwrap().clone();
+        let host = normalize_host("attacker-example.com")
+            .as_ok()
+            .unwrap()
+            .clone();
         assert_eq!(
             host_matches_suffix(&host, "example.com").as_ok().copied(),
             Some(false)
         );
         let host2 = normalize_host("a.example.com").as_ok().unwrap().clone();
         assert_eq!(
-            host_matches_suffix(&host2, ".example.com")
-                .as_ok()
-                .copied(),
+            host_matches_suffix(&host2, ".example.com").as_ok().copied(),
             Some(true)
         );
         assert_eq!(
@@ -472,7 +471,10 @@ mod tests {
 
     #[test]
     fn exact_does_not_allow_suffix_attacker() {
-        let host = normalize_host("attacker-example.com").as_ok().unwrap().clone();
+        let host = normalize_host("attacker-example.com")
+            .as_ok()
+            .unwrap()
+            .clone();
         assert_eq!(
             host_matches_exact(&host, "example.com").as_ok().copied(),
             Some(false)

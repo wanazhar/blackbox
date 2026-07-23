@@ -274,7 +274,7 @@ fn tools_list() -> Value {
             ),
             tool_def(
                 "blackbox_boundary",
-                "Boundary contract + trust rollup for a run (1.7): policy hash, findings, containment, provenance.",
+                "Boundary contract + layered trust rollup for a run (1.7–1.8): policy hash, calibrated findings, containment, provenance.",
                 json!({
                     "type": "object",
                     "properties": {
@@ -284,7 +284,7 @@ fn tools_list() -> Value {
             ),
             tool_def(
                 "blackbox_evidence",
-                "List external evidence linked to a run (1.7).",
+                "List observation-layer external evidence linked to a run (1.7–1.8).",
                 json!({
                     "type": "object",
                     "properties": {
@@ -295,7 +295,7 @@ fn tools_list() -> Value {
             ),
             tool_def(
                 "blackbox_incident",
-                "List incidents or show one by id (1.7).",
+                "List incident-interpretation-layer incidents or show one by id (1.7–1.8).",
                 json!({
                     "type": "object",
                     "properties": {
@@ -306,7 +306,7 @@ fn tools_list() -> Value {
             ),
             tool_def(
                 "blackbox_forensic",
-                "Build forensic pack metadata for a run (1.7); redacted summaries, not raw secrets.",
+                "Build a layer-labeled forensic pack for a run (1.7–1.8); typed-redacted summaries, not raw secrets.",
                 json!({
                     "type": "object",
                     "properties": {
@@ -1041,6 +1041,13 @@ async fn tool_boundary(
     );
     Ok(tool_ok(&json!({
         "run_id": run.id,
+        "evidence_layers": {
+            "boundary": "normalized_fact",
+            "trust": "incident_interpretation",
+            "findings": "findings",
+            "containment_receipts": "observation",
+            "provenance_records": "observation"
+        },
         "boundary": boundary,
         "trust": trust,
         "findings": findings,
@@ -1069,6 +1076,7 @@ async fn tool_evidence(
     events.truncate(limit);
     Ok(tool_ok(&json!({
         "run_id": run.id,
+        "evidence_layer": "observation",
         "count": events.len(),
         "events": events,
     })))
@@ -1095,7 +1103,11 @@ async fn tool_incident(
         .await
         .map_err(|e| rpc_err(-32000, &e.to_string()))?;
     list.truncate(limit);
-    Ok(tool_ok(&json!({ "incidents": list, "count": list.len() })))
+    Ok(tool_ok(&json!({
+        "evidence_layer": "incident_interpretation",
+        "incidents": list,
+        "count": list.len()
+    })))
 }
 
 async fn tool_forensic(
@@ -1128,13 +1140,23 @@ async fn tool_forensic(
         .await
         .unwrap_or_default();
     let edges = store.list_evidence_edges(&run.id).await.unwrap_or_default();
-    let pack = crate::forensic::build_forensic_pack(
+    let containment = store
+        .list_containment_receipts(&run.id)
+        .await
+        .unwrap_or_default();
+    let provenance = store
+        .list_provenance_records(&run.id)
+        .await
+        .unwrap_or_default();
+    let pack = crate::forensic::build_forensic_pack_with_trust(
         &run.id,
         boundary.as_ref(),
         &events,
         &external,
         &findings,
         &edges,
+        &containment,
+        &provenance,
         &crate::forensic::ForensicPackOpts {
             max_events,
             ..Default::default()
@@ -1144,6 +1166,8 @@ async fn tool_forensic(
         "run_id": run.id,
         "pack_hash": pack.pack_hash,
         "policy_hash": pack.policy_hash,
+        "evidence_layers": pack.evidence_layers,
+        "scope": pack.scope,
         "findings": pack.findings.len(),
         "event_window": pack.event_window.len(),
         "coverage_gaps": pack.coverage_gaps,

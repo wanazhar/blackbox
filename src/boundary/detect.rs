@@ -12,7 +12,8 @@ use crate::evidence::{EvidenceAction, EvidenceIntegrity, EvidenceOutcome, Extern
 
 use super::contract::BoundaryContract;
 use super::finding::{
-    DecisionInput, EvidenceIntegrityClass, FindingDecision, ObservedEffect, ViolationState,
+    strongest_integrity, DecisionInput, EvidenceIntegrityClass, FindingDecision, ObservedEffect,
+    ViolationState,
 };
 use super::selector::{match_path_selector, observation_looks_public_network, ResourceSelector};
 use super::vocab::Disposition;
@@ -136,6 +137,12 @@ impl BoundaryFinding {
                 serde_json::json!(self.external_evidence_ids),
             );
         }
+        ev.metadata
+            .insert("evidence_layer".into(), serde_json::json!("findings"));
+        if let Some(ref decision) = self.decision {
+            ev.metadata
+                .insert("decision".into(), serde_json::json!(decision));
+        }
         ev
     }
 }
@@ -163,7 +170,9 @@ pub fn detect_boundary_findings(inputs: DetectInputs<'_>) -> Vec<BoundaryFinding
     out.extend(detect_deceptive_telemetry(&inputs));
     out.extend(detect_behavior_transitions(&inputs));
     normalize_finding_times(&inputs, &mut out);
+    calibrate_legacy_findings(&inputs, &mut out);
     out.extend(detect_execution_after_violation(&inputs, &out));
+    calibrate_legacy_findings(&inputs, &mut out);
     // Sort: critical first, preserve earliest evidence by retaining insertion order within severity.
     out.sort_by(|a, b| {
         severity_rank(b.severity)
@@ -171,6 +180,88 @@ pub fn detect_boundary_findings(inputs: DetectInputs<'_>) -> Vec<BoundaryFinding
             .then(a.created_at.cmp(&b.created_at))
     });
     out
+}
+
+/// Complete the additive 1.8 decision contract for detectors that predate
+/// calibrated findings. Detector-local decisions remain authoritative; this
+/// pass only fills missing decision objects from cited evidence and policy.
+fn calibrate_legacy_findings(inputs: &DetectInputs<'_>, findings: &mut [BoundaryFinding]) {
+    for finding in findings
+        .iter_mut()
+        .filter(|finding| finding.decision.is_none())
+    {
+        let cited_external: Vec<&ExternalEvidenceEvent> = finding
+            .external_evidence_ids
+            .iter()
+            .filter_map(|id| inputs.external.iter().find(|event| event.id == *id))
+            .collect();
+        let evidence_integrity =
+            strongest_integrity(cited_external.iter().map(|event| event.integrity));
+        let identity_confidence = cited_external
+            .iter()
+            .map(|event| identity_confidence_from_external(event))
+            .max_by_key(|confidence| confidence_rank(*confidence))
+            .unwrap_or(Confidence::Unknown);
+        let correlation_confidence = cited_external
+            .iter()
+            .map(|event| correlation_from_external(event))
+            .chain(
+                (!finding.evidence_event_ids.is_empty()).then_some(Confidence::StronglyCorrelated),
+            )
+            .max_by_key(|confidence| confidence_rank(*confidence))
+            .unwrap_or(Confidence::Unknown);
+        let disposition = finding
+            .disposition
+            .or_else(|| {
+                finding
+                    .token
+                    .as_deref()
+                    .map(|token| disposition_of(inputs.contract, token))
+            })
+            .unwrap_or(Disposition::Unknown);
+        let force_violation_state = match finding.kind {
+            FindingKind::BoundaryViolation => None,
+            FindingKind::BehaviorTransition => Some(ViolationState::NotApplicable),
+        };
+        let observation = finding.summary.clone();
+        let reasons = vec!["legacy_detector_calibrated_from_citations".into()];
+        let decision = FindingDecision::calibrate(DecisionInput {
+            observation: &observation,
+            policy_disposition: disposition,
+            evidence_integrity,
+            identity_confidence,
+            correlation_confidence,
+            observed_effect: observed_effect_for_detector(&finding.detector),
+            reasons: &reasons,
+            force_violation_state,
+        });
+        finding.apply_decision(decision);
+    }
+}
+
+fn confidence_rank(confidence: Confidence) -> u8 {
+    match confidence {
+        Confidence::Confirmed => 4,
+        Confidence::StronglyCorrelated => 3,
+        Confidence::WeaklyCorrelated => 2,
+        Confidence::Unknown => 1,
+    }
+}
+
+fn observed_effect_for_detector(detector: &str) -> ObservedEffect {
+    match detector {
+        "unexpected_destination" | "prohibited_destination_token" | "boundary_probing" => {
+            ObservedEffect::NetworkEgress
+        }
+        "credential_access" | "credential_path_access" | "credential_path_mention" => {
+            ObservedEffect::CredentialUse
+        }
+        "package_install" | "supply_chain_material_invalid" => ObservedEffect::PackageInstall,
+        "privilege_capability_gain" => ObservedEffect::PrivilegeGain,
+        "persistence_after_exit" => ObservedEffect::Persistence,
+        "execution_after_violation" | "abnormal_fanout" => ObservedEffect::ProcessExec,
+        _ => ObservedEffect::Unknown,
+    }
 }
 
 fn external_time(event: &ExternalEvidenceEvent) -> DateTime<Utc> {

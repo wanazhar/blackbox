@@ -4,6 +4,31 @@ All notable changes to **blackbox** are documented here.
 
 ## [Unreleased]
 
+## [1.8.0] — 2026-07-23
+
+### 1.8 — Evidence semantics & forensic rigor
+
+- Canonical typed selectors for domains, suffixes, URLs/ports, IPv4/IPv6,
+  CIDRs, paths, Unix sockets, identities, tools, effects, and provenance;
+  authorization and provenance matching no longer use substring containment.
+- Calibrated finding decisions separate observation, policy disposition,
+  evidence integrity, identity/correlation confidence, observed effect,
+  violation state, severity, and reasons.
+- Incident continuation requires a cited typed entity/technique relationship;
+  unrelated later activity is explicit and does not count as continuation.
+- Forensic packs use head/tail/cited/graph-neighborhood selection, include
+  containment/provenance/required-evidence context, expose exact scope, and
+  fail closed rather than rewriting structural fields during redaction.
+- Optional project-keyed HMAC secret tokens support equality across packs;
+  unlinkable per-pack tokens remain the default.
+- `boundary lint`, `boundary explain`, and `boundary benchmark`; the frozen
+  scenario-fingerprint benchmark is part of Unix release qualification.
+- Dashboard, API, MCP, incident, trace-finding, and forensic views identify
+  their observation/interpretation layer.
+
+Epic: [issue #6](https://github.com/wanazhar/blackbox/issues/6). Completion
+evidence: [docs/plan/analysis/evidence-semantics-18-completion.md](docs/plan/analysis/evidence-semantics-18-completion.md).
+
 ## [1.7.0] — 2026-07-22
 
 ### 1.7 — Agent boundary evidence & incident reconstruction

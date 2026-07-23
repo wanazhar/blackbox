@@ -268,6 +268,7 @@ No Makefile or justfile -- use cargo directly. Stable Rust, edition 2021.
 - **1.4** = Trust Proof (Unix neutrality, causal proof, security) — **1.4.0**
 - **1.5** = Trace integrity & scale — **1.5.0**
 - **1.6** = Verified runs & reproducibility — **1.6.0**
-- **1.7** = Agent boundary evidence & incident reconstruction — **implementation complete** ([issue #5](https://github.com/wanazhar/blackbox/issues/5)); qualify before tag
+- **1.7** = Agent boundary evidence & incident reconstruction — **1.7.0**
+- **1.8** = Evidence semantics & forensic rigor — **1.8.0** ([issue #6](https://github.com/wanazhar/blackbox/issues/6))
 
 Qualify before tag: `./scripts/release-qualify-unix.sh`. See `docs/ROADMAP.md`.

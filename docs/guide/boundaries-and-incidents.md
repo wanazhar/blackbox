@@ -27,6 +27,10 @@ Reference: [boundary.md](../reference/boundary.md) · Plan: [agent-boundary-1.7.
 # Validate + hash
 blackbox boundary validate tests/fixtures/boundary_1_7/eval_boundary.json
 
+# Catch unknown/contradictory policy and inspect inheritance
+blackbox boundary lint policy.json --gate
+blackbox boundary explain policy.json --parent organization-policy.json
+
 # Attach at launch
 blackbox run --boundary tests/fixtures/boundary_1_7/eval_boundary.json \
   --boundary-fail-closed -- echo hi
@@ -34,6 +38,9 @@ blackbox run --boundary tests/fixtures/boundary_1_7/eval_boundary.json \
 # After the run: launch canaries are automatic; detect + evaluate
 blackbox boundary detect latest
 blackbox boundary evaluate latest --gate   # exit 2 if fail-closed failure
+
+# Release/CI evidence-semantics gate
+blackbox boundary benchmark
 ```
 
 Postmortem JSON includes `boundary_trust`. `score.json` sets `failed=true` when fail-closed boundary/provenance gates fail or critical findings exist — even if exit code is 0.
@@ -115,7 +122,12 @@ Forensic packs apply the same serialization-boundary rule across event values an
 
 The 10k incident qualification separates host-independent correctness from performance diagnostics. Cursor/exact-total/truncation checks have no fixed wall-time assertion. On Linux, a tracking allocator measures incremental graph-assembly peak allocation for 10,000 evidence rows plus edges; the permanent budget is 32 MiB, excluding already-materialized inputs whose count and byte size are independently import-bounded.
 
-Detector quality is gated in CI (`tests/boundary_detector_quality.rs`): the permanent corpus covers escape, probing, credential abuse, package/repository manipulation, privilege attempts, poisoned instructions, persistence, swarm/delegation, telemetry deception, transitions, and benign controls (min recall 0.85 / precision 0.80).
+Detector quality has two gates. `tests/boundary_detector_quality.rs` preserves
+the permanent 1.7 tuning corpus. `blackbox boundary benchmark` checks the
+separately versioned 1.8 baseline, including scenario fingerprints,
+per-detector precision/recall, benign false-positive rate, severity by evidence
+integrity, and sensor-loss behavior. The release qualification script runs both;
+changing a frozen scenario requires an explicit baseline-file review.
 
 ### Auto provenance from experiments
 

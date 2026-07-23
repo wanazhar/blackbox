@@ -75,12 +75,13 @@ pub use identity::{
 };
 pub use lint::{
     explain_boundary_policy, lint_boundary_contract, nearest_token, LintDiagnostic, LintLevel,
-    LintReport, OverriddenValue, PolicyExplanation, PolicySourceLayer, TokenResolution,
-    CORE_CAPABILITY_TOKENS, CORE_EVIDENCE_TOKENS,
+    LintReport, OverriddenValue, PolicyExplanation, PolicySourceLayer, PolicyValueResolution,
+    TokenResolution, CORE_CAPABILITY_TOKENS, CORE_EVIDENCE_TOKENS,
 };
 pub use normalize::{
     host_matches_exact, host_matches_suffix, normalize_cidr, normalize_host, normalize_ip,
-    normalize_path, normalize_url, observation_host, CanonicalHost, CanonicalUrl, NormalizeOutcome,
+    normalize_path, normalize_port, normalize_url, observation_host, CanonicalHost, CanonicalUrl,
+    NormalizeOutcome,
 };
 pub use provenance::{
     evaluate_provenance, record_from_observations, ProvenanceGateReport, ProvenanceKind,
@@ -90,8 +91,8 @@ pub use resolve::{
     load_boundary_file, policy_hash_of, resolve_boundary, ResolveOpts, ResolvedBoundary,
 };
 pub use selector::{
-    match_network_selector, match_path_selector, network_entries_allow, MatchDecision,
-    MatchExplanation, ResourceEntry, ResourceSelector, RESOURCE_SELECTOR_SCHEMA,
+    match_network_selector, match_path_selector, match_token_selector, network_entries_allow,
+    MatchDecision, MatchExplanation, ResourceEntry, ResourceSelector, RESOURCE_SELECTOR_SCHEMA,
 };
 pub use trust::{
     build_boundary_trust, trust_fails_score, BoundaryTrustView, BOUNDARY_TRUST_SCHEMA,

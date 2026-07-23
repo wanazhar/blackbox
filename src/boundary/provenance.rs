@@ -7,6 +7,8 @@ use uuid::Uuid;
 
 use crate::evidence::{EvidenceAction, ExternalEvidenceEvent};
 
+use super::selector::{match_network_selector, ResourceSelector};
+
 /// Schema for provenance records.
 pub const PROVENANCE_SCHEMA: &str = "blackbox.provenance/v1";
 /// Schema for provenance evaluation reports.
@@ -203,7 +205,9 @@ pub fn evaluate_provenance(
                 // Check declared vs observed.
                 for obs in &r.observed_sources {
                     let declared = r.declared_sources.iter().any(|d| d == obs)
-                        || allowed_sources.iter().any(|a| obs.contains(a));
+                        || allowed_sources
+                            .iter()
+                            .any(|allowed| source_matches(allowed, obs));
                     if !declared {
                         status = ProvenanceStatus::InvalidUndeclaredSource;
                         reasons.push(format!(
@@ -223,10 +227,14 @@ pub fn evaluate_provenance(
             EvidenceAction::HttpRequest | EvidenceAction::NetworkConnect | EvidenceAction::DnsQuery
         ) {
             if let Some(ref dest) = ev.destination {
-                let allowed = allowed_sources.iter().any(|a| dest.contains(a))
-                    || records
-                        .iter()
-                        .any(|r| r.declared_sources.iter().any(|d| dest.contains(d)));
+                let allowed = allowed_sources
+                    .iter()
+                    .any(|allowed| source_matches(allowed, dest))
+                    || records.iter().any(|r| {
+                        r.declared_sources
+                            .iter()
+                            .any(|declared| source_matches(declared, dest))
+                    });
                 if !allowed {
                     status = ProvenanceStatus::InvalidNetwork;
                     reasons.push(format!(
@@ -274,11 +282,7 @@ pub fn record_from_observations(
     r.observed_sources = observed.to_vec();
     let undeclared: Vec<_> = observed
         .iter()
-        .filter(|o| {
-            !declared
-                .iter()
-                .any(|d| o.contains(d) || d.contains(o.as_str()))
-        })
+        .filter(|o| !declared.iter().any(|d| source_matches(d, o)))
         .cloned()
         .collect();
     if undeclared.is_empty() {
@@ -293,6 +297,22 @@ pub fn record_from_observations(
         r.summary = Some("answer path includes undeclared sources".into());
     }
     r
+}
+
+/// Canonical, directional provenance match. A declared URL may authorize its
+/// path descendants; domains, IPs, and CIDRs use typed network matching. Raw
+/// substring containment is never an authorization decision.
+fn source_matches(declared: &str, observed: &str) -> bool {
+    let declared = declared.trim();
+    let observed = observed.trim();
+    if declared.is_empty() || observed.is_empty() {
+        return false;
+    }
+    if declared == observed {
+        return true;
+    }
+    let selector = ResourceSelector::from_legacy_network_token(declared);
+    match_network_selector(&selector, observed).is_allow()
 }
 
 #[cfg(test)]
@@ -334,5 +354,21 @@ mod tests {
         assert_eq!(r.status, ProvenanceStatus::Valid);
         let report = evaluate_provenance("r1", &[r], &[], &[], Some(true), true);
         assert!(report.overall_passed);
+    }
+
+    #[test]
+    fn provenance_authorization_never_uses_substring_hosts() {
+        assert!(source_matches(
+            "https://example.com/v1/",
+            "https://example.com/v1/jobs"
+        ));
+        assert!(!source_matches(
+            "example.com",
+            "https://attacker-example.com/"
+        ));
+        assert!(!source_matches(
+            "https://example.com/v1/",
+            "https://example.com/v10/jobs"
+        ));
     }
 }

@@ -188,6 +188,8 @@ impl IncidentGraphTruncation {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IncidentGraph {
     pub schema: String,
+    #[serde(default = "default_incident_evidence_layer")]
+    pub evidence_layer: String,
     pub incident_id: String,
     pub nodes: Vec<IncidentNode>,
     pub edges: Vec<EvidenceEdge>,
@@ -521,6 +523,7 @@ pub fn build_incident_graph_with_limits(
 
     IncidentGraph {
         schema: "blackbox.incident.graph/v2".into(),
+        evidence_layer: default_incident_evidence_layer(),
         incident_id: incident.id.clone(),
         nodes,
         edges,
@@ -541,6 +544,10 @@ pub fn build_incident_graph_with_limits(
         detail_limits: Some(limits),
         truncation: Some(truncation),
     }
+}
+
+fn default_incident_evidence_layer() -> String {
+    "incident_interpretation".into()
 }
 
 #[cfg(test)]

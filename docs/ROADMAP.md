@@ -1,10 +1,14 @@
 # Roadmap and quality bar
 
-What “good” means for blackbox, what each major version promised, what **1.4–1.6** shipped, and what **1.7–1.8** target next.
+What “good” means for blackbox, what each major version promised, and how each
+release keeps those promises executable.
 
 This is **product direction**, not a how-to. Operators: [guide/README.md](guide/README.md).
-**1.8 (in progress):** [issue #6](https://github.com/wanazhar/blackbox/issues/6) — typed policy semantics, calibrated findings, citation-complete forensics. Plan: [plan/evidence-semantics-1.8.md](plan/evidence-semantics-1.8.md).
-**1.7 (implementation complete; release pending):** [issue #5](https://github.com/wanazhar/blackbox/issues/5) — agent boundaries, containment evidence, incident reconstruction. Plan: [plan/agent-boundary-1.7.md](plan/agent-boundary-1.7.md).
+**1.8 (shipped 1.8.0):**
+[issue #6](https://github.com/wanazhar/blackbox/issues/6) — typed policy
+semantics, calibrated findings, citation-complete forensics. Plan:
+[plan/evidence-semantics-1.8.md](plan/evidence-semantics-1.8.md).
+**1.7 (shipped 1.7.0):** [issue #5](https://github.com/wanazhar/blackbox/issues/5) — agent boundaries, containment evidence, incident reconstruction. Plan: [plan/agent-boundary-1.7.md](plan/agent-boundary-1.7.md).
 **1.6 (shipped 1.6.0):** [issue #4](https://github.com/wanazhar/blackbox/issues/4) — verified runs, experiments, reproducibility, durable evidence.
 **1.5 plan (shipped):** [plan/trace-integrity-1.5.md](plan/trace-integrity-1.5.md). Epic: [issue #3](https://github.com/wanazhar/blackbox/issues/3).
 **1.4 plan (shipped):** [plan/trust-proof-1.4.md](plan/trust-proof-1.4.md).
@@ -44,8 +48,8 @@ If a change weakens a bar, it needs an explicit docs + test story.
 | **1.4** | **Trust Proof (Unix 10/10)** | Shipped **1.4.0** |
 | **1.5** | **Trace integrity & scale** | Shipped **1.5.0** — [issue #3](https://github.com/wanazhar/blackbox/issues/3) |
 | **1.6** | **Verified runs & reproducibility** | Shipped **1.6.0** — [issue #4](https://github.com/wanazhar/blackbox/issues/4) |
-| **1.7** | **Agent boundary evidence & incident reconstruction** | Implementation complete; qualified before tag — [issue #5](https://github.com/wanazhar/blackbox/issues/5) |
-| **1.8** | **Evidence semantics & forensic rigor** | In progress — [issue #6](https://github.com/wanazhar/blackbox/issues/6) · [plan](plan/evidence-semantics-1.8.md) |
+| **1.7** | **Agent boundary evidence & incident reconstruction** | Shipped **1.7.0** — [issue #5](https://github.com/wanazhar/blackbox/issues/5) |
+| **1.8** | **Evidence semantics & forensic rigor** | Shipped **1.8.0** — [issue #6](https://github.com/wanazhar/blackbox/issues/6) · [plan](plan/evidence-semantics-1.8.md) |
 
 ### 1.1 adoption bar (permanent)
 
@@ -222,3 +226,22 @@ Integration review 01's artifact-wide sanitization, reproducibility provenance,
 citation, and memory-qualification blockers are remediated. The full all-target
 matrix and `release-qualify-unix.sh --quick` are green; publication remains a
 separate maintainer action.
+
+---
+
+## 1.8 bar (shipped 1.8.0)
+
+Epic: [issue #6](https://github.com/wanazhar/blackbox/issues/6). Plan:
+[plan/evidence-semantics-1.8.md](plan/evidence-semantics-1.8.md).
+
+| Id | Criterion | Intent / status |
+|---|---|---|
+| **S1/S2** | Typed selectors + canonical normalization | ✅ Exact/suffix domain, URL+port, IP/CIDR, path/socket, and exact typed-token match explanations |
+| **F1/F2** | Calibrated, evidence-aware findings | ✅ Every detector finding carries a separated decision object; weak integrity cannot inflate critical severity |
+| **I1** | Typed continuation | ✅ Positive continuation requires a cited entity/technique relation; unrelated later activity is explicit |
+| **P1/P2** | Citation-complete scoped packs | ✅ Head/tail/cited/neighborhood selection, exact counts, limitations, unavailable citations |
+| **R1/R2** | Typed redaction + HMAC tokens | ✅ Free-form values only; structural corruption fails closed; optional project-keyed HMAC |
+| **L1/L2** | Vocabulary lint + policy explanation | ✅ CLI lint/gate and effective-token resolution traces |
+| **B1** | Frozen benchmark | ✅ Separately versioned scenario fingerprints, per-detector/integrity/sensor-loss reports, release gate |
+| **O1** | Layered output | ✅ Dashboard, API, MCP, incidents, trace findings, and forensic collections label semantic layers |
+| **Q1** | Permanent gates | ✅ Full `release-qualify-unix.sh` green for 1.8.0 |

@@ -385,6 +385,8 @@ pub enum BoundaryAction {
         #[arg(long = "parent")]
         parents: Vec<PathBuf>,
     },
+    /// Run the frozen, versioned detector release benchmark (1.8)
+    Benchmark,
     /// Show the resolved boundary attached to a run
     Show {
         /// Run ID, prefix, or "latest"
@@ -1826,6 +1828,48 @@ pub async fn cmd_boundary(
                     );
                 }
             }
+            for value in &expl.value_resolutions {
+                println!(
+                    "  value {} {} sources={}",
+                    value.category,
+                    value.value,
+                    value
+                        .source_layers
+                        .iter()
+                        .map(|layer| layer.as_str())
+                        .collect::<Vec<_>>()
+                        .join(",")
+                );
+                if !value.resolution_order.is_empty() {
+                    println!("    resolution={}", value.resolution_order.join(" → "));
+                }
+            }
+            Ok(())
+        }
+        BoundaryAction::Benchmark => {
+            let report = crate::boundary::evaluate_frozen_benchmark();
+            if json {
+                output::emit_ok("boundary_benchmark", &report)?;
+            } else {
+                println!(
+                    "boundary benchmark version={} scenarios={} precision={:.3} recall={:.3} benign_fp_rate={:.3} passed={}",
+                    report.version,
+                    report.scenarios,
+                    report.precision,
+                    report.recall,
+                    report.benign_false_positive_rate,
+                    report.passed
+                );
+                for failure in &report.failures {
+                    println!("  failure: {failure}");
+                }
+            }
+            if !report.passed {
+                anyhow::bail!(
+                    "frozen boundary benchmark failed with {} failure(s)",
+                    report.failures.len()
+                );
+            }
             Ok(())
         }
         BoundaryAction::Show { run_id } => {
@@ -2038,7 +2082,11 @@ pub async fn cmd_boundary(
             if json {
                 return output::emit_ok(
                     "boundary_detect",
-                    &serde_json::json!({ "findings": findings, "count": findings.len() }),
+                    &serde_json::json!({
+                        "evidence_layer": "findings",
+                        "findings": findings,
+                        "count": findings.len()
+                    }),
                 );
             }
             println!("boundary detect: {} finding(s)", findings.len());
@@ -2590,7 +2638,7 @@ pub async fn cmd_forensic(
             output: out_path,
             max_events,
         } => {
-            use crate::forensic::{build_forensic_pack, ForensicPackOpts};
+            use crate::forensic::{build_forensic_pack_with_trust, ForensicPackOpts};
 
             let boundary = store.get_run_boundary(run_id).await?;
             let events = store.get_events(run_id).await.unwrap_or_default();
@@ -2603,17 +2651,27 @@ pub async fn cmd_forensic(
                 .await
                 .unwrap_or_default();
             let edges = store.list_evidence_edges(run_id).await.unwrap_or_default();
+            let containment = store
+                .list_containment_receipts(run_id)
+                .await
+                .unwrap_or_default();
+            let provenance = store
+                .list_provenance_records(run_id)
+                .await
+                .unwrap_or_default();
             let opts = ForensicPackOpts {
                 max_events: *max_events,
                 ..Default::default()
             };
-            let pack = build_forensic_pack(
+            let pack = build_forensic_pack_with_trust(
                 run_id,
                 boundary.as_ref(),
                 &events,
                 &external,
                 &findings,
                 &edges,
+                &containment,
+                &provenance,
                 &opts,
             );
             let text = serde_json::to_string_pretty(&pack)?;
@@ -2630,6 +2688,8 @@ pub async fn cmd_forensic(
                         &serde_json::json!({
                             "path": out_path,
                             "pack_hash": pack.pack_hash,
+                            "evidence_layers": pack.evidence_layers,
+                            "scope": pack.scope,
                             "findings": pack.findings.len(),
                             "events": pack.event_window.len(),
                         }),

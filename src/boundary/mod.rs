@@ -19,6 +19,7 @@
 //! operator guide `docs/guide/boundaries-and-incidents.md`.
 
 mod auto_provenance;
+mod benchmark;
 mod canary;
 mod containment;
 mod contract;
@@ -38,6 +39,10 @@ mod vocab;
 
 pub use auto_provenance::{
     auto_provenance_record, declared_sources_from_experiment, observed_sources_from_evidence,
+};
+pub use benchmark::{
+    evaluate_frozen_benchmark, label_layer, BenchmarkReport, EvidenceLayer, IntegrityClassStats,
+    SeverityCalibrationRow, BENCHMARK_VERSION, FROZEN_SCENARIO_IDS,
 };
 pub use canary::{launch_containment_receipts, post_run_canary_receipts, LaunchBackendInfo};
 pub use containment::{

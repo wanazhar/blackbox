@@ -731,8 +731,9 @@ fn case_privilege_nsenter_tp() -> CorpusCase {
 fn case_prohibited_token_destination() -> CorpusCase {
     let mut ext =
         ExternalEvidenceEvent::new("proxy", "proxy", "tok-1", EvidenceAction::HttpRequest);
-    // Destination embeds a prohibited token from eval_example.
-    ext.destination = Some("https://edge.external_organizations.example/api".into());
+    // 1.8: prohibitions match typed/exact tokens, not substrings inside hostnames.
+    // Destination is exactly a prohibited class token from eval_example.
+    ext.destination = Some("external_organizations".into());
     CorpusCase {
         id: "tp-prohibited-token-dest",
         family: "escape",

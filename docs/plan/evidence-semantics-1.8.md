@@ -4,7 +4,7 @@
 |---|---|
 | **Document** | Product + technical plan for 1.8 |
 | **Date** | 2026-07-23 |
-| **Status** | **In progress** — Phases A–D landed; E–F next |
+| **Status** | **In progress** — Phases A–F core landed; qualify before tag |
 | **Baseline** | 1.7 (agent boundary evidence & incidents) |
 | **Target tag** | **1.8.0** |
 | **Epic** | [Issue #6](https://github.com/wanazhar/blackbox/issues/6) |
@@ -61,7 +61,7 @@
 | **C** | Typed incident continuation | `ContinuationRelation` + cited conclusions | ✅ |
 | **D** | Forensic packs | Citation-complete selection, scope object, typed redaction, HMAC tokens | ✅ |
 | **E** | Lint / explain / vocab registry | `boundary lint`, `boundary explain`, fail-closed unknown tokens | ✅ |
-| **F** | Frozen benchmark + layered views | Versioned corpus, API/UI layer labels, qualify | |
+| **F** | Frozen benchmark + layered views | Versioned corpus, API/UI layer labels, qualify | ✅ core |
 
 ---
 

@@ -2771,3 +2771,50 @@ async fn load_run_trust(
         &[],
     ))
 }
+
+// ── 1.9 conformance ───────────────────────────────────────────────
+
+#[derive(Args, Clone)]
+/// Run protocol conformance suite (`blackbox conform`).
+pub struct ConformArgs {
+    /// Profile: core | recorder | boundary | forensic (default: core)
+    #[arg(long, default_value = "core")]
+    pub profile: String,
+    /// Path to test-vectors directory (default: ./test-vectors)
+    #[arg(long)]
+    pub vectors: Option<PathBuf>,
+    /// Exit 1 when any mandatory case fails (default true for CI)
+    #[arg(long, default_value_t = true)]
+    pub strict: bool,
+}
+
+/// Run the public conformance suite and emit a machine-readable report.
+pub async fn cmd_conform(args: &ConformArgs, json: bool) -> anyhow::Result<()> {
+    let level = crate::conformance::ConformanceLevel::parse(&args.profile)
+        .ok_or_else(|| anyhow::anyhow!("unknown profile '{}'; use core|recorder|boundary|forensic", args.profile))?;
+    let vectors = args
+        .vectors
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("test-vectors"));
+    let report = crate::conformance::run_conformance(level, Some(vectors.as_path()));
+    if json {
+        return output::emit_ok("conform", &report);
+    }
+    println!(
+        "conformance profile={} passed={} mandatory={}/{}",
+        report.level, report.passed, report.mandatory_passed, report.mandatory_total
+    );
+    for c in &report.cases {
+        let flag = if c.mandatory { "M" } else { "O" };
+        println!("  [{flag}] {} {}", c.status, c.id);
+        if let Some(ref m) = c.message {
+            if c.status != "pass" {
+                println!("      {m}");
+            }
+        }
+    }
+    if args.strict && !report.passed {
+        anyhow::bail!("conformance profile {} failed", report.level);
+    }
+    Ok(())
+}

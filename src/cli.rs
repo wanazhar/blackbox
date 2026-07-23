@@ -159,6 +159,8 @@ pub enum Command {
     Incident(crate::cli_ext::IncidentArgs),
     /// Local forensic analysis packs (1.7)
     Forensic(crate::cli_ext::ForensicArgs),
+    /// Protocol conformance runner (1.9)
+    Conform(crate::cli_ext::ConformArgs),
 }
 
 #[derive(Args, Clone)]
@@ -1205,6 +1207,7 @@ impl Cli {
                 }
                 crate::cli_ext::cmd_forensic(std::sync::Arc::new(store), &args, self.json).await
             }
+            Command::Conform(args) => crate::cli_ext::cmd_conform(args, self.json).await,
         }
     }
 }

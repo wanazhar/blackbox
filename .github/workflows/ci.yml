@@ -91,6 +91,14 @@ jobs:
       - name: Native ingest (1.9)
         run: cargo test --test native_ingest -- --quiet
 
+      # 1.9 security, commitments, OTLP, conformance
+      - name: Evidence protocol suite (1.9)
+        run: |
+          cargo test \
+            --test security_reconcile --test commitment_chain \
+            --test otlp_interop --test conformance_runner \
+            -- --quiet
+
   # 1.5 Q1: lightweight macOS runtime gate on every PR (not only tag-time build).
   macos:
     name: macOS runtime gate

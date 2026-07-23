@@ -10,6 +10,7 @@ use blackbox::core::run::RunStatus;
 use blackbox::native::{
     FinishRunOpts, IngestOp, NativeIngestEnvelope, NativeRecorder, NdjsonIngestServer, StartRunOpts,
 };
+use blackbox::security::{ActionFingerprint, DecisionIntegrity, DecisionKind, SecurityDecision};
 use blackbox::storage::sqlite::SqliteStore;
 use blackbox::storage::store::InMemoryStore;
 use blackbox::storage::TraceStore;
@@ -354,6 +355,68 @@ async fn finish_retry_survives_recorder_restart() {
             .unwrap()
             .iter()
             .filter(|event| event.kind == "run.ended")
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn security_decision_ingest_demotes_and_rejects_action_mismatch() {
+    let store: Arc<dyn TraceStore> = Arc::new(InMemoryStore::new());
+    let recorder = NativeRecorder::new(store.clone());
+    let run_id = recorder
+        .apply_envelope(
+            NativeIngestEnvelope::new(IngestOp::StartRun, "security-start")
+                .with_payload(json!({"cwd": "/tmp"})),
+        )
+        .await
+        .unwrap()
+        .run_id
+        .unwrap();
+
+    let action = ActionFingerprint::tool("read", Some(json!({"path": "README.md"})));
+    let asserted = SecurityDecision::builder("harness", DecisionKind::Allow, action.hash())
+        .action(action.clone())
+        .integrity(DecisionIntegrity::SignedVerified)
+        .build();
+    recorder
+        .apply_envelope(
+            NativeIngestEnvelope::new(IngestOp::RecordSecurityDecision, "security-good")
+                .with_run_id(&run_id)
+                .with_payload(serde_json::to_value(asserted).unwrap()),
+        )
+        .await
+        .unwrap();
+    let events = store.get_events(&run_id).await.unwrap();
+    let stored = events
+        .iter()
+        .find(|event| event.kind == "security.decision")
+        .unwrap();
+    assert_eq!(stored.metadata["decision"]["integrity"], "unverified");
+
+    let mut mismatch = serde_json::to_value(
+        SecurityDecision::builder("harness", DecisionKind::Deny, action.hash())
+            .action(action)
+            .build(),
+    )
+    .unwrap();
+    mismatch["action_hash"] = json!("dd".repeat(32));
+    let error = recorder
+        .apply_envelope(
+            NativeIngestEnvelope::new(IngestOp::RecordSecurityDecision, "security-bad")
+                .with_run_id(&run_id)
+                .with_payload(mismatch),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "bad_security_decision");
+    assert_eq!(
+        store
+            .get_events(&run_id)
+            .await
+            .unwrap()
+            .iter()
+            .filter(|event| event.kind == "security.decision")
             .count(),
         1
     );

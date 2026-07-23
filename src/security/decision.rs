@@ -58,6 +58,12 @@ pub enum DecisionIntegrity {
     SignedInvalid,
 }
 
+impl Default for DecisionIntegrity {
+    fn default() -> Self {
+        Self::Unverified
+    }
+}
+
 impl DecisionIntegrity {
     /// Stable string form.
     pub fn as_str(self) -> &'static str {
@@ -153,6 +159,7 @@ pub struct SecurityDecision {
     /// Decision timestamp.
     pub decided_at: DateTime<Utc>,
     /// Integrity class (post-demotion when ingested).
+    #[serde(default)]
     pub integrity: DecisionIntegrity,
     /// Evidence references (event ids, external evidence ids).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -182,11 +189,60 @@ impl SecurityDecision {
         self.integrity = self.integrity.demote_untrusted(verifier_configured);
     }
 
+    /// Validate the receipt and normalize claims that require local trust.
+    ///
+    /// A producer cannot upgrade its own integrity merely by serializing
+    /// `signed_verified`; callers pass `verifier_configured = true` only after
+    /// verification through a configured trust path.
+    pub fn validate_and_normalize(&mut self, verifier_configured: bool) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+        if self.schema != SECURITY_DECISION_SCHEMA {
+            errors.push(format!("unsupported schema: {}", self.schema));
+        }
+        if self.id.is_empty() {
+            errors.push("id is required".into());
+        }
+        if self.provider.trim().is_empty() {
+            errors.push("provider is required".into());
+        }
+        if !is_lower_sha256(&self.action_hash) {
+            errors.push("action_hash must be 64 lowercase hex characters".into());
+        }
+        if let Some(action) = &self.action {
+            let computed = action.hash();
+            if computed != self.action_hash {
+                errors.push(format!(
+                    "action_hash does not match normalized action: expected {computed}"
+                ));
+            }
+        }
+        if self
+            .policy_hash
+            .as_deref()
+            .is_some_and(|hash| !is_lower_sha256(hash))
+        {
+            errors.push("policy_hash must be 64 lowercase hex characters".into());
+        }
+        self.normalize_integrity(verifier_configured);
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+
     /// Canonical hash of the decision body (excluding transport).
     pub fn content_hash(&self) -> anyhow::Result<String> {
         let v = serde_json::to_value(self)?;
         Ok(canonical_hash(&v)?)
     }
+}
+
+fn is_lower_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
 /// Fluent builder for [`SecurityDecision`].

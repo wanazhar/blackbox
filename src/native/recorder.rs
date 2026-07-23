@@ -15,6 +15,7 @@ use uuid::Uuid;
 use crate::core::event::{EventSource, EventStatus, SideEffect, TraceEvent};
 use crate::core::run::{Run, RunStatus};
 use crate::pipeline::EventWriter;
+use crate::security::SecurityDecision;
 use crate::storage::TraceStore;
 
 use super::envelope::{
@@ -752,6 +753,8 @@ impl NativeRecorder {
         run_id: &str,
         decision: Value,
     ) -> anyhow::Result<(String, u64)> {
+        let decision = normalize_security_decision_payload(decision)
+            .map_err(|message| anyhow::anyhow!(message))?;
         let mut metadata = HashMap::new();
         metadata.insert("decision".into(), decision);
         self.record_event(
@@ -1031,7 +1034,9 @@ fn event_opts_from_op(op: IngestOp, payload: Value) -> Result<RecordEventOpts, I
         }
         IngestOp::RecordSecurityDecision => {
             let mut metadata = HashMap::new();
-            metadata.insert("decision".into(), payload);
+            let decision = normalize_security_decision_payload(payload)
+                .map_err(|message| IngestError::new("bad_security_decision", message, false))?;
+            metadata.insert("decision".into(), decision);
             Ok(RecordEventOpts {
                 kind: "security.decision".into(),
                 source: Some("system".into()),
@@ -1065,6 +1070,15 @@ fn event_opts_from_op(op: IngestOp, payload: Value) -> Result<RecordEventOpts, I
             false,
         )),
     }
+}
+
+fn normalize_security_decision_payload(payload: Value) -> Result<Value, String> {
+    let mut decision: SecurityDecision =
+        serde_json::from_value(payload).map_err(|error| error.to_string())?;
+    decision
+        .validate_and_normalize(false)
+        .map_err(|errors| errors.join("; "))?;
+    serde_json::to_value(decision).map_err(|error| error.to_string())
 }
 
 fn parse_source(s: &str) -> EventSource {

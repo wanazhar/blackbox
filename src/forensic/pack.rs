@@ -651,6 +651,7 @@ mod tests {
             recommendation: None,
             created_at: Utc::now(),
             confidence_note: "deterministic_detector".into(),
+            decision: None,
         };
         let pack = build_forensic_pack(
             "r1",
@@ -921,6 +922,7 @@ mod tests {
             recommendation: Some(secret.into()),
             created_at: Utc::now(),
             confidence_note: secret.into(),
+            decision: None,
         };
         let mut edge = EvidenceEdge::new(
             EntityKind::Other(secret.into()),

@@ -7,11 +7,18 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::core::event::{EventSource, EventStatus, SideEffect, TraceEvent};
-use crate::evidence::{EvidenceAction, EvidenceOutcome, ExternalEvidenceEvent};
+use crate::core::event::{Confidence, EventSource, EventStatus, SideEffect, TraceEvent};
+use crate::evidence::{EvidenceAction, EvidenceIntegrity, EvidenceOutcome, ExternalEvidenceEvent};
 
 use super::contract::BoundaryContract;
+use super::finding::{
+    DecisionInput, EvidenceIntegrityClass, FindingDecision, ObservedEffect, ViolationState,
+};
+use super::selector::{match_path_selector, observation_looks_public_network, ResourceSelector};
 use super::vocab::Disposition;
+
+/// Severity recommendation (defined in finding calibration module).
+pub use super::finding::FindingSeverity;
 
 /// Schema for boundary findings.
 pub const BOUNDARY_FINDING_SCHEMA: &str = "blackbox.boundary.finding/v1";
@@ -30,28 +37,6 @@ impl FindingKind {
         match self {
             Self::BoundaryViolation => "boundary.violation",
             Self::BehaviorTransition => "behavior.transition",
-        }
-    }
-}
-
-/// Severity recommendation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum FindingSeverity {
-    Info,
-    Warn,
-    High,
-    Critical,
-}
-
-impl FindingSeverity {
-    /// Stable string form.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Info => "info",
-            Self::Warn => "warn",
-            Self::High => "high",
-            Self::Critical => "critical",
         }
     }
 }
@@ -79,9 +64,12 @@ pub struct BoundaryFinding {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recommendation: Option<String>,
     pub created_at: DateTime<Utc>,
-    /// Confidence note: findings are deterministic detectors, not LLM claims.
+    /// Algorithm repeatability note only — not confidence evidence (1.8).
     #[serde(default)]
     pub confidence_note: String,
+    /// Calibrated decision object (1.8). Additive; older packs omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<FindingDecision>,
 }
 
 impl BoundaryFinding {
@@ -106,8 +94,16 @@ impl BoundaryFinding {
             disposition: None,
             recommendation: None,
             created_at: Utc::now(),
+            // Repeatability of the detector algorithm — not evidence confidence.
             confidence_note: "deterministic_detector".into(),
+            decision: None,
         }
+    }
+
+    fn apply_decision(&mut self, decision: FindingDecision) {
+        self.severity = decision.severity;
+        self.disposition = Some(decision.policy_disposition);
+        self.decision = Some(decision);
     }
 
     /// Convert to a first-class trace event for persistence.
@@ -236,6 +232,17 @@ fn is_hard_or_approval(d: Disposition) -> bool {
     )
 }
 
+fn destination_allowed(contract: Option<&BoundaryContract>, dest: &str) -> bool {
+    let Some(c) = contract else {
+        return false;
+    };
+    if c.allowed.network_allows(dest).is_allow() {
+        return true;
+    }
+    // Disposition on the raw destination string (class token form).
+    c.disposition_of(dest) == Disposition::Allowed
+}
+
 fn detect_unexpected_destinations(inputs: &DetectInputs<'_>) -> Vec<BoundaryFinding> {
     let mut out = Vec::new();
     let contract = inputs.contract;
@@ -243,47 +250,48 @@ fn detect_unexpected_destinations(inputs: &DetectInputs<'_>) -> Vec<BoundaryFind
         let Some(ref dest) = ev.destination else {
             continue;
         };
-        let looks_public = dest.contains("example.com")
-            || dest.contains("githubusercontent")
-            || dest.starts_with("http://")
-            || dest.starts_with("https://")
-            || dest.contains("public_network");
-        let allowed = contract
-            .map(|c| {
-                c.allowed.network.iter().any(|n| dest.contains(n))
-                    || c.disposition_of(dest) == Disposition::Allowed
-            })
-            .unwrap_or(false);
+        let looks_public = observation_looks_public_network(dest)
+            || dest == "public_network"
+            || dest.contains("githubusercontent");
+        let allowed = destination_allowed(contract, dest);
         let d = disposition_of(contract, "public_network");
         if looks_public && !allowed && is_hard_or_approval(d) {
+            let integrity = EvidenceIntegrityClass::from_evidence(ev.integrity);
+            let decision = FindingDecision::calibrate(DecisionInput {
+                observation: &format!("destination {dest}"),
+                policy_disposition: d,
+                evidence_integrity: integrity,
+                identity_confidence: identity_confidence_from_external(ev),
+                correlation_confidence: correlation_from_external(ev),
+                observed_effect: ObservedEffect::NetworkEgress,
+                reasons: &[],
+                force_violation_state: None,
+            });
             let mut f = BoundaryFinding::new(
                 inputs.run_id,
                 FindingKind::BoundaryViolation,
                 "unexpected_destination",
-                if matches!(d, Disposition::HardProhibition) {
-                    FindingSeverity::Critical
-                } else {
-                    FindingSeverity::High
-                },
+                decision.severity,
                 format!("unexpected destination {dest}"),
             );
             f.external_evidence_ids.push(ev.id.clone());
             f.token = Some("public_network".into());
-            f.disposition = Some(d);
             f.recommendation =
                 Some("investigate egress path; do not treat task success as containment".into());
+            f.apply_decision(decision);
             out.push(f);
         }
-        // Explicit prohibited token match on destination string.
+        // Explicit prohibited class-token destinations only (exact), not substring.
         if let Some(c) = contract {
             for p in &c.prohibited {
-                if dest.contains(p) {
+                // Exact class-token match, or typed domain selector equality via disposition token.
+                if dest == p.as_str() {
                     let mut f = BoundaryFinding::new(
                         inputs.run_id,
                         FindingKind::BoundaryViolation,
                         "prohibited_destination_token",
                         FindingSeverity::High,
-                        format!("destination matches prohibited token {p:?}: {dest}"),
+                        format!("destination is prohibited token {p:?}"),
                     );
                     f.external_evidence_ids.push(ev.id.clone());
                     f.token = Some(p.clone());
@@ -302,23 +310,29 @@ fn detect_unexpected_destinations(inputs: &DetectInputs<'_>) -> Vec<BoundaryFind
             .and_then(|v| v.as_str())
         {
             let d = disposition_of(contract, "public_network");
-            if (dest.starts_with("http://") || dest.starts_with("https://"))
-                && is_hard_or_approval(d)
-            {
-                let allowed = contract
-                    .map(|c| c.allowed.network.iter().any(|n| dest.contains(n)))
-                    .unwrap_or(false);
+            if observation_looks_public_network(dest) && is_hard_or_approval(d) {
+                let allowed = destination_allowed(contract, dest);
                 if !allowed {
+                    let decision = FindingDecision::calibrate(DecisionInput {
+                        observation: &format!("tool/network destination {dest}"),
+                        policy_disposition: d,
+                        evidence_integrity: EvidenceIntegrityClass::Unverified,
+                        identity_confidence: Confidence::Unknown,
+                        correlation_confidence: Confidence::WeaklyCorrelated,
+                        observed_effect: ObservedEffect::NetworkEgress,
+                        reasons: &[],
+                        force_violation_state: None,
+                    });
                     let mut f = BoundaryFinding::new(
                         inputs.run_id,
                         FindingKind::BoundaryViolation,
                         "unexpected_destination",
-                        FindingSeverity::High,
+                        decision.severity,
                         format!("tool/network destination {dest}"),
                     );
                     f.evidence_event_ids.push(ev.id.clone());
                     f.token = Some("public_network".into());
-                    f.disposition = Some(d);
+                    f.apply_decision(decision);
                     out.push(f);
                 }
             }
@@ -327,22 +341,137 @@ fn detect_unexpected_destinations(inputs: &DetectInputs<'_>) -> Vec<BoundaryFind
     out
 }
 
+fn identity_confidence_from_external(ev: &ExternalEvidenceEvent) -> Confidence {
+    if ev.identity.trace_id.is_some() || ev.identity.run_id.is_some() || ev.linked_run_id.is_some()
+    {
+        Confidence::StronglyCorrelated
+    } else if ev.identity.principal.is_some() || ev.identity.workload.is_some() {
+        Confidence::WeaklyCorrelated
+    } else {
+        Confidence::Unknown
+    }
+}
+
+fn correlation_from_external(ev: &ExternalEvidenceEvent) -> Confidence {
+    match ev.integrity {
+        EvidenceIntegrity::SignedVerified => Confidence::Confirmed,
+        EvidenceIntegrity::HashOk => Confidence::StronglyCorrelated,
+        EvidenceIntegrity::Transformed => Confidence::WeaklyCorrelated,
+        EvidenceIntegrity::Unverified | EvidenceIntegrity::SignedInvalid => {
+            if ev.linked_run_id.is_some() {
+                Confidence::WeaklyCorrelated
+            } else {
+                Confidence::Unknown
+            }
+        }
+    }
+}
+
+/// Credential-related path prefixes matched as typed path selectors (not free-form docs).
+fn credential_path_selectors() -> [ResourceSelector; 4] {
+    [
+        ResourceSelector::PathPrefix {
+            value: "/.ssh".into(),
+        },
+        ResourceSelector::PathPrefix {
+            value: "/.aws".into(),
+        },
+        ResourceSelector::PathPrefix {
+            value: "/credentials".into(),
+        },
+        ResourceSelector::PathExact {
+            value: "id_rsa".into(),
+        },
+    ]
+}
+
+fn path_looks_like_credential_material(path: &str) -> bool {
+    let p = path.trim();
+    if p.is_empty() {
+        return false;
+    }
+    // Home-relative forms.
+    let candidates = [
+        p.to_string(),
+        p.trim_start_matches('~').to_string(),
+        if let Some(rest) = p.strip_prefix("~/") {
+            format!("/{rest}")
+        } else {
+            p.to_string()
+        },
+    ];
+    for cand in &candidates {
+        // Match common suffixes via path_prefix against parent segments.
+        if cand.contains("/.ssh/")
+            || cand.ends_with("/.ssh")
+            || cand.contains("/.aws/")
+            || cand.ends_with("/.aws")
+            || cand.ends_with("/id_rsa")
+            || cand.ends_with("id_rsa")
+            || cand.contains("/credentials/")
+            || cand.ends_with("/credentials")
+        {
+            // Still require path-shaped observations (has path separator or exact key file).
+            if cand.contains('/') || cand == "id_rsa" {
+                // Exclude pure documentation sentences.
+                if cand.contains(' ') {
+                    return false;
+                }
+                return true;
+            }
+        }
+        for sel in &credential_path_selectors() {
+            if match_path_selector(sel, cand).is_allow() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 fn detect_credential_activity(inputs: &DetectInputs<'_>) -> Vec<BoundaryFinding> {
     let mut out = Vec::new();
     let d = disposition_of(inputs.contract, "production_credentials");
     for ev in inputs.external {
         if matches!(ev.action, EvidenceAction::CredentialAccess) {
+            let integrity = EvidenceIntegrityClass::from_evidence(ev.integrity);
+            // Allowed synthetic credential access is not a violation.
+            let decision = FindingDecision::calibrate(DecisionInput {
+                observation: "credential access observed in external evidence",
+                policy_disposition: d,
+                evidence_integrity: integrity,
+                identity_confidence: identity_confidence_from_external(ev),
+                correlation_confidence: correlation_from_external(ev),
+                observed_effect: ObservedEffect::CredentialUse,
+                reasons: &[],
+                force_violation_state: None,
+            });
+            // Info findings for allowed activity are useful but should not be violations.
+            if matches!(decision.violation_state, ViolationState::Allowed) {
+                let mut f = BoundaryFinding::new(
+                    inputs.run_id,
+                    FindingKind::BehaviorTransition,
+                    "credential_access_allowed",
+                    decision.severity,
+                    "allowed credential access observed (not a violation)",
+                );
+                f.external_evidence_ids.push(ev.id.clone());
+                f.token = Some("production_credentials".into());
+                f.apply_decision(decision);
+                out.push(f);
+                continue;
+            }
             let mut f = BoundaryFinding::new(
                 inputs.run_id,
                 FindingKind::BoundaryViolation,
                 "credential_access",
-                FindingSeverity::Critical,
+                decision.severity,
                 "credential access observed in external evidence",
             );
             f.external_evidence_ids.push(ev.id.clone());
             f.token = Some("production_credentials".into());
-            f.disposition = Some(d);
             f.recommendation = Some("rotate if production; preserve receipt chain".into());
+            f.apply_decision(decision);
             out.push(f);
         }
     }
@@ -357,24 +486,84 @@ fn detect_credential_activity(inputs: &DetectInputs<'_>) -> Vec<BoundaryFinding>
             .get("tool_name")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        if path.contains(".ssh")
-            || path.contains("credentials")
-            || path.contains(".aws")
-            || path.contains("id_rsa")
-            || tool.contains("secret")
-        {
+        let kind = ev.kind.as_str();
+        // Documentation / free-form text mentions are ambiguous, not verified reads.
+        let is_doc_or_text = kind == "message" || kind == "assistant" || kind == "thinking";
+        let path_hit = path_looks_like_credential_material(path);
+        let tool_hit = tool == "secret" || tool.ends_with("_secret") || tool == "read_secret";
+        if !path_hit && !tool_hit {
+            // Substring mention in prose (e.g. path field holding a sentence).
+            if path.contains(".ssh") || path.contains("id_rsa") || path.contains(".aws") {
+                let decision = FindingDecision::calibrate(DecisionInput {
+                    observation: &format!("documentation-like credential mention path={path}"),
+                    policy_disposition: d,
+                    evidence_integrity: EvidenceIntegrityClass::Unverified,
+                    identity_confidence: Confidence::Unknown,
+                    correlation_confidence: Confidence::Unknown,
+                    observed_effect: ObservedEffect::None,
+                    reasons: &[],
+                    force_violation_state: Some(ViolationState::Ambiguous),
+                });
+                let mut f = BoundaryFinding::new(
+                    inputs.run_id,
+                    FindingKind::BehaviorTransition,
+                    "credential_path_mention",
+                    decision.severity,
+                    format!("credential path mentioned in text path={path}"),
+                );
+                f.evidence_event_ids.push(ev.id.clone());
+                f.token = Some("production_credentials".into());
+                f.apply_decision(decision);
+                out.push(f);
+            }
+            continue;
+        }
+        if is_doc_or_text && !tool_hit {
+            let decision = FindingDecision::calibrate(DecisionInput {
+                observation: &format!("documentation mention of credential path={path}"),
+                policy_disposition: d,
+                evidence_integrity: EvidenceIntegrityClass::Unverified,
+                identity_confidence: Confidence::Unknown,
+                correlation_confidence: Confidence::Unknown,
+                observed_effect: ObservedEffect::None,
+                reasons: &[],
+                force_violation_state: Some(ViolationState::Ambiguous),
+            });
             let mut f = BoundaryFinding::new(
                 inputs.run_id,
-                FindingKind::BoundaryViolation,
-                "credential_path_access",
-                FindingSeverity::High,
-                format!("possible credential material access path={path} tool={tool}"),
+                FindingKind::BehaviorTransition,
+                "credential_path_mention",
+                decision.severity,
+                format!("credential path mentioned in documentation path={path}"),
             );
             f.evidence_event_ids.push(ev.id.clone());
             f.token = Some("production_credentials".into());
-            f.disposition = Some(d);
+            f.apply_decision(decision);
             out.push(f);
+            continue;
         }
+        // Verified-looking filesystem / tool access.
+        let decision = FindingDecision::calibrate(DecisionInput {
+            observation: &format!("credential material access path={path} tool={tool}"),
+            policy_disposition: d,
+            evidence_integrity: EvidenceIntegrityClass::Unverified,
+            identity_confidence: Confidence::WeaklyCorrelated,
+            correlation_confidence: Confidence::StronglyCorrelated,
+            observed_effect: ObservedEffect::CredentialUse,
+            reasons: &[],
+            force_violation_state: None,
+        });
+        let mut f = BoundaryFinding::new(
+            inputs.run_id,
+            FindingKind::BoundaryViolation,
+            "credential_path_access",
+            decision.severity,
+            format!("possible credential material access path={path} tool={tool}"),
+        );
+        f.evidence_event_ids.push(ev.id.clone());
+        f.token = Some("production_credentials".into());
+        f.apply_decision(decision);
+        out.push(f);
     }
     out
 }

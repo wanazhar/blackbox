@@ -1,13 +1,15 @@
-//! Agent boundary contracts, containment receipts, and evidence gates (1.7).
+//! Agent boundary contracts, containment receipts, and evidence gates (1.7+).
 //!
 //! Schema id: **`blackbox.boundary/v1`**.
 //!
 //! # What this module provides
 //!
 //! - **Contracts** — [`BoundaryContract`], [`resolve_boundary`], policy hash
+//! - **Typed selectors (1.8)** — [`ResourceSelector`], canonical matching
 //! - **Containment** — [`ContainmentReceipt`] claim states (configured ≠ verified)
 //! - **Trust rollup** — [`build_boundary_trust`] for summary/score/gates
 //! - **Detectors** — [`detect_boundary_findings`] deterministic violations
+//! - **Calibrated findings (1.8)** — [`FindingDecision`] separates observation from severity
 //! - **Quality corpus** — [`evaluate_detector_quality`] permanent FP/FN bar
 //! - **Provenance** — [`evaluate_provenance`], [`auto_provenance_record`]
 //!
@@ -24,9 +26,12 @@ mod corpus;
 mod correlate;
 mod detect;
 mod evidence;
+mod finding;
 mod identity;
+mod normalize;
 mod provenance;
 mod resolve;
+mod selector;
 mod trust;
 mod vocab;
 
@@ -55,8 +60,16 @@ pub use evidence::{
     evaluate_required_evidence, BoundaryEvidenceReport, EvidenceAvailability, EvidenceRequirement,
     EvidenceStatus, ObservedEvidence, BOUNDARY_EVAL_SCHEMA,
 };
+pub use finding::{
+    strongest_integrity, DecisionInput, EvidenceIntegrityClass, FindingDecision, ObservedEffect,
+    ViolationState, FINDING_DECISION_SCHEMA,
+};
 pub use identity::{
     PropagationChannel, PropagationRecord, PropagationStatus, TraceIdentity, TRACE_IDENTITY_SCHEMA,
+};
+pub use normalize::{
+    host_matches_exact, host_matches_suffix, normalize_cidr, normalize_host, normalize_ip,
+    normalize_path, normalize_url, observation_host, CanonicalHost, CanonicalUrl, NormalizeOutcome,
 };
 pub use provenance::{
     evaluate_provenance, record_from_observations, ProvenanceGateReport, ProvenanceKind,
@@ -64,6 +77,10 @@ pub use provenance::{
 };
 pub use resolve::{
     load_boundary_file, policy_hash_of, resolve_boundary, ResolveOpts, ResolvedBoundary,
+};
+pub use selector::{
+    match_network_selector, match_path_selector, network_entries_allow, MatchDecision,
+    MatchExplanation, ResourceEntry, ResourceSelector, RESOURCE_SELECTOR_SCHEMA,
 };
 pub use trust::{
     build_boundary_trust, trust_fails_score, BoundaryTrustView, BOUNDARY_TRUST_SCHEMA,

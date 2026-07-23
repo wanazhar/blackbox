@@ -7,11 +7,16 @@
 //! Not a SIEM case-management product — local evidence correlation only.
 //! Dashboard: `/incidents` · CLI: `blackbox incident …`.
 
+mod continuation;
 mod export;
 mod graph;
 mod model;
 mod page;
 
+pub use continuation::{
+    continued_after_signal, evaluate_continuation, ContinuationConclusion, ContinuationInputs,
+    ContinuationRelation,
+};
 pub use export::{
     build_incident_export, validate_incident_export, IncidentExport, INCIDENT_EXPORT_SCHEMA,
 };

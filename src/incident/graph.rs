@@ -197,8 +197,12 @@ pub struct IncidentGraph {
     pub techniques: Vec<TechniqueReuse>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub earliest_signal: Option<IncidentSignal>,
+    /// True only when a typed continuation relation holds (1.8).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub continued_after_signal: Option<bool>,
+    /// Cited continuation conclusion (1.8). Unrelated later activity is explicit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continuation: Option<super::continuation::ContinuationConclusion>,
     pub run_count: usize,
     pub evidence_count: usize,
     pub finding_count: usize,
@@ -462,18 +466,22 @@ pub fn build_incident_graph_with_limits(
         }
     }
 
-    let continued_after_signal = earliest_signal.as_ref().map(|sig| {
-        // A run ending after a signal is not itself evidence of continued
-        // execution. Require a later finding or external observation.
-        let after_finding = inputs.findings_by_run.iter().any(|(_, fs)| {
-            fs.iter()
-                .any(|f| f.created_at > sig.at && f.id != sig.ref_id)
-        });
-        let after_ext = inputs
-            .external
-            .iter()
-            .any(|e| e.occurred_at.or(e.observed_at).unwrap_or(e.ingested_at) > sig.at);
-        after_finding || after_ext
+    // 1.8: continuation requires a typed entity relationship. Unrelated later
+    // activity alone must not set continued_after_signal=true.
+    let continuation = earliest_signal.as_ref().and_then(|sig| {
+        super::continuation::evaluate_continuation(super::continuation::ContinuationInputs {
+            signal: sig,
+            findings_by_run: &inputs.findings_by_run,
+            external: &inputs.external,
+            edges: &inputs.edges,
+        })
+    });
+    // Some(false) when a signal exists but no typed continuation (or only unrelated later).
+    let continued_after_signal = earliest_signal.as_ref().map(|_| {
+        continuation
+            .as_ref()
+            .map(|c| c.relation.is_continuation())
+            .unwrap_or(false)
     });
 
     for technique in techniques.values_mut() {
@@ -520,6 +528,7 @@ pub fn build_incident_graph_with_limits(
         techniques,
         earliest_signal,
         continued_after_signal,
+        continuation,
         run_count: run_ids.len(),
         evidence_count: inputs.external.len(),
         finding_count,
@@ -562,6 +571,7 @@ mod tests {
             recommendation: None,
             created_at: t0,
             confidence_note: "deterministic_detector".into(),
+            decision: None,
         };
         let mut f2 = f1.clone();
         f2.id = "find-2".into();
@@ -612,6 +622,7 @@ mod tests {
             recommendation: None,
             created_at: at,
             confidence_note: "deterministic_detector".into(),
+            decision: None,
         };
         let graph = build_incident_graph(
             &incident,

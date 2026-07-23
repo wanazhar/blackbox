@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/wanazhar/blackbox/spec/schemas/reconcile_outcome.v1.json",
+  "title": "blackbox.reconcile.outcome/v1",
+  "type": "object",
+  "required": ["schema", "id", "outcome"],
+  "properties": {
+    "schema": { "const": "blackbox.reconcile.outcome/v1" },
+    "id": { "type": "string", "minLength": 1 },
+    "run_id": { "type": ["string", "null"] },
+    "outcome": {
+      "type": "string",
+      "enum": [
+        "allowed_as_declared",
+        "allowed_effects_diverged",
+        "denied_not_executed",
+        "denied_but_bypassed",
+        "warned_and_acknowledged",
+        "effect_without_decision",
+        "decision_without_observation",
+        "ambiguous",
+        "insufficient_evidence"
+      ]
+    },
+    "action_hash": { "type": ["string", "null"] },
+    "decision_id": { "type": ["string", "null"] },
+    "execution_event_ids": { "type": "array", "items": { "type": "string" } },
+    "effect_event_ids": { "type": "array", "items": { "type": "string" } },
+    "citation_ids": { "type": "array", "items": { "type": "string" } },
+    "notes": { "type": ["string", "null"] }
+  },
+  "additionalProperties": true
+}

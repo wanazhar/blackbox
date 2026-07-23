@@ -1,0 +1,13 @@
+{
+  "id": "invalid-decision-missing-action-hash",
+  "description": "Security decision requires action_hash",
+  "expect": "fail",
+  "input": {
+    "schema": "blackbox.security.decision/v1",
+    "id": "dec-1",
+    "provider": "opa",
+    "decision": "deny",
+    "decided_at": "2026-07-23T12:00:00Z"
+  },
+  "expected_error_path": "/action_hash"
+}

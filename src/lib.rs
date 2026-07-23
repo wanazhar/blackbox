@@ -40,6 +40,7 @@
 //! | [`evidence`] | External evidence NDJSON import + sensor adapters (1.7) |
 //! | [`incident`] | Multi-run incident reconstruction + pagination (1.7) |
 //! | [`forensic`] | Local forensic analysis packs (1.7) |
+//! | [`protocol`] | Evidence protocol canonical form & schemas (1.9) |
 //! | [`experiment`] | Experiments, reports, gates |
 //! | [`export`] | Portable / JSONL / HTML |
 //! | [`integrity`] | `fsck` and repair |
@@ -137,6 +138,8 @@ pub mod pipeline;
 pub mod pricing;
 /// File permission hardening helpers.
 pub mod privacy;
+/// Evidence protocol: canonical form, schemas, stability (1.9).
+pub mod protocol;
 /// Multi-project metadata index.
 pub mod projects;
 /// Secret scanning and redaction.

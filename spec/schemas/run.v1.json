@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/wanazhar/blackbox/spec/schemas/run.v1.json",
+  "title": "blackbox.run/v1",
+  "type": "object",
+  "required": ["schema", "id", "status", "started_at"],
+  "properties": {
+    "schema": { "const": "blackbox.run/v1" },
+    "id": { "type": "string", "minLength": 1 },
+    "name": { "type": ["string", "null"] },
+    "command": { "type": "array", "items": { "type": "string" } },
+    "cwd": { "type": "string" },
+    "project_dir": { "type": "string" },
+    "tags": { "type": "array", "items": { "type": "string" } },
+    "notes": { "type": ["string", "null"] },
+    "status": {
+      "type": "string",
+      "enum": [
+        "pending", "running", "succeeded", "failed", "cancelled", "unknown",
+        "Pending", "Running", "Succeeded", "Failed", "Cancelled", "Unknown"
+      ]
+    },
+    "started_at": { "type": "string", "minLength": 1 },
+    "ended_at": { "type": ["string", "null"] },
+    "exit_code": { "type": ["integer", "null"] },
+    "parent_run_id": { "type": ["string", "null"] },
+    "adapter": { "type": ["string", "null"] },
+    "session_id": { "type": ["string", "null"] }
+  },
+  "additionalProperties": true
+}

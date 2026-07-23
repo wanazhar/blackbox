@@ -1,0 +1,11 @@
+{
+  "id": "valid-run-minimal",
+  "description": "Minimal valid run object",
+  "expect": "pass",
+  "input": {
+    "schema": "blackbox.run/v1",
+    "id": "run-abc",
+    "status": "Succeeded",
+    "started_at": "2026-07-23T00:00:00Z"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "id": "valid-event-provisional-field",
+  "description": "Unknown provisional fields survive validation (forward-compatible)",
+  "expect": "pass",
+  "input": {
+    "schema": "blackbox.event/v1",
+    "id": "evt-1",
+    "run_id": "run-1",
+    "sequence": 0,
+    "kind": "tool.call",
+    "started_at": "2026-07-23T00:00:00Z",
+    "x_provisional_producer_tag": "harness-hooks-v0"
+  }
+}

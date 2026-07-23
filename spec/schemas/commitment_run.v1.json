@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/wanazhar/blackbox/spec/schemas/commitment_run.v1.json",
+  "title": "blackbox.commitment.run/v1",
+  "type": "object",
+  "required": ["schema", "run_id", "root_hash", "event_count"],
+  "properties": {
+    "schema": { "const": "blackbox.commitment.run/v1" },
+    "run_id": { "type": "string", "minLength": 1 },
+    "event_count": { "type": "integer", "minimum": 0 },
+    "chain_tip": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "root_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "receipt_roots": { "type": "array", "items": { "type": "string" } },
+    "manifest_root": { "type": ["string", "null"] },
+    "evidence_root": { "type": ["string", "null"] },
+    "signature": { "type": ["object", "null"] },
+    "created_at": { "type": "string" },
+    "limitations": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Honest scope of what the commitment does and does not prove"
+    }
+  },
+  "additionalProperties": true
+}

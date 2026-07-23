@@ -1,0 +1,7 @@
+{
+  "id": "tamper-chain-insert",
+  "description": "Inserting an event mid-chain must break chain verification",
+  "expect": "fail",
+  "mutation": "insert_event",
+  "notes": "Exercised by commitment tests; placeholder vector metadata for conformance"
+}

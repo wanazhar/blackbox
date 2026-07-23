@@ -1,0 +1,15 @@
+{
+  "id": "valid-security-decision",
+  "description": "Valid security decision receipt",
+  "expect": "pass",
+  "input": {
+    "schema": "blackbox.security.decision/v1",
+    "id": "dec-1",
+    "provider": "opa",
+    "decision": "deny",
+    "action_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "decided_at": "2026-07-23T12:00:00Z",
+    "integrity": "unverified",
+    "rule_ids": ["r1"]
+  }
+}

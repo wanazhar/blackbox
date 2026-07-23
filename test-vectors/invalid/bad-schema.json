@@ -1,0 +1,12 @@
+{
+  "id": "invalid-bad-schema",
+  "description": "Schema id must start with blackbox.",
+  "expect": "fail",
+  "input": {
+    "schema": "other.protocol/v1",
+    "id": "x",
+    "status": "Succeeded",
+    "started_at": "2026-07-23T00:00:00Z"
+  },
+  "expected_error_path": "/schema"
+}

@@ -1,0 +1,13 @@
+{
+  "id": "canonical-key-order",
+  "description": "Same logical object with different map insertion order produces identical canonical bytes and hash",
+  "expect": "canonical",
+  "input": {
+    "status": "succeeded",
+    "schema": "blackbox.run/v1",
+    "id": "run-1",
+    "started_at": "2026-07-23T00:00:00Z"
+  },
+  "expected_canonical": "{\"id\":\"run-1\",\"schema\":\"blackbox.run/v1\",\"started_at\":\"2026-07-23T00:00:00Z\",\"status\":\"succeeded\"}",
+  "expected_hash": "4f66add4d051229711d81e9d98f7c31efa6edbffb412f48d86f283019ce6c6a8"
+}

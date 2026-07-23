@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/wanazhar/blackbox/spec/schemas/security_decision.v1.json",
+  "title": "blackbox.security.decision/v1",
+  "type": "object",
+  "required": ["schema", "id", "provider", "decision", "action_hash", "decided_at"],
+  "properties": {
+    "schema": { "const": "blackbox.security.decision/v1" },
+    "id": { "type": "string", "minLength": 1 },
+    "run_id": { "type": ["string", "null"] },
+    "provider": {
+      "type": "string",
+      "description": "tirith | opa | cedar | falco | harness | admission | dlp | human | mcp_gateway | other"
+    },
+    "decision": {
+      "type": "string",
+      "enum": ["allow", "deny", "warn", "require_approval", "unknown"]
+    },
+    "action_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "SHA-256 hex of canonical action fingerprint"
+    },
+    "policy_hash": { "type": ["string", "null"] },
+    "rule_ids": { "type": "array", "items": { "type": "string" } },
+    "identity": { "type": "object" },
+    "override": { "type": ["object", "null"] },
+    "acknowledgement": { "type": ["object", "null"] },
+    "decided_at": { "type": "string", "minLength": 1 },
+    "integrity": {
+      "type": "string",
+      "enum": ["unverified", "hash_ok", "signed_verified", "signed_invalid"]
+    },
+    "evidence_refs": { "type": "array", "items": { "type": "string" } },
+    "attributes": { "type": "object" }
+  },
+  "additionalProperties": true
+}

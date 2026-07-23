@@ -1,0 +1,11 @@
+{
+  "id": "invalid-run-missing-id",
+  "description": "Run without id fails",
+  "expect": "fail",
+  "input": {
+    "schema": "blackbox.run/v1",
+    "status": "Succeeded",
+    "started_at": "2026-07-23T00:00:00Z"
+  },
+  "expected_error_path": "/id"
+}

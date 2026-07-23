@@ -1,0 +1,23 @@
+{
+  "schema": "blackbox.spec.catalog/v1",
+  "protocol_version": "1.9.0",
+  "schemas": [
+    {"id": "blackbox.run/v1", "kind": "run", "stability": "stable"},
+    {"id": "blackbox.event/v1", "kind": "event", "stability": "stable"},
+    {"id": "blackbox.evidence.event/v1", "kind": "evidence_event", "stability": "stable"},
+    {"id": "blackbox.boundary/v1", "kind": "boundary", "stability": "stable"},
+    {"id": "blackbox.boundary.finding/v1", "kind": "finding", "stability": "stable"},
+    {"id": "blackbox.boundary.finding.decision/v1", "kind": "finding", "stability": "stable"},
+    {"id": "blackbox.containment.receipt/v1", "kind": "receipt", "stability": "stable"},
+    {"id": "blackbox.verification.receipt/v1", "kind": "receipt", "stability": "stable"},
+    {"id": "blackbox.incident/v1", "kind": "incident", "stability": "stable"},
+    {"id": "blackbox.forensic.pack/v1", "kind": "forensic_pack", "stability": "stable"},
+    {"id": "blackbox.security.decision/v1", "kind": "security_decision", "stability": "provisional"},
+    {"id": "blackbox.commitment.run/v1", "kind": "commitment", "stability": "provisional"},
+    {"id": "blackbox.reconcile.outcome/v1", "kind": "other", "stability": "provisional"},
+    {"id": "blackbox.portable/v2", "kind": "portable", "stability": "stable"},
+    {"id": "blackbox.conformance.report/v1", "kind": "conformance", "stability": "provisional"},
+    {"id": "blackbox.native.ingest/v1", "kind": "other", "stability": "provisional"},
+    {"id": "blackbox.otlp.loss/v1", "kind": "other", "stability": "experimental"}
+  ]
+}

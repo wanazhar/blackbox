@@ -83,6 +83,10 @@ jobs:
             --test incident_memory_bound \
             --test boundary_1_7_completion -- --quiet
 
+      # 1.9 evidence protocol vectors and schema catalog
+      - name: Protocol vectors (1.9)
+        run: cargo test --test protocol_vectors -- --quiet
+
   # 1.5 Q1: lightweight macOS runtime gate on every PR (not only tag-time build).
   macos:
     name: macOS runtime gate

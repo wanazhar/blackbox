@@ -332,9 +332,21 @@ async fn finish_retry_survives_recorder_restart() {
         .with_payload(json!({"exit_code": 0}));
     first.apply_envelope(finish.clone()).await.unwrap();
 
+    // Simulate a process stop after run.ended committed but before the run row
+    // status update became durable.
+    let mut interrupted = store.get_run(&run_id).await.unwrap().unwrap();
+    interrupted.status = RunStatus::Running;
+    interrupted.ended_at = None;
+    interrupted.exit_code = None;
+    store.update_run(&interrupted).await.unwrap();
+
     let restarted = NativeRecorder::new(store.clone());
     let retry = restarted.apply_envelope(finish).await.unwrap();
     assert!(retry.duplicate);
+    assert_eq!(
+        store.get_run(&run_id).await.unwrap().unwrap().status,
+        RunStatus::Succeeded
+    );
     assert_eq!(
         store
             .get_events(&run_id)

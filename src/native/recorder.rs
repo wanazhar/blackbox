@@ -462,6 +462,30 @@ impl NativeRecorder {
                 let event_id = deterministic_record_id("native-finish", &env.idempotency_key);
                 if let Some(event) = self.store.get_event(&event_id).await.map_err(store_err)? {
                     verify_recovered_request(&event, request_hash)?;
+                    // The end marker and run update are two durable writes. If
+                    // the process stopped between them, finish the status
+                    // update before acknowledging the recovered retry.
+                    if let Some(mut run) =
+                        self.store.get_run(&event.run_id).await.map_err(store_err)?
+                    {
+                        if run.ended_at.is_none() {
+                            let opts: FinishRunOpts = serde_json::from_value(
+                                env.payload.clone().unwrap_or_else(|| json!({})),
+                            )
+                            .map_err(|error| {
+                                IngestError::new("bad_payload", error.to_string(), false)
+                            })?;
+                            run.finish(opts.exit_code);
+                            if let Some(status) = opts.status.as_deref() {
+                                run.status = parse_run_status(status);
+                            }
+                            if let Some(notes) = opts.notes {
+                                run.notes = Some(notes);
+                            }
+                            run.next_sequence = event.sequence.saturating_add(1);
+                            self.store.update_run(&run).await.map_err(store_err)?;
+                        }
+                    }
                     let result = IdempotentResult {
                         run_id: Some(event.run_id.clone()),
                         event_id: Some(event.id.clone()),

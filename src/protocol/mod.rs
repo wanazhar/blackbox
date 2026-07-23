@@ -8,6 +8,7 @@
 //! transport types so external encoders can reimplement them from the spec.
 
 pub mod canonical;
+pub mod proptest;
 pub mod schema;
 pub mod stability;
 pub mod validate;

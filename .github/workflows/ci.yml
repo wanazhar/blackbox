@@ -85,7 +85,10 @@ jobs:
 
       # 1.9 evidence protocol vectors and schema catalog
       - name: Protocol vectors (1.9)
-        run: cargo test --test protocol_vectors -- --quiet
+        run: |
+          cargo test \
+            --test protocol_vectors --test protocol_properties \
+            --test protocol_architecture -- --quiet
 
       # 1.9 native ingestion (no PTY)
       - name: Native ingest (1.9)
@@ -97,7 +100,11 @@ jobs:
           cargo test \
             --test security_reconcile --test commitment_chain \
             --test otlp_interop --test conformance_runner \
+            --test native_reference_qualification \
             -- --quiet
+
+      - name: Single-package publish contract (1.9)
+        run: cargo publish --dry-run
 
   # 1.5 Q1: lightweight macOS runtime gate on every PR (not only tag-time build).
   macos:

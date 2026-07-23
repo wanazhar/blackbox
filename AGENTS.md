@@ -206,6 +206,11 @@ Operator-facing notes for shipped harnesses: [docs/guide/adapters.md](docs/guide
 | `tests/native_log_rotation.rs` | 1.5: native-log identity, rotation, backlog |
 | `tests/dashboard_auth.rs` | 1.5 H1: session cookie contract |
 | `tests/pagination_scale.rs` | 1.5 P1: cursor pages + blob compression |
+| `tests/protocol_vectors.rs` | Published schemas + canonical/adversarial vectors (1.9) |
+| `tests/protocol_properties.rs` | Parser, canonicalizer, normalizer, portable-import properties (1.9) |
+| `tests/native_ingest.rs` | Restart-safe native ingest without PTY (1.9) |
+| `tests/native_reference_qualification.rs` | Claude hooks overhead, loss, isolation, upgrade behavior (1.9) |
+| `tests/protocol_architecture.rs` | Protocol dependency boundary + single publishable package (1.9) |
 
 ## Docs map
 

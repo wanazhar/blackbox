@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Blackbox Unix release qualification gate (1.4 trust through 1.8 evidence semantics).
+# Blackbox Unix release qualification gate (1.4 trust through 1.9 protocol).
 #
 # One reproducible command for maintainers before tagging.
 # Outputs a checksummed report under release-artifacts/.
@@ -58,6 +58,13 @@ run_gate() {
     return 1
   fi
 }
+emit_1_9_conformance() {
+  local profile
+  for profile in core recorder boundary forensic; do
+    cargo run --quiet -- conform --profile "$profile" --json \
+      >"${OUT_DIR}/conformance-${profile}-${STAMP}.json"
+  done
+}
 
 FAILS=0
 : >"$LOG"
@@ -100,6 +107,13 @@ run_gate "rustfmt" cargo fmt --check || true
 run_gate "clippy -D warnings" cargo clippy --all-targets -- -D warnings || true
 run_gate "doc links" python3 scripts/check_doc_links.py || true
 run_gate "1.8: frozen detector benchmark" cargo run --quiet -- boundary benchmark || true
+run_gate "1.9: protocol + native + evidence suite" cargo test \
+  --test protocol_vectors --test protocol_properties \
+  --test protocol_architecture --test native_ingest \
+  --test security_reconcile --test commitment_chain \
+  --test otlp_interop --test conformance_runner \
+  --test native_reference_qualification -- --quiet || true
+run_gate "1.9: public conformance artifacts" emit_1_9_conformance || true
 
 if [ "$QUICK" -eq 1 ]; then
   run_gate "trust: neutrality" cargo test --test neutrality_contract -- --quiet || true
@@ -162,6 +176,7 @@ else
     --test boundary_1_8_release_contract -- --quiet || true
   # Real 100k-event endurance (ignored by default unit filter; force with --ignored)
   run_gate "1.6: endurance_100k" cargo test --test endurance_100k -- --quiet || true
+  run_gate "1.9: single-package publish dry run" cargo publish --dry-run --allow-dirty || true
 fi
 
 if [ "$DO_RELEASE_BUILD" -eq 1 ]; then
@@ -263,6 +278,19 @@ fi
   echo "| P/R | Citation-complete packs + typed redaction/HMAC tokens |"
   echo "| L | Vocabulary lint + policy resolution explanations |"
   echo "| B/O | Frozen benchmark + layered output labels |"
+  echo
+  echo "## 1.9 Evidence protocol bars"
+  echo
+  echo "| Id | Bar |"
+  echo "|---|---|"
+  echo "| P1/P2 | Complete schema catalog + canonical/adversarial vectors |"
+  echo "| N1/N2 | Native lifecycle + restart-safe NDJSON/Unix idempotency |"
+  echo "| S1/S2 | Security decisions + cited action/effect outcomes |"
+  echo "| C1 | Mutation-detecting chain + deterministic signature vectors |"
+  echo "| O1 | OTLP mapping + explicit loss ledger |"
+  echo "| F1/I1 | Public profiles + qualified Claude hooks reference |"
+  echo "| A1 | One publishable package; protocol APIs exclude CLI/SQLite types |"
+  echo "| Q1 | 1.4–1.8 permanent gates plus this suite |"
   echo
   echo "## Host"
   echo

@@ -4,7 +4,7 @@
 |---|---|
 | **Document** | Product + technical plan for 1.8 |
 | **Date** | 2026-07-23 |
-| **Status** | **In progress** — Phase A foundations |
+| **Status** | **In progress** — Phases A–D landed; E–F next |
 | **Baseline** | 1.7 (agent boundary evidence & incidents) |
 | **Target tag** | **1.8.0** |
 | **Epic** | [Issue #6](https://github.com/wanazhar/blackbox/issues/6) |
@@ -56,12 +56,12 @@
 
 | Phase | Theme | Deliverables |
 |---|---|---|
-| **A** | Typed selectors + normalization | `ResourceSelector`, match explanations, contract dual-form entries |
-| **B** | Calibrated findings + evidence-aware detectors | `FindingDecision`, severity derivation, integrity classes |
-| **C** | Typed incident continuation | `ContinuationRelation` + cited conclusions |
-| **D** | Forensic packs | Citation-complete selection, scope object, typed redaction, HMAC tokens |
-| **E** | Lint / explain / vocab registry | `boundary lint`, `boundary explain`, fail-closed unknown tokens |
-| **F** | Frozen benchmark + layered views | Versioned corpus, API/UI layer labels, qualify |
+| **A** | Typed selectors + normalization | `ResourceSelector`, match explanations, contract dual-form entries | ✅ |
+| **B** | Calibrated findings + evidence-aware detectors | `FindingDecision`, severity derivation, integrity classes | ✅ |
+| **C** | Typed incident continuation | `ContinuationRelation` + cited conclusions | ✅ |
+| **D** | Forensic packs | Citation-complete selection, scope object, typed redaction, HMAC tokens | ✅ |
+| **E** | Lint / explain / vocab registry | `boundary lint`, `boundary explain`, fail-closed unknown tokens | |
+| **F** | Frozen benchmark + layered views | Versioned corpus, API/UI layer labels, qualify | |
 
 ---
 

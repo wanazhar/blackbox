@@ -42,6 +42,7 @@
 //! | [`forensic`] | Local forensic analysis packs (1.7) |
 //! | [`protocol`] | Evidence protocol canonical form & schemas (1.9) |
 //! | [`native`] | Native run/event ingestion without PTY (1.9) |
+//! | [`security`] | Security decisions and action reconciliation (1.9) |
 //! | [`experiment`] | Experiments, reports, gates |
 //! | [`export`] | Portable / JSONL / HTML |
 //! | [`integrity`] | `fsck` and repair |
@@ -159,6 +160,8 @@ pub mod retention;
 pub mod run;
 /// Eval score.json builder.
 pub mod score;
+/// Security decision receipts and action↔effect reconciliation (1.9).
+pub mod security;
 /// Historical re-redaction and blob GC.
 pub mod scrub;
 /// FTS search runner.

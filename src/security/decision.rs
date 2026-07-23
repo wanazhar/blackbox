@@ -45,10 +45,11 @@ impl DecisionKind {
 ///
 /// Self-asserted `signed_verified` is demoted to `unverified` unless a
 /// verifier is configured on the consumer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DecisionIntegrity {
     /// No integrity proof.
+    #[default]
     Unverified,
     /// Payload hash matches.
     HashOk,
@@ -56,12 +57,6 @@ pub enum DecisionIntegrity {
     SignedVerified,
     /// Signature present but invalid.
     SignedInvalid,
-}
-
-impl Default for DecisionIntegrity {
-    fn default() -> Self {
-        Self::Unverified
-    }
 }
 
 impl DecisionIntegrity {

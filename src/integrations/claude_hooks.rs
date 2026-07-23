@@ -56,7 +56,7 @@ impl Default for ClaudeHooksCoverage {
                 "missing_session_id_uses_generated_run".into(),
             ],
             performance: vec![
-                "in_process_apply_envelope_target_p99_lt_5ms_local_store".into(),
+                "qualification_500_events_p99_lt_100ms_debug_in_memory".into(),
                 "ndjson_line_limit_1MiB".into(),
             ],
             unsupported: vec![
@@ -138,10 +138,7 @@ impl ClaudeHooksAdapter {
                 );
             }
             "SessionEnd" | "Stop" | "session_end" | "stop" => {
-                let code = hook
-                    .get("exit_code")
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(0) as i32;
+                let code = hook.get("exit_code").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
                 out.push(
                     NativeIngestEnvelope::new(
                         IngestOp::FinishRun,
@@ -173,7 +170,9 @@ impl ClaudeHooksAdapter {
                     .with_producer(&self.producer),
                 );
                 // Permission / security decision when present.
-                if let Some(perm) = hook.get("permission_decision").or_else(|| hook.get("permission"))
+                if let Some(perm) = hook
+                    .get("permission_decision")
+                    .or_else(|| hook.get("permission"))
                 {
                     let decision = map_permission(perm);
                     let fp = ActionFingerprint::tool(tool, Some(input));
@@ -197,7 +196,9 @@ impl ClaudeHooksAdapter {
                     .get("tool_name")
                     .and_then(|v| v.as_str())
                     .unwrap_or("unknown");
-                let output = hook.get("tool_response").or_else(|| hook.get("tool_output"));
+                let output = hook
+                    .get("tool_response")
+                    .or_else(|| hook.get("tool_output"));
                 out.push(
                     NativeIngestEnvelope::new(
                         IngestOp::RecordTool,

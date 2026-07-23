@@ -36,6 +36,9 @@ rec.finish_run(&run.id, FinishRunOpts { exit_code: 0, ..Default::default() }).aw
 | Unix domain socket | Local multi-process, same host |
 
 All transports share **idempotency keys**. Retries after acknowledgement are duplicates, not new events. Partial NDJSON frames are never committed.
+Wire-operation record IDs are derived from the idempotency key, so a retry
+after recorder restart recovers the committed acknowledgement. Reusing a key
+for a different request fails with `idempotency_conflict`.
 
 ## Claude Code hooks (reference)
 
@@ -54,6 +57,12 @@ Coverage declaration: `blackbox::integrations::ClaudeHooksAdapter::coverage()`.
 Conformance level claimed: **Recorder**.
 
 Unsupported (honest): full PTY terminal bytes, kernel process tree, forensic pack generation on the hook path.
+
+The release qualification fixture records 500 hook events through the
+in-process reference path, requires zero dropped events, and records measured
+p99 latency (with a deliberately loose 100 ms debug-build ceiling). It also
+checks malformed-producer isolation and unknown-hook fallback. This is a local
+reference measurement, not a universal production latency guarantee.
 
 ## Security decisions
 

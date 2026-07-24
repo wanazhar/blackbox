@@ -284,6 +284,6 @@ No Makefile or justfile -- use cargo directly. Stable Rust, edition 2021.
 - **1.6** = Verified runs & reproducibility — **1.6.0**
 - **1.7** = Agent boundary evidence & incident reconstruction — **1.7.0**
 - **1.8** = Evidence semantics & forensic rigor — **1.8.0** ([issue #6](https://github.com/wanazhar/blackbox/issues/6))
-- **1.9** = Evidence protocol, embeddability, native harness integration — **1.9.0 release candidate** ([issue #7](https://github.com/wanazhar/blackbox/issues/7))
+- **1.9** = Evidence protocol, embeddability, native harness integration — **1.9.0** ([issue #7](https://github.com/wanazhar/blackbox/issues/7))
 
 Qualify before tag: `./scripts/release-qualify-unix.sh`. See `docs/ROADMAP.md`.

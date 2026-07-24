@@ -4,7 +4,7 @@ What “good” means for blackbox, what each major version promised, and how ea
 release keeps those promises executable.
 
 This is **product direction**, not a how-to. Operators: [guide/README.md](guide/README.md).
-**1.9 (release candidate):**
+**1.9 (shipped 1.9.0):**
 [issue #7](https://github.com/wanazhar/blackbox/issues/7) — evidence protocol,
 embeddability, native harness integration. Plan:
 [plan/evidence-protocol-1.9.md](plan/evidence-protocol-1.9.md).
@@ -253,7 +253,7 @@ Epic: [issue #6](https://github.com/wanazhar/blackbox/issues/6). Plan:
 
 ---
 
-## 1.9 bar (qualified)
+## 1.9 bar (shipped)
 
 Epic: [issue #7](https://github.com/wanazhar/blackbox/issues/7). Plan:
 [plan/evidence-protocol-1.9.md](plan/evidence-protocol-1.9.md). Spec:
